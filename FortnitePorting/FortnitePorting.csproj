@@ -1,0 +1,52 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);1591</NoWarn>
+  </PropertyGroup>
+
+  <!--
+    Single-file, self-contained .exe publish.
+    Bundles the runtime, every managed dependency, and native libraries into ONE executable.
+    Applies only when publishing for win-x64, so `dotnet run` and the Docker (linux-x64) build are unaffected.
+    Build it with:  dotnet publish -c Release -r win-x64
+  -->
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' == 'win-x64'">
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <DebugType>embedded</DebugType>
+    <!-- Don't emit/copy sidecar .pdb/.xml files for referenced projects: keep it to one .exe. -->
+    <AllowedReferenceRelatedFileExtensions>none</AllowedReferenceRelatedFileExtensions>
+    <!-- CUE4Parse relies heavily on reflection/serialization; trimming would break it. -->
+    <PublishTrimmed>false</PublishTrimmed>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="EpicManifestParser" Version="2.4.1" />
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="10.2.3" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+    <PackageReference Include="SkiaSharp" Version="3.119.1" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux" Version="3.119.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\CUE4Parse\CUE4Parse-Conversion\CUE4Parse-Conversion.csproj" />
+    <ProjectReference Include="..\CUE4Parse\CUE4Parse\CUE4Parse.csproj" />
+    <ProjectReference Include="..\EpicManifestParser\src\EpicManifestParser.ZlibngDotNetDecompressor\EpicManifestParser.ZlibngDotNetDecompressor.csproj" />
+    <ProjectReference Include="..\RADADecoder-cs\RADADecoder\RADADecoder.csproj" />
+  </ItemGroup>
+
+  <Target Name="CopyOodle" AfterTargets="ResolvePackageAssets">
+    <ItemGroup>
+      <OodleFile Include="@(NativeCopyLocalItems)" Condition="'%(Filename)' == 'oo2core_9_win64' and '%(Extension)' == '.dll'" />
+    </ItemGroup>
+    <Copy SourceFiles="@(OodleFile)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>

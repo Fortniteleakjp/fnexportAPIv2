@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>APIドキュメント</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="logo">ExportAPI Docs</div>
+            <nav>
+                <a href="index.html" class="active">ホーム</a>
+                <a href="#endpoints">エンドポイント</a>
+                <a href="admin.html">管理者(デバッグ)</a>
+            </nav>
+        </header>
+
+        <main>
+            <section class="hero">
+                <h1>API開発者向けドキュメント</h1>
+                <p>このページでは、システムの各機能やAPIの利用方法について説明します。モダンで使いやすいインターフェースを提供します。</p>
+            </section>
+
+            <section id="endpoints" class="grid">
+                <div class="card">
+                    <h3>GET /api/v1/users</h3>
+                    <p>登録されているユーザーのリストを取得します。ページネーションとフィルタリングをサポートしています。</p>
+                </div>
+                <div class="card">
+                    <h3>POST /api/v1/export</h3>
+                    <p>データをエクスポートするリクエストを送信します。非同期処理としてバックグラウンドで実行されます。</p>
+                </div>
+                <div class="card">
+                    <h3>GET /api/v1/status</h3>
+                    <p>現在のシステムのステータスと、稼働状況に関する詳細なヘルスチェック情報を返します。</p>
+                </div>
+            </section>
+        </main>
+    </div>
+</body>
+</html>

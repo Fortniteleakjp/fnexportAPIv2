@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>管理者・デバッグパネル</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- 簡易的なアクセス制限モック（※実際のセキュリティにはサーバーサイドの認証が必要です） -->
+    <div id="login-overlay" class="admin-login-overlay">
+        <div class="login-box">
+            <h2 style="margin-top: 0; margin-bottom: 1.5rem;">管理者ログイン</h2>
+            <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1.5rem;">パスワードを入力してください (デモ用: admin)</p>
+            <input type="password" id="admin-password" placeholder="パスワード" />
+            <button class="btn" onclick="checkPassword()">ログイン</button>
+            <p id="error-msg" style="color: #ef4444; margin-top: 1rem; display: none; font-size: 0.9rem;">パスワードが間違っています</p>
+        </div>
+    </div>
+
+    <div id="admin-content" class="container admin-dashboard">
+        <header>
+            <div class="logo">Admin Debug Panel</div>
+            <nav>
+                <a href="index.html">ドキュメントへ戻る</a>
+                <a href="#" class="active" onclick="logout()">ログアウト</a>
+            </nav>
+        </header>
+
+        <main>
+            <section style="margin-bottom: 3rem;">
+                <h2>システムステータス</h2>
+                <div class="grid">
+                    <div class="card" style="border-color: rgba(16, 185, 129, 0.3);">
+                        <h3 style="color: #10b981;">サーバー稼働状況</h3>
+                        <p style="font-weight: bold; font-size: 1.5rem; color: #e2e8f0;">正常 (Online)</p>
+                    </div>
+                    <div class="card">
+                        <h3 style="color: var(--primary);">アクティブ接続数</h3>
+                        <p style="font-weight: bold; font-size: 1.5rem;">1,204</p>
+                    </div>
+                    <div class="card" style="border-color: rgba(239, 68, 68, 0.3);">
+                        <h3 style="color: #ef4444;">エラーレート</h3>
+                        <p style="font-weight: bold; font-size: 1.5rem; color: #e2e8f0;">0.02%</p>
+                    </div>
+                </div>
+            </section>
+
+            <section>
+                <h2>リアルタイム・デバッグログ</h2>
+                <div class="debug-log" id="log-container">
+                    <div>[2026-05-13 13:20:01] INFO: Server started on port 8080</div>
+                    <div>[2026-05-13 13:22:15] <span style="color: var(--primary);">DEBUG:</span> Incoming request to /api/v1/export</div>
+                    <div>[2026-05-13 13:25:40] <span style="color: #f59e0b;">WARNING:</span> High memory usage detected (85%)</div>
+                    <!-- ログがここに追加されます -->
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script>
+        let logInterval;
+
+        function checkPassword() {
+            const pw = document.getElementById('admin-password').value;
+            if (pw === 'admin') {
+                document.getElementById('login-overlay').style.display = 'none';
+                document.getElementById('admin-content').style.display = 'block';
+                startMockLogs();
+            } else {
+                document.getElementById('error-msg').style.display = 'block';
+            }
+        }
+
+        function logout() {
+            document.getElementById('login-overlay').style.display = 'flex';
+            document.getElementById('admin-content').style.display = 'none';
+            document.getElementById('admin-password').value = '';
+            document.getElementById('error-msg').style.display = 'none';
+            clearInterval(logInterval);
+        }
+
+        function startMockLogs() {
+            const logContainer = document.getElementById('log-container');
+            logInterval = setInterval(() => {
+                const now = new Date();
+                const timeStr = now.toLocaleTimeString();
+                const msgs = [
+                    'INFO: Cleanup job executed', 
+                    '<span style="color: var(--primary);">DEBUG:</span> Cache hit for user profile', 
+                    'INFO: Database connection stable', 
+                    '<span style="color: var(--primary);">DEBUG:</span> Query executed in 12ms',
+                    '<span style="color: #f59e0b;">WARNING:</span> Rate limit approaching for IP 192.168.1.5'
+                ];
+                const randomMsg = msgs[Math.floor(Math.random() * msgs.length)];
+                
+                const logEntry = document.createElement('div');
+                logEntry.innerHTML = `[${now.toISOString().split('T')[0]} ${timeStr}] ${randomMsg}`;
+                logContainer.appendChild(logEntry);
+                logContainer.scrollTop = logContainer.scrollHeight;
+            }, 3000);
+        }
+
+        // Enterキーでのログインをサポート
+        document.getElementById('admin-password').addEventListener('keypress', function (e) {
+            if (e.key === 'Enter') {
+                checkPassword();
+            }
+        });
+    </script>
+</body>
+</html>

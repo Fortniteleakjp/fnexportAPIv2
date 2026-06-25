@@ -1,0 +1,137 @@
+name: Build and Release
+
+# Commit (push) -> build native libs (Windows + Linux) -> build/publish the app
+# -> attach artifacts to a GitHub Release.
+#   - push to main      : rolling "latest" prerelease is created/updated
+#   - push a tag v*     : a versioned release is created
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # ---------------------------------------------------------------------------
+  windows:
+    name: Build (Windows x64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up MSVC (x64)
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Build native rada_decode.dll
+        shell: cmd
+        run: call RADADecoder\shim\build.bat "%CD%\dist"
+
+      - name: Publish FortnitePorting (win-x64, single file)
+        shell: cmd
+        run: dotnet publish FortnitePorting\FortnitePorting.csproj -c Release -r win-x64 -o publish-win
+
+      - name: Bundle native lib
+        shell: cmd
+        run: copy /y dist\rada_decode.dll publish-win\
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FortnitePorting-win-x64
+          path: publish-win/
+
+  # ---------------------------------------------------------------------------
+  linux:
+    name: Build (Linux x64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools (clang/libc++ for the shim, cmake for CUE4Parse-Natives)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libc++-dev libc++abi-dev cmake build-essential
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Build native librada_decode.so
+        run: bash RADADecoder/shim/build.sh "$PWD/dist"
+
+      - name: Publish FortnitePorting (linux-x64, self-contained)
+        run: dotnet publish FortnitePorting/FortnitePorting.csproj -c Release -r linux-x64 --self-contained true -o publish-linux
+
+      - name: Bundle native lib
+        run: cp dist/librada_decode.so publish-linux/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FortnitePorting-linux-x64
+          path: publish-linux/
+
+  # ---------------------------------------------------------------------------
+  release:
+    name: Publish Release
+    needs: [ windows, linux ]
+    runs-on: ubuntu-latest
+    # Only create releases for main pushes and version tags (not PRs).
+    if: github.event_name == 'push'
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Package archives
+        run: |
+          mkdir -p out
+          (cd artifacts/FortnitePorting-win-x64 && zip -r "$GITHUB_WORKSPACE/out/FortnitePorting-win-x64.zip" .)
+          tar -czf "out/FortnitePorting-linux-x64.tar.gz" -C artifacts/FortnitePorting-linux-x64 .
+          ls -la out
+
+      - name: Release notes
+        run: |
+          cat > out/NOTES.md <<'EOF'
+          ## FortnitePorting API build
+
+          Each archive contains the published API plus the native RAD Audio decoder
+          (`rada_decode.dll` / `librada_decode.so`).
+
+          **Runtime native libraries you must add yourself** (not redistributable here):
+          - Oodle: `oo2core_9_win64.dll` (Windows) / `liboo2corelinux64.so.9` (Linux)
+          - zlib-ng: `zlib-ng2.dll` (Windows) / `libz-ng.so` (Linux)
+
+          Place them next to the executable, then run it. Swagger UI: `/swagger`.
+          EOF
+          cat out/NOTES.md
+
+      - name: Create versioned release (tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: out/NOTES.md
+          files: |
+            out/FortnitePorting-win-x64.zip
+            out/FortnitePorting-linux-x64.tar.gz
+
+      - name: Update rolling 'latest' release (main)
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Latest build (main)
+          prerelease: true
+          body_path: out/NOTES.md
+          files: |
+            out/FortnitePorting-win-x64.zip
+            out/FortnitePorting-linux-x64.tar.gz
