@@ -17,7 +17,7 @@ namespace FortnitePorting
     public partial class ManifestService
     {
         private const string BuildApiUrl = "https://fljpapi.jp/api/v2/build/Windows";
-        private const int PollingIntervalMinutes = 3;
+        private const int PollingIntervalSeconds = 30;
         private const int MaxRetryAttempts = 5;
         private const int RetryDelaySeconds = 5;
         
@@ -57,9 +57,9 @@ namespace FortnitePorting
             Console.WriteLine("Initializing ManifestService...");
             await DownloadAndLoadManifestAsync();
 
-            // Start polling every 3 minutes
-            _pollingTimer.Change(TimeSpan.FromMinutes(PollingIntervalMinutes), TimeSpan.FromMinutes(PollingIntervalMinutes));
-            Console.WriteLine($"Started manifest polling (interval: {PollingIntervalMinutes} minutes)");
+            // Start polling for new builds every 30 seconds
+            _pollingTimer.Change(TimeSpan.FromSeconds(PollingIntervalSeconds), TimeSpan.FromSeconds(PollingIntervalSeconds));
+            Console.WriteLine($"Started manifest polling (interval: {PollingIntervalSeconds} seconds)");
         }
 
         private async void CheckForUpdates(object? state)
