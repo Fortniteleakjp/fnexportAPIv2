@@ -26,6 +26,9 @@ namespace FortnitePorting.Swagger
             ["Cosmetics"] = (
                 "指定した PAK／チャンク内のコスメ（BRCosmetics）アイテム定義を読み取るエンドポイント。",
                 "Endpoints that read cosmetic (BRCosmetics) item definitions out of a specific PAK / chunk."),
+            ["Search"] = (
+                "全ファイルを対象とした文字列検索エンドポイント。ファイルパス／名の高速検索（部分一致・接頭辞・正規表現・ワイルドカード等）と、アセット内容（プロパティ）への限定的な全文検索を提供します。",
+                "Full-text search endpoints over all files: fast path/name search (substring, prefix, regex, wildcard, etc.) and a bounded content search inside parsed asset properties."),
         };
 
         public void Apply(OpenApiDocument document, DocumentFilterContext context)

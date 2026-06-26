@@ -121,6 +121,8 @@ docker run -p 3849:3849 \
 | `USMAP_PATH` | – | Explicit path to the `.usmap` to load. When set, that file is used (**if it does not exist, the latest mapping is auto-downloaded**). |
 | `SKIP_MAPPING` | `false` | Fully skip loading the `.usmap` mappings (lower memory; some assets won't deserialize). |
 | `LOAD_ALL_VFS` | `false` | Mount every VFS file instead of a curated subset. |
+| `SEARCH_THREADS` | (CPU count) | Content-search scan parallelism. Defaults to the logical CPU count (use every core). |
+| `CONTENT_CACHE_MB` | `0` (off) | Decompressed-bytes cache budget (MB) for content search. Enable (e.g. `8192`) to speed up re-scans on slow/network storage; off by default since it gives little benefit on warm local storage. |
 
 > **Mapping (.usmap) behavior**: by default the `.usmap` mapping is loaded. If `USMAP_PATH` is set and the file exists it is used; **otherwise (unset, or the file is missing) the latest mapping is auto-downloaded** (falling back to an existing local file). Only if none can be obtained is it skipped instead of failing startup (some assets cannot deserialize without mappings). Set `SKIP_MAPPING=true` to disable it explicitly.
 
@@ -187,6 +189,45 @@ Example response (`/api/v1/items/properties/single`):
   "largeIcon": "/Game/UI/Foundation/Textures/Icons/Athena/T-T-Icon-BR-AppleSunGadget-L.T-T-Icon-BR-AppleSunGadget-L"
 }
 ```
+
+### String search — `/api/v1/search`
+
+Type a word, string, or codename and search across **every loaded file**. Provides fast
+path/name search plus a bounded full-text search inside asset contents (properties).
+
+| Method & path | Description |
+|---|---|
+| `GET /api/v1/search?q={text}&mode={mode}&field={field}&ext={csv}&dir={dir}&dedupe={bool}&caseSensitive={bool}&page={n}&pageSize={n}` | Search the paths/names of all files. Returns matching files (`path`/`name`/`ext`) with a total count (paginated, max 10000/page). |
+| `GET /api/v1/search/content?q={text}&dir={dir}&pathContains={text}&ext={csv}&maxScan={n}&maxResults={n}&snippetsPerFile={n}&caseSensitive={bool}` | Search the string inside file **contents**. Assets (`.uasset`/`.umap`) are parsed and their exports serialized to JSON; config/text/binary files (`.ini`/`.bin`/`.json`, etc.) are decoded from raw bytes. Returns matching files and snippet lines. The default set is assets + text/config; `ext=*` searches every file, `ext=.ini` restricts. **Scans every file (~1.65M, ~11 GB) by default in about 40 s** (allocation-free byte scan, parallel across cores). Scan order: **(1) path contains the query, (2) neighbour assets (same plugin/folder), (3) text/config, (4) other assets**. Pass a smaller `maxScan` for a faster partial scan. |
+
+**`mode`**: `contains` (default) / `prefix` / `suffix` / `exact` / `wildcard` (`*` `?` glob) / `regex` / `tokens` (AND of whitespace-separated words)
+**`field`**: `path` (full path, default) / `name` (file name) / `stem` (name without extension)
+
+Examples (search by codename):
+```
+http://localhost:3849/api/v1/search?q=HonestWasp
+http://localhost:3849/api/v1/search?q=WID_&mode=prefix&field=name&dedupe=true
+http://localhost:3849/api/v1/search?q=*Athena*Soldier*&mode=wildcard&field=name&ext=.uasset
+```
+Example response (`/api/v1/search`):
+```json
+{
+  "query": "HonestWasp",
+  "mode": "contains",
+  "field": "path",
+  "totalMatches": 7,
+  "totalPages": 1,
+  "currentPage": 1,
+  "pageSize": 100,
+  "results": [
+    { "path": "FortniteGame/.../Character_HonestWasp.uasset", "name": "Character_HonestWasp.uasset", "ext": ".uasset" }
+  ]
+}
+```
+
+> **Note**: The path search scans all files (~2.4M). `regex` is bounded by a per-evaluation timeout (250 ms), an overall time budget, and a pattern-length limit. The content search (`/content`) covers **assets plus config/text files** (`.ini`/`.bin`/`.json`, etc.) and scans in the order: path-contains-query → **neighbour assets (same plugin/folder)** → text/config → other assets, up to `maxScan`. Detection is an allocation-free byte scan run across all cores, so it **scans every file (~1.65M, ~11 GB) by default in about 40 s** — so a plain `?q=RankedTier` finds scattered, path-less matches (12 widgets across many plugins) with no tuning. For a quick check pass a small `maxScan` (e.g. `maxScan=2000`) to scan partially from the top, or narrow with `dir` / `pathContains` / `ext` when you know the target.
+>
+> **Speed**: scanning runs **in parallel across every CPU core** (tunable via `SEARCH_THREADS`), and an **identical query is cached for 15 minutes**, so repeats return instantly (the cache is keyed by the mounted file count, so a new build / new keys invalidate it automatically). On slow storage, set `CONTENT_CACHE_MB` to also cache decompressed bytes and speed up re-scans with different queries.
 
 ### Debug — `/api/v1/debug`
 

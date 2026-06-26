@@ -120,6 +120,8 @@ docker run -p 3849:3849 \
 | `USMAP_PATH` | – | 読み込む `.usmap` の明示パス。指定時はそのファイルを使用（**存在しなければ最新版を自動ダウンロード**）。 |
 | `SKIP_MAPPING` | `false` | `.usmap` マッピングのロードを完全にスキップ（省メモリ。一部アセットはデシリアライズ不可に）。 |
 | `LOAD_ALL_VFS` | `false` | 厳選サブセットではなく全 VFS ファイルをマウント。 |
+| `SEARCH_THREADS` | (CPU数) | 内容検索の並列スキャン数。既定は論理 CPU 数（全コア活用）。 |
+| `CONTENT_CACHE_MB` | `0`（無効） | 内容検索の解凍バイトキャッシュ予算（MB）。低速/ネットワークストレージで再走査を速める場合に有効化（例 `8192`）。ウォームなローカルストレージでは効果が薄いため既定無効。 |
 
 > **マッピング（.usmap）の挙動**: 既定では `.usmap` マッピングを読み込みます。`USMAP_PATH` 指定時かつファイルが存在すればそれを使用し、**それ以外（未指定／指定ファイルが無い）の場合は最新版を自動ダウンロード**します（取得失敗時は既存のローカルファイルにフォールバック）。どうしても入手できない場合のみ、起動を失敗させずにスキップします（マッピング無しでは一部アセットがデシリアライズできません）。`SKIP_MAPPING=true` で明示的に無効化できます。
 
@@ -186,6 +188,45 @@ http://localhost:3849/api/v1/export?path=FortniteGame/Content/.../MySound.uasset
   "largeIcon": "/Game/UI/Foundation/Textures/Icons/Athena/T-T-Icon-BR-AppleSunGadget-L.T-T-Icon-BR-AppleSunGadget-L"
 }
 ```
+
+### 文字列検索 — `/api/v1/search`
+
+単語・文字列・コードネームを入力して、**読み込み済みの全ファイル**を対象に検索します。
+パス／ファイル名の高速検索に加え、アセットの内容（プロパティ）への限定的な全文検索も提供します。
+
+| メソッド & パス | 説明 |
+|---|---|
+| `GET /api/v1/search?q={text}&mode={mode}&field={field}&ext={csv}&dir={dir}&dedupe={bool}&caseSensitive={bool}&page={n}&pageSize={n}` | 全ファイルのパス／名を検索。一致ファイルの `path`／`name`／`ext` を総数つきで返す（ページング、最大 10000/頁）。 |
+| `GET /api/v1/search/content?q={text}&dir={dir}&pathContains={text}&ext={csv}&maxScan={n}&maxResults={n}&snippetsPerFile={n}&caseSensitive={bool}` | ファイルの**内容**に含まれる文字列を検索。アセット（`.uasset`/`.umap`）はエクスポートを JSON 化、設定/テキスト/バイナリ（`.ini`/`.bin`/`.json` 等）は生バイトを復号して検索。一致ファイルと該当箇所スニペットを返す。既定の対象は「アセット＋設定/テキスト」、`ext=*` で全ファイル、`ext=.ini` 等で限定。**既定で全ファイル（約165万件・約11GB）を約40秒で走査**（バイト走査＋マルチコア並列）。走査順は **(1) パスにクエリを含む → (2) 近傍アセット → (3) 設定/テキスト → (4) その他アセット**。速度優先時は `maxScan` に小さい値を指定。 |
+
+**`mode`（照合方法）**: `contains`（部分一致・既定）／`prefix`（前方一致）／`suffix`（後方一致）／`exact`（完全一致）／`wildcard`（`*` `?` のグロブ）／`regex`（正規表現）／`tokens`（空白区切りの全語 AND 一致）
+**`field`（照合対象）**: `path`（フルパス・既定）／`name`（ファイル名）／`stem`（拡張子なしの名前）
+
+例（コードネームで検索）:
+```
+http://localhost:3849/api/v1/search?q=HonestWasp
+http://localhost:3849/api/v1/search?q=WID_&mode=prefix&field=name&dedupe=true
+http://localhost:3849/api/v1/search?q=*Athena*Soldier*&mode=wildcard&field=name&ext=.uasset
+```
+レスポンス例（`/api/v1/search`）:
+```json
+{
+  "query": "HonestWasp",
+  "mode": "contains",
+  "field": "path",
+  "totalMatches": 7,
+  "totalPages": 1,
+  "currentPage": 1,
+  "pageSize": 100,
+  "results": [
+    { "path": "FortniteGame/.../Character_HonestWasp.uasset", "name": "Character_HonestWasp.uasset", "ext": ".uasset" }
+  ]
+}
+```
+
+> **補足**: パス検索は全ファイル（約 240 万件）を走査します。`regex` は安全のため、評価ごとのタイムアウト（250 ミリ秒）・全体時間制限・パターン長制限が掛かります。内容検索（`/content`）は **アセットに加え `.ini`/`.bin`/`.json` 等の設定・テキストファイルも対象**で、パス一致 → **近傍アセット（同一プラグイン/フォルダ）** → 設定/テキスト → その他アセット の順で `maxScan` 件まで走査します。検出は文字列確保なしのバイト走査をマルチコアで並列実行するため、**既定で全ファイル（約165万件・約11GB）を約40秒で全件走査**します。これにより `RankedTier` のようにパスにヒントが無く多数のプラグインに散在するケースでも、`?q=RankedTier` だけで全件ヒットします。クイックに確認したいときは `maxScan` に小さい値（例: `maxScan=2000`）を指定すると先頭から部分走査します。対象が分かっていれば `dir`／`pathContains`／`ext` で絞ると高速です。
+>
+> **高速化**: 走査は**全 CPU コアで並列実行**します（`SEARCH_THREADS` で調整可）。さらに**同一クエリの結果は15分間キャッシュ**されるため、2回目以降は即時に返ります（新しいビルド／鍵で読み込みファイル数が変わると自動的に無効化）。低速ストレージで別クエリの再走査も速くしたい場合は `CONTENT_CACHE_MB` で解凍バイトキャッシュを有効化できます。
 
 ### デバッグ — `/api/v1/debug`
 

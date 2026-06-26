@@ -120,6 +120,22 @@ namespace FortnitePorting.Swagger
                 new("Extract BRCosmetics cosmetic info from a PAK / chunk.",
                     "For each cosmetic under the BRCosmetics Cosmetics directory, extracts the ItemName/ItemDescription/ItemShortDescription Keys (and the localized text when lang is given), the LargeIcon and Icon AssetPathName values, and the Tags. Paginated; parsing is expensive so keep pageSize small.",
                     "The extraction results for each cosmetic.")),
+
+            ["SearchController.Search"] = (
+                new("全ファイルを対象に文字列検索します。",
+                    "読み込み済みの全ファイルのパス／ファイル名を対象に、単語・文字列・コードネームを検索します。mode で contains（部分一致・既定）／prefix／suffix／exact／wildcard（*?）／regex（正規表現）／tokens（空白区切りの全語一致）を選択。field で path（フルパス・既定）／name（ファイル名）／stem（拡張子なし）を切り替え、ext で拡張子、dir でディレクトリを絞り込み、dedupe で .uasset/.uexp などの重複を1件にまとめられます。ページング対応。",
+                    "一致したファイル（path／name／ext）の一覧と総数。"),
+                new("Search all files by string.",
+                    "Searches the paths/file names of every loaded file for a word, string, or codename. mode selects contains (default) / prefix / suffix / exact / wildcard (*?) / regex / tokens (all whitespace-separated words must match). field switches between path (default) / name / stem (name without extension); ext filters by extension, dir restricts to a directory, and dedupe collapses cooked-asset variants (.uasset/.uexp/...). Paginated.",
+                    "The matching files (path / name / ext) and the total count.")),
+
+            ["SearchController.SearchContent"] = (
+                new("ファイルの内容を対象に文字列検索します（アセット＋設定/テキスト）。",
+                    "候補ファイルを実際に読み取り、内容に対して文字列を検索します。アセット（.uasset/.umap）はエクスポートを JSON 化して検索し、設定/テキスト/バイナリ（.ini/.bin/.json 等）は生バイトを復号して検索します（ItemName の原文・コードネーム・参照パス・設定値などを発見できます）。既定の対象はアセット＋設定/テキスト、ext=* で全ファイル。既定では全ファイル（約165万件・約11GB）を走査します。検出は文字列確保なしのバイト走査＋マルチコア並列のため全走査でも約40秒です。走査順は (1) パスにクエリを含むファイル → (2) その近傍アセット（同一プラグイン/フォルダ）→ (3) 設定/テキスト → (4) その他アセット。速度優先なら maxScan に小さい値を指定すると先頭から部分的に走査します。一致ファイルごとに該当箇所スニペットを返します。",
+                    "一致したファイルと該当スニペットの一覧。"),
+                new("Search inside file contents (assets + config/text).",
+                    "Reads candidate files and searches their contents. Assets (.uasset/.umap) are parsed and their exports serialized to JSON; config/text/binary files (.ini/.bin/.json, etc.) are decoded from raw bytes (find ItemName source strings, codenames, referenced paths, config values, etc.). The default set is assets + text/config; ext=* searches every file. By default it scans every file (~1.65M, ~11 GB). Detection is an allocation-free byte scan run in parallel across cores, so a full scan still takes only ~40 s. Scan order: (1) path contains the query, (2) its neighbour assets (same plugin/folder), (3) text/config, (4) other assets. Pass a smaller maxScan for a faster partial scan from the top. Returns matching files with snippet lines.",
+                    "The matching files and their snippet lines.")),
         };
 
         // Parameter descriptions, keyed by operation key then parameter name. (Ja, En).
@@ -185,6 +201,38 @@ namespace FortnitePorting.Swagger
                                 "The number of items per page (maximum 200; parsing is expensive so keep it small)."),
                 ["lang"] = ("ローカライズ言語コード（例: ja）。ItemName/Description/ShortDescription の Key をこの言語に解決します。省略や en で英語の原文。",
                             "Localization language code (e.g. ja). Resolves the ItemName/Description/ShortDescription keys to this language; omit or use en for the English source."),
+            },
+            ["SearchController.Search"] = new()
+            {
+                ["q"] = ("検索する単語・文字列・コードネーム（必須）。", "The word, string, or codename to search for (required)."),
+                ["mode"] = ("照合方法: contains（既定）／prefix／suffix／exact／wildcard／regex／tokens。",
+                            "Match mode: contains (default) / prefix / suffix / exact / wildcard / regex / tokens."),
+                ["field"] = ("照合対象: path（フルパス・既定）／name（ファイル名）／stem（拡張子なし）。",
+                             "Match target: path (default) / name / stem (without extension)."),
+                ["caseSensitive"] = ("大文字小文字を区別する（既定 false）。", "Match case-sensitively (default false)."),
+                ["ext"] = ("拡張子で絞り込み（カンマ区切り可。例: .uasset,.umap。空ですべて）。",
+                           "Filter by extension (comma-separated, e.g. .uasset,.umap; empty matches all)."),
+                ["dir"] = ("このディレクトリ配下に限定（例: FortniteGame/Content/Athena）。",
+                           "Restrict to paths under this directory (e.g. FortniteGame/Content/Athena)."),
+                ["dedupe"] = (".uasset/.uexp/.ubulk などクック由来の重複を1件にまとめる（既定 false）。",
+                              "Collapse cooked-asset duplicates (.uasset/.uexp/.ubulk, etc.) into one (default false)."),
+                ["page"] = ("ページ番号（1から開始）。", "The page number (1-based)."),
+                ["pageSize"] = ("1ページあたりの件数（最大 10000）。", "The number of items per page (maximum 10000)."),
+            },
+            ["SearchController.SearchContent"] = new()
+            {
+                ["q"] = ("アセット内容から検索する文字列（必須）。", "The string to find inside asset contents (required)."),
+                ["dir"] = ("このディレクトリ配下の候補に限定。", "Restrict candidate assets to this directory."),
+                ["pathContains"] = ("候補をパスの部分一致でさらに絞り込み。", "Further narrow candidates whose path contains this text."),
+                ["ext"] = ("候補の拡張子（カンマ区切り可）。空＝既定セット（アセット＋.ini/.bin/.json 等の設定/テキスト）、* または all で全ファイル。",
+                           "Candidate extensions (comma-separated). Empty = default set (assets + text/config such as .ini/.bin/.json); * or all = every file."),
+                ["caseSensitive"] = ("大文字小文字を区別する（既定 false）。", "Match case-sensitively (default false)."),
+                ["maxScan"] = ("走査する候補ファイルの最大数。既定 3000000＝全ファイル走査（約40秒）。速度優先なら小さい値を指定。",
+                               "Maximum number of candidate files to scan. Default 3000000 = scan the whole game (~40 s); pass a smaller value for a faster partial scan."),
+                ["maxResults"] = ("返す一致ファイルの最大数（既定 50・最大 2000）。",
+                                  "Maximum number of matching files to return (default 50, max 2000)."),
+                ["snippetsPerFile"] = ("1ファイルあたりに返す該当行スニペット数（既定 3・最大 20）。",
+                                       "Number of snippet lines returned per file (default 3, max 20)."),
             },
         };
 
