@@ -11,6 +11,7 @@ using CUE4Parse.FileProvider;
 using CUE4Parse.FileProvider.Vfs;
 using ZlibngDotNet;
 using FortnitePorting.Models;
+using FortnitePorting.Services;
 
 namespace FortnitePorting
 {
@@ -23,6 +24,7 @@ namespace FortnitePorting
         
         private readonly IFileProvider _cue4ParseProvider;
         private readonly string _cacheDirectory;
+        private readonly string _rootDir;
         private readonly HttpClient _httpClient;
         private readonly Zlibng _zlibng;
         private readonly Timer _pollingTimer;
@@ -36,11 +38,15 @@ namespace FortnitePorting
         public bool IsReady { get; private set; }
 
         private string _currentBuildVersion = string.Empty;
+        private string _mappedBuildVersion = string.Empty;   // build whose .usmap is currently applied
+        private int _mappingAttempts;                          // retries for the current build's mapping
+        private const int MaxMappingAttemptsPerBuild = 120;    // ~1h at 30s, then stop retrying
 
-        public ManifestService(IFileProvider cue4ParseProvider, string cacheDirectory, Zlibng zlibng)
+        public ManifestService(IFileProvider cue4ParseProvider, string cacheDirectory, Zlibng zlibng, string rootDir)
         {
             _cue4ParseProvider = cue4ParseProvider;
             _cacheDirectory = cacheDirectory;
+            _rootDir = rootDir;
             _zlibng = zlibng;
             _httpClient = new HttpClient(new SocketsHttpHandler
             {
@@ -56,11 +62,23 @@ namespace FortnitePorting
         {
             Console.WriteLine("Initializing ManifestService...");
             await DownloadAndLoadManifestAsync();
+            // Polling is started later via StartPolling() once the provider is fully initialized
+            // (see FileProviderFactory) so a poll can't race the remaining startup steps.
+        }
 
-            // Start polling for new builds every 30 seconds
-            _pollingTimer.Change(TimeSpan.FromSeconds(PollingIntervalSeconds), TimeSpan.FromSeconds(PollingIntervalSeconds));
+        /// <summary>
+        /// Starts the build-update poll. Uses a one-shot timer that is re-armed after each run, so
+        /// polls can never overlap (a slow build switch + mapping download cannot collide with the
+        /// next tick) and the period never drifts.
+        /// </summary>
+        public void StartPolling()
+        {
+            _pollingTimer.Change(TimeSpan.FromSeconds(PollingIntervalSeconds), Timeout.InfiniteTimeSpan);
             Console.WriteLine($"Started manifest polling (interval: {PollingIntervalSeconds} seconds)");
         }
+
+        /// <summary>Records that the .usmap is applied for the current build (called after the startup load).</summary>
+        public void MarkMappingsApplied() => _mappedBuildVersion = _currentBuildVersion;
 
         private async void CheckForUpdates(object? state)
         {
@@ -72,19 +90,76 @@ namespace FortnitePorting
                 if (buildInfo != null && buildInfo.BuildVersion != _currentBuildVersion)
                 {
                     Console.WriteLine($"Detected a new build version: {_currentBuildVersion} -> {buildInfo.BuildVersion}");
-                    await DownloadAndLoadManifestAsync();
+                    await DownloadAndLoadManifestAsync(buildInfo);   // reuses the build info just fetched
 
                     // Auto-apply the new build: register & mount any newly-added VFS archives (no restart).
                     MountNewArchives();
+                    _mappingAttempts = 0; // fresh mapping-fetch attempts for the new build
                 }
                 else
                 {
                     Console.WriteLine($"Build version is unchanged: {_currentBuildVersion}");
                 }
+
+                // Refresh the .usmap so the new build's (possibly changed) types deserialize correctly.
+                // Retries (bounded) on later polls if the matching mapping isn't published yet, then hot-swaps.
+                RefreshMappingsIfNeeded();
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"An error occurred while checking the build version: {ex.Message}");
+            }
+            finally
+            {
+                // Re-arm the one-shot timer so the next poll runs only after this one completes (no overlap).
+                try { _pollingTimer.Change(TimeSpan.FromSeconds(PollingIntervalSeconds), Timeout.InfiniteTimeSpan); }
+                catch (ObjectDisposedException) { }
+            }
+        }
+
+        /// <summary>
+        /// Re-downloads and hot-swaps the .usmap when the applied mapping does not match the current
+        /// build. Bounded retries handle the window before the mapping API publishes the new build's
+        /// file. A pinned USMAP_PATH or SKIP_MAPPING counts as "applied" (no retry).
+        /// </summary>
+        private void RefreshMappingsIfNeeded()
+        {
+            if (_mappedBuildVersion == _currentBuildVersion || _mappingAttempts >= MaxMappingAttemptsPerBuild)
+            {
+                return;
+            }
+
+            _mappingAttempts++;
+            try
+            {
+                var usmapPath = FileProviderFactory.ReloadMappings(_cue4ParseProvider, _rootDir);
+                if (usmapPath == null)
+                {
+                    Console.WriteLine($"No .usmap available yet for {GameBuild}; will retry ({_mappingAttempts}/{MaxMappingAttemptsPerBuild}).");
+                    return;
+                }
+
+                var envUsmap = Environment.GetEnvironmentVariable("USMAP_PATH");
+                var pinned = !string.IsNullOrWhiteSpace(envUsmap) && File.Exists(envUsmap);
+                var skipped = string.Equals(usmapPath, FileProviderFactory.MappingSkipSentinel, StringComparison.Ordinal);
+                // The fortniteapi/uedb mapping file name starts with the build version, so this tells us
+                // whether the file we loaded actually belongs to the current build.
+                var matchesBuild = !string.IsNullOrEmpty(GameBuild)
+                                   && Path.GetFileName(usmapPath).StartsWith(GameBuild, StringComparison.OrdinalIgnoreCase);
+
+                if (skipped || pinned || matchesBuild)
+                {
+                    _mappedBuildVersion = _currentBuildVersion;
+                    _mappingAttempts = 0;
+                }
+                else
+                {
+                    Console.WriteLine($"Mapping for {GameBuild} not published yet (have {Path.GetFileName(usmapPath)}); will retry ({_mappingAttempts}/{MaxMappingAttemptsPerBuild}).");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Mapping refresh failed: {ex.Message}");
             }
         }
 
@@ -113,6 +188,11 @@ namespace FortnitePorting
         private async Task DownloadAndLoadManifestAsync()
         {
             var buildInfo = await FetchBuildInfoAsync();
+            await DownloadAndLoadManifestAsync(buildInfo);
+        }
+
+        private async Task DownloadAndLoadManifestAsync(BuildInfo? buildInfo)
+        {
             if (buildInfo == null || buildInfo.Manifests.Count == 0)
             {
                 throw new Exception("Could not retrieve manifest information");

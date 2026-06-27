@@ -29,6 +29,12 @@ namespace FortnitePorting.Swagger
             ["Search"] = (
                 "全ファイルを対象とした文字列検索エンドポイント。ファイルパス／名の高速検索（部分一致・接頭辞・正規表現・ワイルドカード等）と、アセット内容（プロパティ）への限定的な全文検索を提供します。",
                 "Full-text search endpoints over all files: fast path/name search (substring, prefix, regex, wildcard, etc.) and a bounded content search inside parsed asset properties."),
+            ["Mappings"] = (
+                "マッピング生成エンドポイント。マッピングの JSON 版（{ Version, Enums, Structs, Classes }）から CUE4Parse 用の .usmap バイナリを生成・適用します。",
+                "Mapping generation endpoints: build a CUE4Parse .usmap from a JSON mappings dump and optionally apply it."),
+            ["Aes"] = (
+                "AES 鍵取得エンドポイント。UEFN（Fortnite_Studio）の Common DLL をマニフェストからダウンロードし、外部 AesFinder ツールで MainAES 鍵を抽出して provider に投入・マウントします（起動・注入なし）。補助としてビルトインのスケジュール走査・ローカル走査・自己テストも提供します。",
+                "AES key endpoints: download the UEFN (Fortnite_Studio) Common DLL from the manifest, extract the MainAES key with the external AesFinder tool, and submit/mount it on the provider (no launch, no injection). Built-in schedule scanning, local scanning, and a self-test are also provided as helpers."),
         };
 
         public void Apply(OpenApiDocument document, DocumentFilterContext context)

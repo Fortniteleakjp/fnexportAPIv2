@@ -123,10 +123,12 @@ docker run -p 3849:3849 \
 | `LOAD_ALL_VFS` | `false` | Mount every VFS file instead of a curated subset. |
 | `SEARCH_THREADS` | (CPU count) | Content-search scan parallelism. Defaults to the logical CPU count (use every core). |
 | `CONTENT_CACHE_MB` | `0` (off) | Decompressed-bytes cache budget (MB) for content search. Enable (e.g. `8192`) to speed up re-scans on slow/network storage; off by default since it gives little benefit on warm local storage. |
+| `AESFINDER_PATH` | `D:\AesFinder-main\...\AesFinder.exe` | Path to the external AesFinder tool used by `/aes` (a `.exe`, a `.dll`, or a directory containing it). |
+| `AESFINDER_AUTO` | `true` | Background auto-extraction/submission of the MainAES key via AesFinder (**only acts while the main key is missing**; set `false` to disable). |
 
 > **Mapping (.usmap) behavior**: by default the `.usmap` mapping is loaded. If `USMAP_PATH` is set and the file exists it is used; **otherwise (unset, or the file is missing) the latest mapping is auto-downloaded** (falling back to an existing local file). Only if none can be obtained is it skipped instead of failing startup (some assets cannot deserialize without mappings). Set `SKIP_MAPPING=true` to disable it explicitly.
 
-> **Auto-update (no restart)**:<br>・**New decryption keys**: every ~30s AES keys are fetched (`api.fortniteapi.com` → `uedb.dev` on failure) and any still-required keys are submitted **by GUID**, auto-mounting the matching paks (no dependency on pak names).<br>・**New builds**: build info is polled every ~3 min; when it changes the manifest is re-fetched and any newly-added VFS archives (utoc/pak) are **registered and mounted automatically**. Newly-encrypted paks mount once their key arrives (via the AES monitor above). The process is not auto-restarted.
+> **Auto-update (no restart)**:<br>・**New decryption keys**: every ~30s AES keys are fetched (`api.fortniteapi.com` → `uedb.dev` on failure) and any still-required keys are submitted **by GUID**, auto-mounting the matching paks (no dependency on pak names).<br>・**New builds**: build info is polled every ~30s; when it changes the manifest is re-fetched and any newly-added VFS archives (utoc/pak) are **registered and mounted automatically**. Newly-encrypted paks mount once their key arrives (via the AES monitor above).<br>・**Mappings (.usmap)**: when a new build is detected the **latest .usmap for that build is re-downloaded and hot-swapped** (a pinned `USMAP_PATH` file is kept as-is).<br>All of this happens without restarting the process (until the external APIs publish the new build's keys/mapping, only that build's new content is unavailable — it appears automatically once they do).
 
 ## API endpoints
 
@@ -228,6 +230,21 @@ Example response (`/api/v1/search`):
 > **Note**: The path search scans all files (~2.4M). `regex` is bounded by a per-evaluation timeout (250 ms), an overall time budget, and a pattern-length limit. The content search (`/content`) covers **assets plus config/text files** (`.ini`/`.bin`/`.json`, etc.) and scans in the order: path-contains-query → **neighbour assets (same plugin/folder)** → text/config → other assets, up to `maxScan`. Detection is an allocation-free byte scan run across all cores, so it **scans every file (~1.65M, ~11 GB) by default in about 40 s** — so a plain `?q=RankedTier` finds scattered, path-less matches (12 widgets across many plugins) with no tuning. For a quick check pass a small `maxScan` (e.g. `maxScan=2000`) to scan partially from the top, or narrow with `dir` / `pathContains` / `ext` when you know the target.
 >
 > **Speed**: scanning runs **in parallel across every CPU core** (tunable via `SEARCH_THREADS`), and an **identical query is cached for 15 minutes**, so repeats return instantly (the cache is keyed by the mounted file count, so a new build / new keys invalidate it automatically). On slow storage, set `CONTENT_CACHE_MB` to also cache decompressed bytes and speed up re-scans with different queries.
+
+### AES key extraction — `/aes`
+
+| Method & path | Description |
+|---|---|
+| `GET /aes` | Downloads `UnrealEditorFortnite-Common-Win64-Shipping.dll` from the live **Fortnite_Studio (UEFN)** manifest and runs the external **AesFinder** tool on it to **extract the MainAES key** (no game launch, no injection), then **submits the key to the provider and mounts** matching paks. Returns `{ mainKey, version, build, fullVersion, submitted, mountedNewFiles, totalFiles, ... }`. |
+| `GET /aes?submit=false` | Return the key only; do not submit/mount (default is `submit=true`). |
+| `GET /aes?noApi=true` | Don't consult fortnite-api; take the **highest-entropy candidate** straight from the binary. |
+| `GET /aes?force=true` | Ignore the cache and re-download the Common DLL. |
+
+> The MainAES key lives in the Common DLL in plaintext as `mov [rbp+d], imm32` instruction immediates (the AESDumpster pattern) — it is neither a contiguous 32-byte blob nor a key schedule, so a naive byte search or schedule scan won't find it. This endpoint extracts it with the external AesFinder tool (set via `AESFINDER_PATH`). The Common DLL is downloaded once and cached, and **a new build is fetched automatically when detected**.
+>
+> **Automatic submission (fallback):** the background `AesFinderKeyService` extracts and submits the main key **only while it is missing** (e.g. a fresh build whose key the external AES API hasn't published yet), mounting the paks automatically. In normal operation, when the key is already applied, it **stays idle and downloads nothing** (disable with `AESFINDER_AUTO=false`). This lets the API follow a new build without waiting for the external AES API. **Dynamic (per-GUID) keys** are out of scope for AesFinder and remain handled by the external AES monitor (`api.fortniteapi.com` / `uedb.dev`).
+>
+> The built-in schedule scanners (`GET /api/v1/aes/extract`, `/api/v1/aes/scan/local`, `/api/v1/aes/finder/selftest`) are also available as helpers.
 
 ### Debug — `/api/v1/debug`
 

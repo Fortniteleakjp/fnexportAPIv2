@@ -14,6 +14,7 @@ x86/
 .idea/
 *.swp
 /chunk_cache/
+/uefn_cache/
 /FortnitePorting/Properties/
 /manifest/
 /mappings/

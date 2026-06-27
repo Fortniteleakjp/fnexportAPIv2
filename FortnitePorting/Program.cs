@@ -24,6 +24,9 @@ builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
 builder.Services.AddControllers();
 builder.Services.AddMemoryCache();
 builder.Services.AddHostedService<AesKeyMonitorService>();
+// Fallback self-sufficient main-key source: extracts the MainAES key from the UEFN Common DLL with the
+// external AesFinder tool and submits it when the external AES API hasn't supplied it (e.g. a fresh build).
+builder.Services.AddHostedService<AesFinderKeyService>();
 
 // Swagger / OpenAPI (exposes all endpoints)
 builder.Services.AddEndpointsApiExplorer();
@@ -69,7 +72,10 @@ builder.Services.AddCors(options =>
         policy.AllowAnyOrigin()
               .AllowAnyHeader()
               .AllowAnyMethod()
-              .WithExposedHeaders("X-Audio-Format", "X-Audio-Decoded", "X-Rada-Native-Decoder", "Content-Disposition"));
+              .WithExposedHeaders("X-Audio-Format", "X-Audio-Decoded", "X-Rada-Native-Decoder", "Content-Disposition",
+                  "X-Usmap-Bytes", "X-Usmap-Names", "X-Usmap-Enums", "X-Usmap-Structs",
+                  "X-Usmap-UnknownProps", "X-Usmap-OptionalProps", "X-Usmap-Output", "X-Usmap-Loaded",
+                  "X-Usmap-ParsedEnums", "X-Usmap-ParsedStructs"));
 });
 
 Console.WriteLine("=================================");

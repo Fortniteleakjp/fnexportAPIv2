@@ -12,9 +12,11 @@ public static class MappingService
     private const string FallbackApiUrl = "https://uedb.dev/svc/api/v1/fortnite/mappings";
 
     /// <summary>
-    /// Downloads or verifies the mapping file
+    /// Downloads or verifies the mapping file. When <paramref name="forceDownload"/> is false and the
+    /// latest mapping is already present locally, the download is skipped (used by the per-build
+    /// retry loop so it doesn't re-download the same file every poll).
     /// </summary>
-    public static string EnsureMappingFile(string rootDir)
+    public static string EnsureMappingFile(string rootDir, bool forceDownload = true)
     {
         var mappingsDir = Path.Combine(rootDir, "mappings");
         Directory.CreateDirectory(mappingsDir);
@@ -39,7 +41,13 @@ public static class MappingService
             Console.WriteLine($" ✓");
             Console.WriteLine($"Latest mapping: {latestMapping.fileName}");
 
-            // Even if a local file already exists, always fetch the latest mapping file from the API
+            // On a retry poll, if we already have the latest mapping by name, don't re-download it.
+            if (!forceDownload && File.Exists(localPath))
+            {
+                Console.WriteLine($"Latest mapping already present (skipping download): {localPath}");
+                return localPath;
+            }
+
             Console.Write($"Downloading mapping file ({latestMapping.size / 1024 / 1024:F1} MB)...");
             var mappingData = client.GetByteArrayAsync(latestMapping.url).GetAwaiter().GetResult();
             File.WriteAllBytes(localPath, mappingData);

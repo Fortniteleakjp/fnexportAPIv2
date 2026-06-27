@@ -58,7 +58,7 @@ public static class FileProviderFactory
             pathComparer: StringComparer.OrdinalIgnoreCase);
 
         // 6. Initialize the ManifestService
-        var manifestService = new ManifestService(provider, chunkCacheDir, zlibng);
+        var manifestService = new ManifestService(provider, chunkCacheDir, zlibng, rootDir);
         manifestService.InitializeAsync().GetAwaiter().GetResult();
 
         if (!manifestService.IsReady)
@@ -94,8 +94,16 @@ public static class FileProviderFactory
             Console.WriteLine("Skipped loading the mapping file (SKIP_MAPPING=true)\n");
         }
 
+        // Record that mappings were handled for the current build (prevents a spurious reload on the
+        // first poll; the poll only re-fetches when the build actually changes).
+        manifestService.MarkMappingsApplied();
+
         // 10. Print statistics
         PrintStatistics(provider);
+
+        // 11. Start polling only now that the provider is fully initialized — avoids any race between
+        // a poll-triggered mount/mapping-swap and the remaining startup steps above.
+        manifestService.StartPolling();
 
         return new InitializationResult
         {
@@ -129,13 +137,13 @@ public static class FileProviderFactory
     /// can be resolved (e.g. USMAP_PATH points at a missing file, or no download/local file
     /// is available) the step is skipped gracefully rather than failing startup.
     /// </summary>
-    private static void LoadMappingFile(IFileProvider provider, string rootDir)
+    private static string? LoadMappingFile(IFileProvider provider, string rootDir, bool forceDownload = true)
     {
-        var usmapPath = ResolveUsmapPath(rootDir);
+        var usmapPath = ResolveUsmapPath(rootDir, forceDownload);
         if (usmapPath == null)
         {
             Console.WriteLine("No .usmap mapping available — skipping (some assets may not deserialize).\n");
-            return;
+            return null;
         }
 
         try
@@ -150,18 +158,44 @@ public static class FileProviderFactory
 
             // Free memory after loading as well
             GC.Collect();
+            return usmapPath;
         }
         catch (OutOfMemoryException)
         {
             Console.WriteLine($"✗ Failed to load the mapping file: out of memory");
             Console.WriteLine("Warning: some assets cannot be deserialized without mappings");
             Console.WriteLine("Hint: increase memory or exclude unnecessary VFS files\n");
+            return null;
         }
         catch (Exception ex)
         {
             Console.WriteLine($"✗ Failed to load the mapping file: {ex.Message}");
             Console.WriteLine("Warning: some assets cannot be deserialized without mappings\n");
+            return null;
         }
+    }
+
+    /// <summary>Returned by <see cref="ReloadMappings"/> when SKIP_MAPPING is set (treated as "applied").</summary>
+    public const string MappingSkipSentinel = "__skipped__";
+
+    /// <summary>
+    /// Re-resolves the .usmap (re-downloading the latest only when a newer file is available, unless
+    /// USMAP_PATH is pinned to an existing file) and swaps it into the provider. Called when a new
+    /// build is detected so the mapping matches the new build without a restart. Respects SKIP_MAPPING.
+    /// Returns the loaded .usmap path (or <see cref="MappingSkipSentinel"/> when skipped, or null when
+    /// nothing could be loaded).
+    /// </summary>
+    public static string? ReloadMappings(IFileProvider provider, string rootDir)
+    {
+        var skip = Environment.GetEnvironmentVariable("SKIP_MAPPING")?.ToLower() == "true";
+        if (skip)
+        {
+            Console.WriteLine("Mapping reload skipped (SKIP_MAPPING=true).");
+            return MappingSkipSentinel;
+        }
+
+        Console.WriteLine("Refreshing .usmap mapping for the current build...");
+        return LoadMappingFile(provider, rootDir, forceDownload: false);
     }
 
     /// <summary>
@@ -171,7 +205,7 @@ public static class FileProviderFactory
     ///      automatically (falling back to an existing local file). Only if no mapping can be
     ///      downloaded or found locally is null returned so loading is skipped.
     /// </summary>
-    private static string? ResolveUsmapPath(string rootDir)
+    private static string? ResolveUsmapPath(string rootDir, bool forceDownload = true)
     {
         var envPath = Environment.GetEnvironmentVariable("USMAP_PATH");
         if (!string.IsNullOrWhiteSpace(envPath) && File.Exists(envPath))
@@ -188,7 +222,7 @@ public static class FileProviderFactory
         // No usable mapping yet -> auto-download the latest (with an existing-local-file fallback).
         try
         {
-            return MappingService.EnsureMappingFile(rootDir);
+            return MappingService.EnsureMappingFile(rootDir, forceDownload);
         }
         catch (Exception ex)
         {

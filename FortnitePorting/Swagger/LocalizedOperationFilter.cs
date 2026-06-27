@@ -136,6 +136,54 @@ namespace FortnitePorting.Swagger
                 new("Search inside file contents (assets + config/text).",
                     "Reads candidate files and searches their contents. Assets (.uasset/.umap) are parsed and their exports serialized to JSON; config/text/binary files (.ini/.bin/.json, etc.) are decoded from raw bytes (find ItemName source strings, codenames, referenced paths, config values, etc.). The default set is assets + text/config; ext=* searches every file. By default it scans every file (~1.65M, ~11 GB). Detection is an allocation-free byte scan run in parallel across cores, so a full scan still takes only ~40 s. Scan order: (1) path contains the query, (2) its neighbour assets (same plugin/folder), (3) text/config, (4) other assets. Pass a smaller maxScan for a faster partial scan from the top. Returns matching files with snippet lines.",
                     "The matching files and their snippet lines.")),
+
+            ["MappingsController.Generate"] = (
+                new("マッピングJSONから .usmap を生成して返します。",
+                    "マッピングの JSON 版（{ Version, Enums, Structs, Classes } 形式。例: StormForge の …/Windows/<build>.json）から、CUE4Parse が読み込めるバイナリ .usmap（非圧縮・version ExplicitEnumValues）を生成し mappings/ に保存します。url（または path）から取得し、verify=true で生成物を再パースして件数・サンプルを検証、load=true で即座にホットスワップ適用します。クック済み pak から型を導出するのではなく、JSON 内の型レイアウトを .usmap 形式に変換するものです。生成した .usmap はその JSON のビルド用です。**既定では生成した .usmap 本体をレスポンスで返します**（download=false で JSON 統計のみ）。統計は X-Usmap-* ヘッダにも含まれます。",
+                    "生成した .usmap バイナリ（download=false 時は生成結果のJSON）。"),
+                new("Generate a .usmap from a mappings JSON and return it.",
+                    "Converts a JSON mappings dump ({ Version, Enums, Structs, Classes } — e.g. a StormForge …/Windows/<build>.json) into a binary .usmap (uncompressed, version ExplicitEnumValues) that CUE4Parse can load, saving it under mappings/. Fetches from url (or a local path); verify=true parses it back and reports counts/samples; load=true hot-swaps it into the provider. It converts the type layouts already in the JSON — it does not derive them from cooked paks. A generated .usmap is specific to that JSON's build. **By default the generated .usmap is returned as the response body** (download=false returns JSON stats instead); the stats are also in X-Usmap-* headers.",
+                    "The generated .usmap binary (or, when download=false, the generation-result JSON).")),
+
+            ["AesController.Aes"] = (
+                new("Common DLL から MainAES 鍵を取得して投入します。",
+                    "ライブの Fortnite_Studio（UEFN）マニフェストから UnrealEditorFortnite-Common-Win64-Shipping.dll をダウンロードし、外部 AesFinder ツールで MainAES 鍵を抽出して返します（ゲーム起動・注入なし）。鍵は Common DLL 内に mov 命令の即値（AESDumpster パターン）として平文で格納されています。submit=true（既定）で抽出鍵をそのまま provider に投入し、対応する pak を自動マウントします。Common DLL は初回のみDL→以降キャッシュ、新ビルドは自動取得。ツールのパスは環境変数 AESFINDER_PATH で指定します。",
+                    "MainAES 鍵・version・build と、投入／マウント結果。"),
+                new("Extract and submit the MainAES key from the Common DLL.",
+                    "Downloads UnrealEditorFortnite-Common-Win64-Shipping.dll from the live Fortnite_Studio (UEFN) manifest and runs the external AesFinder tool to extract the MainAES key (no game launch, no injection). The key is stored in the Common DLL as plaintext mov-instruction immediates (the AESDumpster pattern). With submit=true (default) the extracted key is submitted to the provider and matching paks are mounted. The Common DLL is downloaded once then cached; a new build is fetched automatically. Set the tool path with the AESFINDER_PATH environment variable.",
+                    "The MainAES key, version and build, plus the submit/mount result.")),
+
+            ["AesController.Extract"] = (
+                new("exe をマニフェストからDLし、ビルトインのスケジュール走査で AES を探します。",
+                    "Fortnite_Studio マニフェストから UnrealEditorFortnite-Win64-Shipping.exe（既定）をダウンロードし、ビルトインの AES-256 鍵スケジュール走査で鍵を探します（起動・注入なし）。verify=true でライブ AES API と照合、file= で別モジュールを指定可。注: 現行ビルドの MainAES は命令の即値として格納されるため本スケジュール走査では検出されません（その用途は /aes を使用してください）。",
+                    "走査結果（検出鍵・サイズ・照合結果）。"),
+                new("Download an exe from the manifest and scan it with the built-in schedule scanner.",
+                    "Downloads UnrealEditorFortnite-Win64-Shipping.exe (default) from the Fortnite_Studio manifest and scans it for an AES-256 key schedule with the built-in scanner (no launch, no injection). verify=true cross-checks against the live AES API; file= targets a different module. Note: the current build's MainAES is stored as instruction immediates and is NOT found by this schedule scan — use /aes for that.",
+                    "The scan result (found keys, size, verification).")),
+
+            ["AesController.ScanLocal"] = (
+                new("ローカルのファイル/ディレクトリを AesFinder で走査します。",
+                    "ディスク上の既存ファイル（例: インストール済み Fortnite）を、ビルトインのスケジュール走査で検査します（ダウンロードなし）。path で単一ファイル、dir でディレクトリ内の全 exe/dll を走査（サイズ降順）。verify=true でライブ AES API と照合します。",
+                    "ファイルごとの走査結果と検出鍵。"),
+                new("Scan local file(s) / a directory with AesFinder.",
+                    "Scans files already on disk (e.g. an installed Fortnite) with the built-in schedule scanner (no download). path scans a single file; dir scans every .exe/.dll inside a directory (largest first). verify=true cross-checks against the live AES API.",
+                    "Per-file scan results and any found keys.")),
+
+            ["AesController.Binaries"] = (
+                new("Fortnite_Studio ビルドの Win64 バイナリ一覧を取得します。",
+                    "マニフェスト内の Binaries/Win64 配下の exe/dll を、サイズ降順で一覧します（どのモジュールが鍵を持つかの診断用）。",
+                    "Win64 バイナリ（名前・サイズ）の一覧。"),
+                new("List the Fortnite_Studio build's Win64 binaries.",
+                    "Lists the exe/dll files under Binaries/Win64 in the manifest, sorted by size (diagnostic for which module carries the key).",
+                    "The Win64 binaries (name and size).")),
+
+            ["AesController.SelfTest"] = (
+                new("AesFinder スケジュール走査の自己テスト。",
+                    "既知の鍵の展開済みスケジュールをバッファに埋め込み、走査がその鍵を正しく復元できるかを確認します（ダウンロード不要）。",
+                    "自己テストの合否。"),
+                new("Self-test for the AesFinder schedule scanner.",
+                    "Embeds a known key's expanded schedule in a buffer and confirms the scanner recovers exactly that key (no download).",
+                    "The self-test pass/fail result.")),
         };
 
         // Parameter descriptions, keyed by operation key then parameter name. (Ja, En).
@@ -233,6 +281,45 @@ namespace FortnitePorting.Swagger
                                   "Maximum number of matching files to return (default 50, max 2000)."),
                 ["snippetsPerFile"] = ("1ファイルあたりに返す該当行スニペット数（既定 3・最大 20）。",
                                        "Number of snippet lines returned per file (default 3, max 20)."),
+            },
+            ["MappingsController.Generate"] = new()
+            {
+                ["url"] = ("マッピングJSONのURL（例: StormForge の …/Windows/<build>.json）。",
+                           "URL of the mappings JSON (e.g. a StormForge …/Windows/<build>.json)."),
+                ["path"] = ("ローカルのマッピングJSONパス（url の代わり）。", "Local path of a mappings JSON (alternative to url)."),
+                ["fileName"] = ("出力する .usmap のファイル名（省略時はソース名）。", "Output .usmap file name (defaults to the source name)."),
+                ["load"] = ("生成したマッピングをプロバイダに即適用（ホットスワップ。既定 false）。",
+                            "Hot-load the generated mapping into the provider (default false)."),
+                ["verify"] = ("生成した .usmap を再パースして件数・サンプルを検証（既定 true）。",
+                              "Parse the generated .usmap back and report counts/samples (default true)."),
+                ["download"] = ("生成した .usmap 本体をレスポンスで返す（既定 true）。false で JSON 統計のみ返す。",
+                                "Return the generated .usmap as the response body (default true); false returns JSON stats only."),
+            },
+            ["AesController.Aes"] = new()
+            {
+                ["force"] = ("キャッシュを無視して Common DLL を再ダウンロード（既定 false）。",
+                             "Re-download the Common DLL even if a cached copy exists (default false)."),
+                ["noApi"] = ("fortnite-api を参照せず、バイナリ内の最高エントロピー候補を採用（既定 false）。",
+                             "Don't consult fortnite-api; take the highest-entropy candidate from the binary (default false)."),
+                ["submit"] = ("抽出鍵を provider に投入して pak をマウント（既定 true）。false で鍵のみ返す。",
+                              "Submit the extracted key to the provider and mount paks (default true); false returns the key only."),
+            },
+            ["AesController.Extract"] = new()
+            {
+                ["verify"] = ("抽出鍵をライブ AES API と照合（既定 true）。",
+                              "Cross-check the extracted key(s) against the live AES API (default true)."),
+                ["force"] = ("キャッシュを無視して exe を再ダウンロード（既定 false）。",
+                             "Re-download the exe even if a cached copy exists (default false)."),
+                ["file"] = ("走査する別モジュール（ファイル名またはパス末尾）。既定の exe の代わりに指定。",
+                            "A different manifest binary to scan (file name or path suffix) instead of the default exe."),
+            },
+            ["AesController.ScanLocal"] = new()
+            {
+                ["path"] = ("走査する単一ローカルファイルのパス。", "A single local file to scan."),
+                ["dir"] = ("ローカルディレクトリ。内部の全 .exe/.dll を走査（サイズ降順）。",
+                           "A local directory; every .exe/.dll inside is scanned (largest first)."),
+                ["verify"] = ("検出鍵をライブ AES API と照合（既定 true）。",
+                              "Cross-check found keys against the live AES API (default true)."),
             },
         };
 
