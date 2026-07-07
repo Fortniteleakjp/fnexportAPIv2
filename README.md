@@ -83,13 +83,13 @@ dotnet run
 まとめて発行するよう設定されています:
 
 ```bash
-dotnet publish FortnitePorting/FortnitePorting.csproj -c Release -r win-x64
+build.bat
 ```
 
 出力:
 
 ```
-FortnitePorting/bin/Release/net9.0/win-x64/publish/FortnitePorting.exe
+FortnitePorting/bin/Release/net9.0/FortnitePorting.exe
 ```
 
 > Oodle／zlib-ng／RAD Audio のネイティブライブラリは実行時に取得されるため、exe には
@@ -258,7 +258,7 @@ http://localhost:3849/api/v1/search?q=*Athena*Soldier*&mode=wildcard&field=name&
 
 | メソッド & パス | 説明 |
 |---|---|
-| `GET /api/v1/pak/{pakName}/cosmetics?page={n}&pageSize={n}&lang={code}` | 指定 PAK／チャンク（番号可）内の `FortniteGame/Plugins/GameFeatures/BRCosmetics/Content/Athena/Items/Cosmetics` 配下の各コスメから、`ItemName`／`ItemDescription`／`ItemShortDescription` の Key（`lang` 指定時はローカライズ済みテキストも）、`LargeIcon` と `Icon` の `AssetPathName`、`Tags` を抽出（ページング、最大 200/頁）。 |
+| `GET /api/v1/pak/{pakName}/cosmetics?page={n}&pageSize={n}&lang={code}` | 指定 PAK／チャンク（番号可）内の `FortniteGame/Plugins/GameFeatures/BRCosmetics/Content/Athena/Items/Cosmetics` 配下の各コスメと、`FortniteGame/Plugins/GameFeatures/OfferCatalog/Content/DisplayAssets` 配下のバンドル／表示アセットを抽出（ページング、最大 200/頁）。コスメ結果には名称 Key、アイコン、Tags、OfferCatalog テクスチャを含み、表示アセット結果には `FortMtxOfferData` などの export データを含みます。 |
 
 例（チャンク番号 30、日本語）:
 ```

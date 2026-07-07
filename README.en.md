@@ -78,19 +78,19 @@ The API listens on `http://0.0.0.0:3849` by default (override with the `PORT`
 environment variable). Open **http://localhost:3849/swagger** to explore and try
 every endpoint; the root path `/` redirects there.
 
-### Build a single self-contained `.exe` (Windows)
+### Build a normal Windows output
 
-The project is configured to publish **everything — runtime, managed
-dependencies, and native libraries — into one executable**:
+The root `build.bat` creates a normal `net9.0` build output and copies the
+native runtime DLLs next to the framework-dependent executable:
 
 ```bash
-dotnet publish FortnitePorting/FortnitePorting.csproj -c Release -r win-x64
+build.bat
 ```
 
 Output:
 
 ```
-FortnitePorting/bin/Release/net9.0/win-x64/publish/FortnitePorting.exe
+FortnitePorting/bin/Release/net9.0/FortnitePorting.exe
 ```
 
 > The Oodle / zlib-ng / RAD Audio native libraries are acquired at runtime and are
@@ -259,7 +259,7 @@ Example response (`/api/v1/search`):
 
 | Method & path | Description |
 |---|---|
-| `GET /api/v1/pak/{pakName}/cosmetics?page={n}&pageSize={n}&lang={code}` | For the given PAK/chunk (number accepted), extracts from each cosmetic under `FortniteGame/Plugins/GameFeatures/BRCosmetics/Content/Athena/Items/Cosmetics`: the `ItemName` / `ItemDescription` / `ItemShortDescription` Keys (plus localized text when `lang` is given), the `LargeIcon` and `Icon` `AssetPathName`, and the `Tags` (paginated, max 200/page). |
+| `GET /api/v1/pak/{pakName}/cosmetics?page={n}&pageSize={n}&lang={code}` | For the given PAK/chunk (number accepted), extracts each cosmetic under `FortniteGame/Plugins/GameFeatures/BRCosmetics/Content/Athena/Items/Cosmetics` and each bundle/display asset under `FortniteGame/Plugins/GameFeatures/OfferCatalog/Content/DisplayAssets` (paginated, max 200/page). Cosmetic entries include ItemName/Description keys, icons, tags, and matched OfferCatalog texture paths; display asset entries include serialized exports such as `FortMtxOfferData` bundle data. |
 
 Example (chunk number 30, Japanese):
 ```

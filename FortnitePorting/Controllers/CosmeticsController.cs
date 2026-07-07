@@ -16,7 +16,8 @@ using Newtonsoft.Json.Linq;
 namespace FortnitePorting.Controllers
 {
     /// <summary>
-    /// Endpoints that read cosmetic item definitions out of a specific PAK / chunk.
+    /// Endpoints that read cosmetic item definitions and related offer display assets
+    /// out of a specific PAK / chunk.
     /// </summary>
     [ApiController]
     [Route("api/v1/pak")]
@@ -29,10 +30,19 @@ namespace FortnitePorting.Controllers
         private const string CosmeticsDir =
             "FortniteGame/Plugins/GameFeatures/BRCosmetics/Content/Athena/Items/Cosmetics";
 
+        // OfferCatalog display assets include bundle offer data such as DA_*_Bundle assets.
+        private const string OfferCatalogDisplayAssetsDir =
+            "FortniteGame/Plugins/GameFeatures/OfferCatalog/Content/DisplayAssets";
+
         // Optional OfferCatalog textures directory. When present in the same PAK, each cosmetic is
         // matched to its texture by skin ID (e.g. Character_HonestWasp -> T_AthenaSoldiers_HonestWasp).
         private const string OfferCatalogTexturesDir =
             "FortniteGame/Plugins/GameFeatures/OfferCatalog/Content/Textures";
+
+        private const string CosmeticAssetKind = "cosmetic";
+        private const string OfferCatalogDisplayAssetKind = "offerCatalogDisplayAsset";
+
+        private sealed record ResultSource(string Path, string AssetKind);
 
         public CosmeticsController(IFileProvider provider, ILogger<CosmeticsController> logger)
         {
@@ -42,9 +52,9 @@ namespace FortnitePorting.Controllers
 
         /// <summary>
         /// For the given PAK / chunk, scans every cosmetic under
-        /// FortniteGame/Plugins/GameFeatures/BRCosmetics/Content/Athena/Items/Cosmetics and returns,
-        /// for each, the localization keys (ItemName / ItemDescription / ItemShortDescription),
-        /// the LargeIcon and Icon AssetPathName values, and the Tags.
+        /// FortniteGame/Plugins/GameFeatures/BRCosmetics/Content/Athena/Items/Cosmetics plus
+        /// FortniteGame/Plugins/GameFeatures/OfferCatalog/Content/DisplayAssets and returns
+        /// cosmetic definitions together with bundle offer display data.
         /// </summary>
         /// <param name="pakName">PAK name or chunk number (e.g. 1051).</param>
         /// <param name="page">Page number (1-based).</param>
@@ -90,21 +100,17 @@ namespace FortnitePorting.Controllers
                 });
             }
 
-            var cosmeticFiles = matchedReaders
-                .SelectMany(reader => reader.Files.Keys)
-                .Where(k =>
-                {
-                    var norm = k.Replace('\\', '/');
-                    return norm.Contains(CosmeticsDir, StringComparison.OrdinalIgnoreCase) &&
-                           norm.EndsWith(".uasset", StringComparison.OrdinalIgnoreCase);
-                })
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .OrderBy(k => k, StringComparer.OrdinalIgnoreCase)
+            var cosmeticFiles = EnumerateUassetFiles(matchedReaders, CosmeticsDir);
+            var displayAssetFiles = EnumerateUassetFiles(matchedReaders, OfferCatalogDisplayAssetsDir);
+            var resultSources = cosmeticFiles
+                .Select(path => new ResultSource(path, CosmeticAssetKind))
+                .Concat(displayAssetFiles.Select(path => new ResultSource(path, OfferCatalogDisplayAssetKind)))
+                .OrderBy(x => x.Path, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            var total = cosmeticFiles.Count;
+            var total = resultSources.Count;
             var totalPages = (int)Math.Ceiling(total / (double)pageSize);
-            var pagedPaths = cosmeticFiles.Skip((page - 1) * pageSize).Take(pageSize).ToList();
+            var pagedSources = resultSources.Skip((page - 1) * pageSize).Take(pageSize).ToList();
 
             // Load localization data once when a non-English language is requested.
             ConcurrentDictionary<string, ConcurrentDictionary<string, string>>? locData = null;
@@ -117,19 +123,24 @@ namespace FortnitePorting.Controllers
             // segment of the texture name) so each cosmetic can be matched to its image.
             var offerCatalogIndex = BuildOfferCatalogIndex(matchedReaders);
 
-            var results = new List<object>(pagedPaths.Count);
-            foreach (var path in pagedPaths)
+            var results = new List<object>(pagedSources.Count);
+            foreach (var source in pagedSources)
             {
-                results.Add(ExtractCosmetic(path, locData, offerCatalogIndex));
+                results.Add(source.AssetKind == OfferCatalogDisplayAssetKind
+                    ? ExtractOfferCatalogDisplayAsset(source.Path, locData)
+                    : ExtractCosmetic(source.Path, locData, offerCatalogIndex));
             }
 
             var payload = new
             {
                 query = pakName,
                 matchedPaks = matchedReaders.Select(x => x.Name).OrderBy(x => x).ToList(),
-                directory = CosmeticsDir,
+                directories = new[] { CosmeticsDir, OfferCatalogDisplayAssetsDir },
                 lang = string.IsNullOrWhiteSpace(lang) ? "en" : lang,
                 totalCosmetics = total,
+                totalBRCosmetics = cosmeticFiles.Count,
+                totalOfferCatalogDisplayAssets = displayAssetFiles.Count,
+                totalResults = total,
                 totalPages,
                 currentPage = page,
                 pageSize,
@@ -138,6 +149,21 @@ namespace FortnitePorting.Controllers
 
             var json = JsonConvert.SerializeObject(payload, Formatting.Indented);
             return Content(json, "application/json; charset=utf-8");
+        }
+
+        private static List<string> EnumerateUassetFiles(IEnumerable<IAesVfsReader> readers, string directory)
+        {
+            return readers
+                .SelectMany(reader => reader.Files.Keys)
+                .Where(k =>
+                {
+                    var norm = k.Replace('\\', '/');
+                    return norm.Contains(directory, StringComparison.OrdinalIgnoreCase) &&
+                           norm.EndsWith(".uasset", StringComparison.OrdinalIgnoreCase);
+                })
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(k => k, StringComparer.OrdinalIgnoreCase)
+                .ToList();
         }
 
         /// <summary>
@@ -254,14 +280,14 @@ namespace FortnitePorting.Controllers
             {
                 if (!_provider.Files.TryGetValue(path, out var gameFile))
                 {
-                    return new { path, error = "File not found." };
+                    return new { path, name = Path.GetFileNameWithoutExtension(path), assetKind = CosmeticAssetKind, error = "File not found." };
                 }
 
                 var package = _provider.LoadPackage(gameFile);
                 var exports = package.GetExports().ToList();
                 if (exports.Count == 0)
                 {
-                    return new { path, name = Path.GetFileNameWithoutExtension(path), error = "No exports were found." };
+                    return new { path, name = Path.GetFileNameWithoutExtension(path), assetKind = CosmeticAssetKind, error = "No exports were found." };
                 }
 
                 var serializer = JsonSerializer.Create(new JsonSerializerSettings
@@ -320,6 +346,7 @@ namespace FortnitePorting.Controllers
                 {
                     path,
                     name = Path.GetFileNameWithoutExtension(path),
+                    assetKind = CosmeticAssetKind,
                     exportType,
                     itemNameKey,
                     itemName,
@@ -336,7 +363,82 @@ namespace FortnitePorting.Controllers
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to extract cosmetic from {Path}", path);
-                return new { path, name = Path.GetFileNameWithoutExtension(path), error = ex.Message };
+                return new { path, name = Path.GetFileNameWithoutExtension(path), assetKind = CosmeticAssetKind, error = ex.Message };
+            }
+        }
+
+        /// <summary>
+        /// Loads a single OfferCatalog display asset and returns its serialized exports. These assets
+        /// carry bundle offer data such as DisplayName, DetailsAttributes, images, and display size.
+        /// </summary>
+        private object ExtractOfferCatalogDisplayAsset(
+            string path,
+            ConcurrentDictionary<string, ConcurrentDictionary<string, string>>? locData)
+        {
+            try
+            {
+                if (!_provider.Files.TryGetValue(path, out var gameFile))
+                {
+                    return new { path, name = Path.GetFileNameWithoutExtension(path), assetKind = OfferCatalogDisplayAssetKind, error = "File not found." };
+                }
+
+                var package = _provider.LoadPackage(gameFile);
+                var exports = package.GetExports().ToList();
+                if (exports.Count == 0)
+                {
+                    return new { path, name = Path.GetFileNameWithoutExtension(path), assetKind = OfferCatalogDisplayAssetKind, error = "No exports were found." };
+                }
+
+                var serializer = JsonSerializer.Create(new JsonSerializerSettings
+                {
+                    ReferenceLoopHandling = ReferenceLoopHandling.Ignore
+                });
+
+                var exportsArray = new JArray();
+                string? exportType = null;
+                string? displayNameKey = null, displayName = null;
+                JToken? detailsAttributes = null;
+
+                foreach (var export in exports)
+                {
+                    JToken token;
+                    try
+                    {
+                        token = JToken.FromObject(export, serializer);
+                    }
+                    catch
+                    {
+                        continue;
+                    }
+
+                    if (locData != null)
+                    {
+                        ApplyLocalization(token, locData);
+                    }
+
+                    var props = GetChild(token, "Properties") ?? token;
+                    exportType ??= GetChild(token, "Type")?.ToString();
+                    if (displayNameKey == null) (displayNameKey, displayName) = GetText(props, token, "DisplayName", locData);
+                    detailsAttributes ??= GetChild(props, "DetailsAttributes") ?? FindFirst(token, "DetailsAttributes");
+                    exportsArray.Add(token);
+                }
+
+                return new
+                {
+                    path,
+                    name = Path.GetFileNameWithoutExtension(path),
+                    assetKind = OfferCatalogDisplayAssetKind,
+                    exportType,
+                    displayNameKey,
+                    displayName,
+                    detailsAttributes,
+                    exports = exportsArray
+                };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to extract OfferCatalog display asset from {Path}", path);
+                return new { path, name = Path.GetFileNameWithoutExtension(path), assetKind = OfferCatalogDisplayAssetKind, error = ex.Message };
             }
         }
 
@@ -380,6 +482,41 @@ namespace FortnitePorting.Controllers
                        ?? FindFirst(root, propertyName);
             var assetPath = GetChild(node, "AssetPathName");
             return assetPath != null && assetPath.Type != JTokenType.Null ? assetPath.ToString() : null;
+        }
+
+        /// <summary>Recursively replaces FText LocalizedString values with the requested language.</summary>
+        private static void ApplyLocalization(
+            JToken token,
+            ConcurrentDictionary<string, ConcurrentDictionary<string, string>> locData)
+        {
+            if (token is JObject obj)
+            {
+                var key = GetChild(obj, "Key")?.ToString();
+                var source = GetChild(obj, "SourceString");
+                var localizedProperty = obj.Properties()
+                    .FirstOrDefault(p => string.Equals(p.Name, "LocalizedString", StringComparison.OrdinalIgnoreCase));
+
+                if (!string.IsNullOrEmpty(key) && source != null && localizedProperty != null)
+                {
+                    var ns = GetChild(obj, "Namespace")?.ToString() ?? string.Empty;
+                    if (LocalizationService.TryGetLocalizedString(locData, ns, key, out var localized) && !string.IsNullOrEmpty(localized))
+                    {
+                        localizedProperty.Value = localized;
+                    }
+                }
+
+                foreach (var prop in obj.Properties())
+                {
+                    ApplyLocalization(prop.Value, locData);
+                }
+            }
+            else if (token is JArray arr)
+            {
+                foreach (var item in arr)
+                {
+                    ApplyLocalization(item, locData);
+                }
+            }
         }
 
         /// <summary>Direct, case-insensitive child lookup on a JObject.</summary>
