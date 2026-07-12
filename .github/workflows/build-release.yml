@@ -24,7 +24,9 @@ jobs:
       - name: Set up .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '9.0.x'
+          dotnet-version: |
+            8.0.x
+            9.0.x
 
       - name: Build native rada_decode.dll
         shell: cmd
@@ -33,6 +35,10 @@ jobs:
       - name: Publish FortnitePorting (win-x64, single file)
         shell: cmd
         run: dotnet publish FortnitePorting\FortnitePorting.csproj -c Release -r win-x64 -o publish-win
+
+      - name: Publish AesFinder (win-x64)
+        shell: cmd
+        run: dotnet publish AesFinder\AesFinder.csproj -c Release -r win-x64 -o publish-aesfinder
 
       - name: Bundle native lib
         shell: cmd
@@ -43,6 +49,12 @@ jobs:
         with:
           name: FortnitePorting-win-x64
           path: publish-win/
+
+      - name: Upload AesFinder artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AesFinder-win-x64
+          path: publish-aesfinder/AesFinder.exe
 
   # ---------------------------------------------------------------------------
   linux:
@@ -59,13 +71,18 @@ jobs:
       - name: Set up .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '9.0.x'
+          dotnet-version: |
+            8.0.x
+            9.0.x
 
       - name: Build native librada_decode.so
         run: bash RADADecoder/shim/build.sh "$PWD/dist"
 
       - name: Publish FortnitePorting (linux-x64, self-contained)
         run: dotnet publish FortnitePorting/FortnitePorting.csproj -c Release -r linux-x64 --self-contained true -o publish-linux
+
+      - name: Publish AesFinder (linux-x64)
+        run: dotnet publish AesFinder/AesFinder.csproj -c Release -r linux-x64 -o publish-aesfinder-linux
 
       - name: Bundle native lib
         run: cp dist/librada_decode.so publish-linux/
@@ -75,6 +92,12 @@ jobs:
         with:
           name: FortnitePorting-linux-x64
           path: publish-linux/
+
+      - name: Upload AesFinder Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AesFinder-linux-x64
+          path: publish-aesfinder-linux/AesFinder
 
   # ---------------------------------------------------------------------------
   release:
@@ -94,6 +117,8 @@ jobs:
           mkdir -p out
           (cd artifacts/FortnitePorting-win-x64 && zip -r "$GITHUB_WORKSPACE/out/FortnitePorting-win-x64.zip" .)
           tar -czf "out/FortnitePorting-linux-x64.tar.gz" -C artifacts/FortnitePorting-linux-x64 .
+          cp artifacts/AesFinder-win-x64/AesFinder.exe out/AesFinder.exe
+          tar -czf "out/AesFinder-linux-x64.tar.gz" -C artifacts/AesFinder-linux-x64 AesFinder
           ls -la out
 
       - name: Release notes
@@ -103,6 +128,9 @@ jobs:
 
           Each archive contains the published API plus the native RAD Audio decoder
           (`rada_decode.dll` / `librada_decode.so`).
+
+          `AesFinder.exe` and `AesFinder-linux-x64.tar.gz` are also attached as
+          separate AesFinder release assets.
 
           **Runtime native libraries you must add yourself** (not redistributable here):
           - Oodle: `oo2core_9_win64.dll` (Windows) / `liboo2corelinux64.so.9` (Linux)
@@ -132,3 +160,5 @@ jobs:
           files: |
             out/FortnitePorting-win-x64.zip
             out/FortnitePorting-linux-x64.tar.gz
+            out/AesFinder.exe
+            out/AesFinder-linux-x64.tar.gz

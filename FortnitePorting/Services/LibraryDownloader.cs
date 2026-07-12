@@ -124,7 +124,7 @@ public static class LibraryDownloader
         if (OperatingSystem.IsWindows())
         {
             fileName = "oo2core_9_win64.dll";
-            url = "https://github.com/WorkingRobot/OodleUE/raw/main/Engine/Binaries/Win64/oo2core_9_win64.dll";
+            url = "https://github.com/WorkingRobot/OodleUE/raw/refs/heads/main/Engine/Source/Programs/Shared/EpicGames.Oodle/Sdk/2.9.10/win/redist/oo2core_9_win64.dll";
         }
         else if (OperatingSystem.IsLinux())
         {

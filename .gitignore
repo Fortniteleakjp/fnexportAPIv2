@@ -37,4 +37,5 @@ RADADecoder/shim/*.exp
 /dist/
 /publish-win/
 /publish-linux/
+/publish-aesfinder*/
 /final/
