@@ -141,7 +141,7 @@ docker run -p 3849:3849 \
 
 | メソッド & パス | 説明 |
 |---|---|
-| `GET /api/v1/export?path={path}&image={bool}&audio={bool}&lang={code}` | アセットをエクスポート。既定は JSON で、全エクスポートを `jsonOutput` 配列に返します。`hash` はその配列の UTF-8 JSON の SHA-256、`entries` は件数、`bytes` は同JSONのバイト数です。`image=true` でテクスチャを PNG、`audio=true` でサウンドを音声、`lang` でローカライズ（例: `ja`）。**`image=true` でも対象がテクスチャでない場合は自動的に JSON を返します。** |
+| `GET /api/v1/export?path={path}&image={bool}&audio={bool}&lang={code}` | アセットをエクスポート。既定は JSON で、全エクスポートを `jsonOutput` 配列に返します。Unrealの通常プロパティ名は元の大文字・小文字を保持し、ローカライズ文字列のキーのみ FortniteAPI と同じ `namespace`・`key`・`sourceString`・`localizedString` にします。`hash` はその配列の UTF-8 JSON の SHA-256、`entries` は件数、`bytes` は同JSONのバイト数です。`image=true` でテクスチャを PNG、`audio=true` でサウンドを音声、`lang` でローカライズ（例: `ja`）。**`image=true` でも対象がテクスチャでない場合は自動的に JSON を返します。** |
 | `GET /api/v1/export/audioinfo?path={path}` | サウンドアセットの形式や WAV 変換可否を、バイナリを返さずに報告。 |
 | `GET /api/v1/export/locres?lang={code}` | 指定言語の結合済みローカライズテーブル。 |
 | `GET /api/v1/export/locres/languages` | 利用可能なローカライズ言語の一覧。 |

@@ -404,10 +404,12 @@ namespace FortnitePorting.Controllers
                     }
                 }
 
+                NormalizeFTextPropertyNames(jToken);
+
                 // Preserve every serialized export while adding integrity and size metadata for
                 // clients that need to validate or quickly inspect a large export result.
                 var jsonOutput = jToken is JArray array ? array : new JArray(jToken);
-                var jsonOutputText = jsonOutput.ToString(Formatting.Indented);
+                var jsonOutputText = jsonOutput.ToString(Formatting.None);
                 var jsonOutputBytes = Encoding.UTF8.GetBytes(jsonOutputText);
                 var response = new JObject
                 {
@@ -416,7 +418,7 @@ namespace FortnitePorting.Controllers
                     ["bytes"] = jsonOutputBytes.Length,
                     ["jsonOutput"] = jsonOutput
                 };
-                var json = response.ToString(Formatting.Indented);
+                var json = response.ToString(Formatting.None);
                 var jsonBytes = Encoding.UTF8.GetBytes(json);
                 var jsonContentType = "application/json; charset=utf-8";
 
@@ -478,6 +480,53 @@ namespace FortnitePorting.Controllers
                 "AT9" => ("audio/x-at9", "at9"),
                 _ => ("application/octet-stream", f.Length > 0 ? f.ToLowerInvariant() : "bin"),
             };
+        }
+
+        /// <summary>
+        /// Matches FortniteAPI's casing for FText values without changing normal Unreal property
+        /// names such as Type, Properties, WeaponActorClass, or AssetPathName.
+        /// </summary>
+        private static void NormalizeFTextPropertyNames(JToken token)
+        {
+            if (token is JObject obj)
+            {
+                foreach (var property in obj.Properties().ToList())
+                {
+                    NormalizeFTextPropertyNames(property.Value);
+                }
+
+                var isFText = obj.Property("Namespace") != null ||
+                              obj.Property("SourceString") != null ||
+                              obj.Property("LocalizedString") != null;
+                if (isFText)
+                {
+                    RenameProperty(obj, "Namespace", "namespace");
+                    RenameProperty(obj, "Key", "key");
+                    RenameProperty(obj, "SourceString", "sourceString");
+                    RenameProperty(obj, "LocalizedString", "localizedString");
+                }
+
+                // Some FText values carry only their culture-invariant source string.
+                RenameProperty(obj, "CultureInvariantString", "cultureInvariantString");
+                return;
+            }
+
+            if (token is JArray array)
+            {
+                foreach (var child in array)
+                {
+                    NormalizeFTextPropertyNames(child);
+                }
+            }
+        }
+
+        private static void RenameProperty(JObject obj, string currentName, string expectedName)
+        {
+            var property = obj.Property(currentName);
+            if (property != null && obj.Property(expectedName) == null)
+            {
+                property.Replace(new JProperty(expectedName, property.Value.DeepClone()));
+            }
         }
 
         /// <summary>
