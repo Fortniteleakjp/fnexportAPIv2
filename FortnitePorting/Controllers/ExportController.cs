@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.Mvc;
 using Newtonsoft.Json.Linq;
 using Newtonsoft.Json;
 using System.Text;
+using System.Security.Cryptography;
 using CUE4Parse.UE4.Assets;
 using CUE4Parse.UE4.Assets.Exports.Texture;
 using CUE4Parse.UE4.Assets.Exports;
@@ -403,7 +404,19 @@ namespace FortnitePorting.Controllers
                     }
                 }
 
-                var json = jToken.ToString(Formatting.Indented);
+                // Preserve every serialized export while adding integrity and size metadata for
+                // clients that need to validate or quickly inspect a large export result.
+                var jsonOutput = jToken is JArray array ? array : new JArray(jToken);
+                var jsonOutputText = jsonOutput.ToString(Formatting.Indented);
+                var jsonOutputBytes = Encoding.UTF8.GetBytes(jsonOutputText);
+                var response = new JObject
+                {
+                    ["hash"] = Convert.ToHexString(SHA256.HashData(jsonOutputBytes)).ToLowerInvariant(),
+                    ["entries"] = jsonOutput.Count,
+                    ["bytes"] = jsonOutputBytes.Length,
+                    ["jsonOutput"] = jsonOutput
+                };
+                var json = response.ToString(Formatting.Indented);
                 var jsonBytes = Encoding.UTF8.GetBytes(json);
                 var jsonContentType = "application/json; charset=utf-8";
 

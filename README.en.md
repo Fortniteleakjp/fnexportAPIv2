@@ -142,7 +142,7 @@ Base URL: `http://localhost:3849`
 
 | Method & path | Description |
 |---|---|
-| `GET /api/v1/export?path={path}&image={bool}&audio={bool}&lang={code}` | Export an asset. Default returns JSON (**all exports of the package, as an array**); `image=true` returns PNG for textures; `audio=true` returns audio for sounds; `lang` applies localization (e.g. `ja`). **If `image=true` but the asset is not a texture, JSON is returned automatically.** |
+| `GET /api/v1/export?path={path}&image={bool}&audio={bool}&lang={code}` | Export an asset. JSON is returned by default, with all package exports in the `jsonOutput` array. `hash` is the SHA-256 of that array's UTF-8 JSON, `entries` is its count, and `bytes` is its byte length. `image=true` returns PNG for textures; `audio=true` returns audio for sounds; `lang` applies localization (e.g. `ja`). **If `image=true` but the asset is not a texture, JSON is returned automatically.** |
 | `GET /api/v1/export/audioinfo?path={path}` | Report a sound asset's format and whether it can be decoded to WAV, without downloading the binary. |
 | `GET /api/v1/export/locres?lang={code}` | Merged localization table for a language. |
 | `GET /api/v1/export/locres/languages` | List available localization languages. |
