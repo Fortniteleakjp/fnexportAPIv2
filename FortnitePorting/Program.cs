@@ -37,15 +37,15 @@ builder.Services.AddSwaggerGen(options =>
     {
         Title = "Fortnite アセットエクスポート API",
         Version = "v1",
-        Description = "CUE4Parse を利用した Fortnite アセット解析 API。アセットの取得（JSON／画像／音声）、locres ローカライズ、PAK 内ファイル一覧、接頭辞によるアイテム検索・プロパティ抽出を提供します。"
+        Description = "ローカルで実行するCUE4ParseベースのFortniteアセット解析APIです。アセットのJSON・画像・音声取得、コスメ検索、ファイル検索、PAK/INI確認、依存関係解析、ローカライズを提供します。VPSなどへのホスティングを前提としません。"
     });
 
     // English document.
     options.SwaggerDoc("en", new Microsoft.OpenApi.OpenApiInfo
     {
-        Title = "Fortnite Asset Export API",
+        Title = "Fortnite Asset Analysis API",
         Version = "v1",
-        Description = "A Fortnite asset analysis API powered by CUE4Parse. Provides asset retrieval (JSON/image/audio), locres localization, listing of files inside PAK archives, and item search and property extraction by prefix."
+        Description = "A local CUE4Parse-powered Fortnite asset analysis API. Provides JSON/image/audio export, cosmetic search, path/content search, PAK and INI inspection, dependency analysis, and localization. It is designed to run locally rather than as a VPS-hosted service."
     });
 
     // Include XML comments if they exist (these supply the English text used by the "en" document).
@@ -107,7 +107,11 @@ app.UseSwaggerUI(options =>
     options.SwaggerEndpoint("/swagger/ja/swagger.json", "日本語 (Japanese)");
     options.SwaggerEndpoint("/swagger/en/swagger.json", "English");
     options.RoutePrefix = "swagger";
-    options.DocumentTitle = "Fortnite Asset Export API";
+    options.DocumentTitle = "Fortnite Asset Analysis API";
+    options.DocExpansion(Swashbuckle.AspNetCore.SwaggerUI.DocExpansion.None);
+    options.DefaultModelsExpandDepth(1);
+    options.DisplayRequestDuration();
+    options.EnableFilter();
 });
 
 // Configuration for the Docker container

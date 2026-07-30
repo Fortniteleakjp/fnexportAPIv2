@@ -25,6 +25,7 @@ using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using RADADecoder;
 using System.Text.RegularExpressions;
+using FortnitePorting.Models;
 
 namespace FortnitePorting.Controllers
 {
@@ -436,6 +437,96 @@ namespace FortnitePorting.Controllers
                 _logger.LogError(e, "Error processing request for path \"{Path}\"", path);
                 return Problem(detail: e.StackTrace, title: e.Message, statusCode: StatusCodes.Status500InternalServerError);
             }
+        }
+
+        /// <summary>
+        /// Exports multiple asset packages as JSON in one request. This is intended for local tools
+        /// that would otherwise need to make many sequential calls to the single-asset endpoint.
+        /// Images and audio are intentionally not embedded; use the single-asset endpoint for binary payloads.
+        /// </summary>
+        /// <param name="request">Asset paths and an optional localization language. Up to 100 paths are accepted.</param>
+        /// <param name="cancellationToken">Request cancellation token.</param>
+        [HttpPost("batch")]
+        [Consumes("application/json")]
+        public IActionResult Batch([FromBody] ExportBatchRequest? request, CancellationToken cancellationToken = default)
+        {
+            if (request == null || request.Paths == null || request.Paths.Count == 0)
+            {
+                return BadRequest(new { message = "At least one asset path is required." });
+            }
+
+            if (request.Paths.Count > 100)
+            {
+                return BadRequest(new { message = "A maximum of 100 asset paths can be exported per request." });
+            }
+
+            var lang = string.IsNullOrWhiteSpace(request.Lang) ? "en" : request.Lang.Trim();
+            var results = new List<object>(request.Paths.Count);
+            var succeeded = 0;
+
+            foreach (var requestedPath in request.Paths)
+            {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    return new EmptyResult();
+                }
+
+                var path = requestedPath?.Trim() ?? string.Empty;
+                if (path.Length == 0)
+                {
+                    results.Add(new { path, success = false, statusCode = StatusCodes.Status400BadRequest, error = "The asset path is empty." });
+                    continue;
+                }
+
+                try
+                {
+                    // Reuse the single-asset implementation so path normalization, localization,
+                    // export serialization, and its 30-minute cache remain consistent.
+                    var action = Get(path, image: false, audio: false, lang);
+                    switch (action)
+                    {
+                        case FileContentResult file when file.ContentType?.StartsWith("application/json", StringComparison.OrdinalIgnoreCase) == true:
+                        {
+                            var json = Encoding.UTF8.GetString(file.FileContents);
+                            results.Add(new { path, success = true, data = JToken.Parse(json) });
+                            succeeded++;
+                            break;
+                        }
+                        case ContentResult content when !string.IsNullOrWhiteSpace(content.Content):
+                        {
+                            results.Add(new { path, success = true, data = JToken.Parse(content.Content!) });
+                            succeeded++;
+                            break;
+                        }
+                        case ObjectResult objectResult:
+                            results.Add(new
+                            {
+                                path,
+                                success = false,
+                                statusCode = objectResult.StatusCode ?? StatusCodes.Status500InternalServerError,
+                                error = objectResult.Value
+                            });
+                            break;
+                        default:
+                            results.Add(new { path, success = false, statusCode = StatusCodes.Status422UnprocessableEntity, error = "The asset did not produce a JSON response." });
+                            break;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Batch export failed for {Path}", path);
+                    results.Add(new { path, success = false, statusCode = StatusCodes.Status500InternalServerError, error = ex.Message });
+                }
+            }
+
+            return Ok(new
+            {
+                language = lang,
+                total = results.Count,
+                succeeded,
+                failed = results.Count - succeeded,
+                results
+            });
         }
 
         private byte[]? DecodeRada(byte[] radaData)

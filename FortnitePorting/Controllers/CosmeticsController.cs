@@ -151,6 +151,70 @@ namespace FortnitePorting.Controllers
             return Content(json, "application/json; charset=utf-8");
         }
 
+        /// <summary>
+        /// Searches cosmetic definitions across every currently mounted PAK/chunk. Unlike the
+        /// PAK-scoped endpoint, callers do not need to know which archive contains the cosmetic.
+        /// </summary>
+        /// <param name="q">Optional ID or asset-name fragment, for example HonestWasp.</param>
+        /// <param name="category">Optional category prefix, for example Character, Backpack, or Pickaxe.</param>
+        /// <param name="page">Page number (1-based).</param>
+        /// <param name="pageSize">Items per page (maximum 200).</param>
+        /// <param name="lang">Localization language code, for example ja.</param>
+        [HttpGet("~/api/v1/cosmetics/search")]
+        public IActionResult SearchCosmetics(
+            [FromQuery] string? q = null,
+            [FromQuery] string? category = null,
+            [FromQuery] int page = 1,
+            [FromQuery] int pageSize = 50,
+            [FromQuery] string? lang = null)
+        {
+            if (_provider is not AbstractVfsFileProvider vfsProvider)
+            {
+                return BadRequest(new { message = "The provider is not a VFS provider." });
+            }
+
+            page = Math.Max(1, page);
+            pageSize = Math.Clamp(pageSize, 1, 200);
+            q = string.IsNullOrWhiteSpace(q) ? null : q.Trim();
+            category = string.IsNullOrWhiteSpace(category) ? null : category.Trim();
+
+            var allCosmetics = EnumerateUassetFiles(vfsProvider.MountedVfs, CosmeticsDir)
+                .Where(path =>
+                {
+                    var name = Path.GetFileNameWithoutExtension(path);
+                    var separator = name.IndexOf('_');
+                    var prefix = separator > 0 ? name[..separator] : name;
+                    return (category == null || prefix.Equals(category, StringComparison.OrdinalIgnoreCase)) &&
+                           (q == null || name.Contains(q, StringComparison.OrdinalIgnoreCase));
+                })
+                .ToList();
+
+            var total = allCosmetics.Count;
+            var totalPages = (int)Math.Ceiling(total / (double)pageSize);
+            var pagePaths = allCosmetics.Skip((page - 1) * pageSize).Take(pageSize).ToList();
+
+            ConcurrentDictionary<string, ConcurrentDictionary<string, string>>? locData = null;
+            if (!string.IsNullOrWhiteSpace(lang) && !lang.Equals("en", StringComparison.OrdinalIgnoreCase))
+            {
+                locData = LocalizationService.Load(_provider, lang);
+            }
+
+            var offerCatalogIndex = BuildOfferCatalogIndex(vfsProvider.MountedVfs);
+            var results = pagePaths.Select(path => ExtractCosmetic(path, locData, offerCatalogIndex)).ToList();
+
+            return Ok(new
+            {
+                query = q,
+                category,
+                lang = string.IsNullOrWhiteSpace(lang) ? "en" : lang,
+                total,
+                totalPages,
+                currentPage = page,
+                pageSize,
+                results
+            });
+        }
+
         private static List<string> EnumerateUassetFiles(IEnumerable<IAesVfsReader> readers, string directory)
         {
             return readers

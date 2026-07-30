@@ -2,57 +2,34 @@ using System.Collections.Generic;
 using Microsoft.OpenApi;
 using Swashbuckle.AspNetCore.SwaggerGen;
 
-namespace FortnitePorting.Swagger
+namespace FortnitePorting.Swagger;
+
+/// <summary>Localizes the controller tag descriptions in the Japanese and English OpenAPI documents.</summary>
+public sealed class LocalizedDocumentFilter : IDocumentFilter
 {
-    /// <summary>
-    /// Localizes the document-level tag descriptions (which come from the controllers'
-    /// class-level XML summaries) for the active Swagger document ("ja" or "en").
-    /// Registered after IncludeXmlComments so it overrides the XML text.
-    /// </summary>
-    public sealed class LocalizedDocumentFilter : IDocumentFilter
+    private static readonly Dictionary<string, (string Ja, string En)> Tags = new()
     {
-        // Keyed by tag name (= controller name without the "Controller" suffix). (Ja, En).
-        private static readonly Dictionary<string, (string Ja, string En)> TagDescriptions = new()
-        {
-            ["Export"] = (
-                "アセットエクスポート用エンドポイント。アセットを JSON／画像（PNG）／音声で取得するほか、ローカライズ（locres）データや PAK 内ファイル一覧を提供します。",
-                "Asset export endpoints: retrieve assets as JSON, image (PNG), or audio, plus localization (locres) data and the file listing inside PAK archives."),
-            ["Items"] = (
-                "特定の接頭辞（WID_ / AGID_ / Athena_ / Figment_Athena_）で始まるアセットを一覧・抽出するためのエンドポイント群。",
-                "A set of endpoints for listing and extracting assets whose names start with a specific prefix (WID_ / AGID_ / Athena_ / Figment_Athena_)."),
-            ["Debug"] = (
-                "読み込まれた仮想ファイルシステムを調査するための診断用エンドポイント（ファイル一覧・部分一致検索・マウント済み PAK／UTOC）。",
-                "Diagnostic endpoints for inspecting the loaded virtual file system: file listing, substring search, and the mounted PAK / UTOC archives."),
-            ["Cosmetics"] = (
-                "指定した PAK／チャンク内のコスメ（BRCosmetics）アイテム定義を読み取るエンドポイント。",
-                "Endpoints that read cosmetic (BRCosmetics) item definitions out of a specific PAK / chunk."),
-            ["Search"] = (
-                "全ファイルを対象とした文字列検索エンドポイント。ファイルパス／名の高速検索（部分一致・接頭辞・正規表現・ワイルドカード等）と、アセット内容（プロパティ）への限定的な全文検索を提供します。",
-                "Full-text search endpoints over all files: fast path/name search (substring, prefix, regex, wildcard, etc.) and a bounded content search inside parsed asset properties."),
-            ["Mappings"] = (
-                "マッピング生成エンドポイント。マッピングの JSON 版（{ Version, Enums, Structs, Classes }）から CUE4Parse 用の .usmap バイナリを生成・適用します。",
-                "Mapping generation endpoints: build a CUE4Parse .usmap from a JSON mappings dump and optionally apply it."),
-            ["Aes"] = (
-                "AES 鍵取得エンドポイント。UEFN（Fortnite_Studio）の Common DLL をマニフェストからダウンロードし、外部 AesFinder ツールで MainAES 鍵を抽出して provider に投入・マウントします（起動・注入なし）。補助としてビルトインのスケジュール走査・ローカル走査・自己テストも提供します。",
-                "AES key endpoints: download the UEFN (Fortnite_Studio) Common DLL from the manifest, extract the MainAES key with the external AesFinder tool, and submit/mount it on the provider (no launch, no injection). Built-in schedule scanning, local scanning, and a self-test are also provided as helpers."),
-        };
+        ["Export"] = ("アセットのJSON・画像・音声エクスポート、ローカライズ、PAK内ファイル一覧。", "Asset JSON/image/audio export, localization, and PAK file listing."),
+        ["Items"] = ("アイテム接頭辞によるアセット一覧とプロパティ抽出。", "Item asset listing and property extraction by name prefix."),
+        ["Debug"] = ("ローカルVFSの診断用ファイル・PAK確認。", "Diagnostics for the local virtual file system and mounted archives."),
+        ["Cosmetics"] = ("PAK単位および全マウントPAK横断のコスメ抽出。", "Cosmetic extraction scoped to one PAK or across all mounted PAKs."),
+        ["Search"] = ("ファイルパスとアセット・設定内容の検索。", "Search across file paths and asset/config contents."),
+        ["Mappings"] = ("マッピングJSONからCUE4Parse用.usmapを生成。", "Generate CUE4Parse .usmap files from mappings JSON."),
+        ["Aes"] = ("ローカル実行環境でのAESキー抽出・適用。", "AES key extraction and application in the local process."),
+        ["Pak"] = ("現在マウントされているPAK/UTOCの一覧と内容。", "Mounted PAK/UTOC inventory and contents."),
+        ["Config"] = ("読み込み済みINIファイルの一覧と設定値検索。", "Loaded INI file listing and configuration lookup."),
+        ["Assets"] = ("アセット間のハード参照・ソフト参照の解析。", "Hard and soft reference inspection between assets.")
+    };
 
-        public void Apply(OpenApiDocument document, DocumentFilterContext context)
+    public void Apply(OpenApiDocument document, DocumentFilterContext context)
+    {
+        if (document.Tags == null) return;
+        var isJa = context.DocumentName == "ja";
+        foreach (var tag in document.Tags)
         {
-            if (document.Tags == null)
+            if (tag is OpenApiTag openApiTag && openApiTag.Name != null && Tags.TryGetValue(openApiTag.Name, out var description))
             {
-                return;
-            }
-
-            var isJa = context.DocumentName == "ja";
-            foreach (var tag in document.Tags)
-            {
-                if (tag is OpenApiTag concreteTag &&
-                    concreteTag.Name != null &&
-                    TagDescriptions.TryGetValue(concreteTag.Name, out var text))
-                {
-                    concreteTag.Description = isJa ? text.Ja : text.En;
-                }
+                openApiTag.Description = isJa ? description.Ja : description.En;
             }
         }
     }
