@@ -33,13 +33,20 @@ namespace FortnitePorting.Controllers
         // Cache of decompressed file bytes, shared across requests so a second (different) content
         // query does not have to re-read/re-decompress the same files. Bounded by ContentCacheBudget.
         private static readonly ConcurrentDictionary<string, byte[]> BytesCache = new(StringComparer.OrdinalIgnoreCase);
+        // Cache serialized package exports per file so a different query does not re-parse a matched asset.
+        // An empty string is used as the cached value for a file that has no serializable exports.
+        private static readonly ConcurrentDictionary<string, string> AssetJsonCache = new(StringComparer.OrdinalIgnoreCase);
         private static long _bytesCacheUsed;
+        private static int _bytesCacheFileCount = -1;
         private static readonly long ContentCacheBudget = ResolveCacheBudget();
         private static readonly bool ContentCacheEnabled = ContentCacheBudget > 0;
+        private static readonly bool ContentCacheUnbounded = ContentCacheBudget == long.MaxValue;
         // How many files content search scans concurrently (defaults to every core).
         private static readonly int ScanParallelism = ResolveParallelism();
         // How long a content-search response is cached for an identical query.
         private static readonly TimeSpan ResultCacheTtl = TimeSpan.FromMinutes(15);
+        // How long a path-search response is cached for an identical query.
+        private static readonly TimeSpan PathResultCacheTtl = TimeSpan.FromMinutes(15);
 
         // Cap regex evaluation per candidate so a single pathological match cannot dominate.
         private static readonly TimeSpan RegexTimeout = TimeSpan.FromMilliseconds(250);
@@ -84,17 +91,17 @@ namespace FortnitePorting.Controllers
             _cache = cache;
         }
 
-        // CONTENT_CACHE_MB: decompressed-bytes cache budget in MB. Default off: on warm storage the
-        // scan is bandwidth-bound, not decompression-bound, so caching bytes wastes RAM for no gain.
-        // Set e.g. CONTENT_CACHE_MB=8192 to enable it (useful on slow/network storage).
+        // CONTENT_CACHE_MB: decompressed-bytes cache budget in MB. The default is unlimited so every
+        // file read during content search remains cached until the mounted file set changes.
+        // Set 0 to disable it, or set a positive value to impose a manual limit.
         private static long ResolveCacheBudget()
         {
             var v = Environment.GetEnvironmentVariable("CONTENT_CACHE_MB")?.Trim();
-            if (!string.IsNullOrEmpty(v) && long.TryParse(v, out var mb) && mb > 0)
+            if (!string.IsNullOrEmpty(v) && long.TryParse(v, out var mb) && mb >= 0)
             {
                 return mb * 1024L * 1024L;
             }
-            return 0;
+            return long.MaxValue;
         }
 
         // SEARCH_THREADS: content-scan parallelism (default = logical CPU count).
@@ -111,15 +118,38 @@ namespace FortnitePorting.Controllers
         /// </summary>
         private byte[]? GetFileBytes(string path)
         {
+            EnsureBytesCacheVersion();
             if (ContentCacheEnabled && BytesCache.TryGetValue(path, out var hit)) return hit;
 
             if (!_provider.TrySaveAsset(path, out var bytes) || bytes == null) return null;
 
-            if (ContentCacheEnabled && Interlocked.Read(ref _bytesCacheUsed) + bytes.Length <= ContentCacheBudget)
+            var canCache = ContentCacheEnabled &&
+                           (ContentCacheUnbounded ||
+                            (Interlocked.Read(ref _bytesCacheUsed) <= long.MaxValue - bytes.Length &&
+                             Interlocked.Read(ref _bytesCacheUsed) + bytes.Length <= ContentCacheBudget));
+            if (canCache)
             {
                 if (BytesCache.TryAdd(path, bytes)) Interlocked.Add(ref _bytesCacheUsed, bytes.Length);
             }
             return bytes;
+        }
+
+        private void EnsureBytesCacheVersion()
+        {
+            if (!ContentCacheEnabled) return;
+
+            var fileCount = _provider.Files.Count;
+            if (Volatile.Read(ref _bytesCacheFileCount) == fileCount) return;
+
+            lock (BytesCache)
+            {
+                if (_bytesCacheFileCount == fileCount) return;
+                BytesCache.Clear();
+                AssetJsonCache.Clear();
+                Interlocked.Exchange(ref _bytesCacheUsed, 0);
+                Volatile.Write(ref _bytesCacheFileCount, fileCount);
+                _logger.LogInformation("Search byte cache reset for mounted file count {FileCount}", fileCount);
+            }
         }
 
         /// <summary>
@@ -183,6 +213,28 @@ namespace FortnitePorting.Controllers
             var extensions = ParseExtensions(ext);
             var hasExtFilter = extensions.Count > 0;
             var dirPrefix = NormalizeDirPrefix(dir);
+            var pathCacheKey = string.Concat(
+                "sp|", _provider.Files.Count.ToString(), "|",
+                JsonConvert.SerializeObject(new
+                {
+                    query = needle,
+                    mode,
+                    field,
+                    caseSensitive,
+                    extensions,
+                    directory = dirPrefix,
+                    dedupe,
+                    page,
+                    pageSize
+                }));
+
+            if (_cache.TryGetValue(pathCacheKey, out string? cachedPathJson) && cachedPathJson != null)
+            {
+                _logger.LogInformation("Path search cache hit: {Query}", needle);
+                return Content(cachedPathJson, "application/json; charset=utf-8");
+            }
+
+            _logger.LogInformation("Path search cache miss: {Query}", needle);
 
             var matches = new List<string>();
             var truncated = false;
@@ -259,7 +311,7 @@ namespace FortnitePorting.Controllers
                 })
                 .ToList();
 
-            return Ok(new
+            var response = new
             {
                 query = needle,
                 mode,
@@ -276,7 +328,17 @@ namespace FortnitePorting.Controllers
                 currentPage = page,
                 pageSize,
                 results = paged
-            });
+            };
+            var responseJson = JsonConvert.SerializeObject(response, Formatting.Indented);
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                _cache.Set(pathCacheKey, responseJson, new MemoryCacheEntryOptions
+                {
+                    SlidingExpiration = PathResultCacheTtl
+                });
+            }
+
+            return Content(responseJson, "application/json; charset=utf-8");
         }
 
         /// <summary>
@@ -339,8 +401,14 @@ namespace FortnitePorting.Controllers
                 "|", maxScan.ToString(), "|", maxResults.ToString(), "|", snippetsPerFile.ToString());
             if (_cache.TryGetValue(cacheKey, out string? cachedJson) && cachedJson != null)
             {
+                _logger.LogInformation("Content search cache hit: {Query}", needle);
                 return Content(cachedJson, "application/json; charset=utf-8");
             }
+
+            _logger.LogInformation("Content search cache miss: {Query}; byte cache enabled={Enabled}, budget={Budget}",
+                needle,
+                ContentCacheEnabled,
+                ContentCacheUnbounded ? "unlimited" : $"{ContentCacheBudget / (1024 * 1024)} MB");
 
             // Buckets, scanned in priority order so the most relevant files are parsed within the
             // maxScan budget:
@@ -505,7 +573,9 @@ namespace FortnitePorting.Controllers
                 // or stopped at maxResults). Raise maxScan to scan the whole game.
                 truncated = scanCapped || stoppedAtResultLimit || candidateLimitReached,
                 parallelism = ScanParallelism,
-                cacheBytesMB = (int)(Interlocked.Read(ref _bytesCacheUsed) / (1024 * 1024)),
+                cacheBytesMB = Interlocked.Read(ref _bytesCacheUsed) / (1024 * 1024),
+                cacheFiles = BytesCache.Count,
+                cachedAssetJsonFiles = AssetJsonCache.Count,
                 resultCount = results.Count,
                 results
             };
@@ -689,10 +759,17 @@ namespace FortnitePorting.Controllers
         /// </summary>
         private string? TryLoadAssetJson(string path)
         {
+            EnsureBytesCacheVersion();
+            if (ContentCacheEnabled && AssetJsonCache.TryGetValue(path, out var cachedJson))
+            {
+                return cachedJson.Length == 0 ? null : cachedJson;
+            }
+
             try
             {
                 if (!_provider.Files.TryGetValue(path, out var gameFile))
                 {
+                    if (ContentCacheEnabled) AssetJsonCache.TryAdd(path, string.Empty);
                     return null;
                 }
 
@@ -700,6 +777,7 @@ namespace FortnitePorting.Controllers
                 var exports = package.GetExports().ToList();
                 if (exports.Count == 0)
                 {
+                    if (ContentCacheEnabled) AssetJsonCache.TryAdd(path, string.Empty);
                     return null;
                 }
 
@@ -721,11 +799,14 @@ namespace FortnitePorting.Controllers
                     }
                 }
 
-                return array.Count > 0 ? array.ToString(Formatting.Indented) : null;
+                var serialized = array.Count > 0 ? array.ToString(Formatting.Indented) : string.Empty;
+                if (ContentCacheEnabled) AssetJsonCache.TryAdd(path, serialized);
+                return serialized.Length == 0 ? null : serialized;
             }
             catch (Exception ex)
             {
                 _logger.LogDebug(ex, "Content search: failed to load {Path}", path);
+                if (ContentCacheEnabled) AssetJsonCache.TryAdd(path, string.Empty);
                 return null;
             }
         }

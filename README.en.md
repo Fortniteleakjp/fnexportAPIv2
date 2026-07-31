@@ -122,7 +122,7 @@ docker run -p 3849:3849 \
 | `SKIP_MAPPING` | `false` | Fully skip loading the `.usmap` mappings (lower memory; some assets won't deserialize). |
 | `LOAD_ALL_VFS` | `false` | Mount every VFS file instead of a curated subset. |
 | `SEARCH_THREADS` | (CPU count) | Content-search scan parallelism. Defaults to the logical CPU count (use every core). |
-| `CONTENT_CACHE_MB` | `0` (off) | Decompressed-bytes cache budget (MB) for content search. Enable (e.g. `8192`) to speed up re-scans on slow/network storage; off by default since it gives little benefit on warm local storage. |
+| `CONTENT_CACHE_MB` | `unlimited` | Cache decompressed bytes read during content search. Unlimited by default until the mounted PAK state changes; set `0` to disable or a positive value to impose an MB limit. |
 | `AESFINDER_PATH` | `D:\AesFinder-main\...\AesFinder.exe` | Path to the external AesFinder tool used by `/aes` (a `.exe`, a `.dll`, or a directory containing it). |
 | `AESFINDER_AUTO` | `true` | Background auto-extraction/submission of the MainAES key via AesFinder (**only acts while the main key is missing**; set `false` to disable). |
 
@@ -229,7 +229,7 @@ Example response (`/api/v1/search`):
 
 > **Note**: The path search scans all files (~2.4M). `regex` is bounded by a per-evaluation timeout (250 ms), an overall time budget, and a pattern-length limit. The content search (`/content`) covers **assets plus config/text files** (`.ini`/`.bin`/`.json`, etc.) and scans in the order: path-contains-query → **neighbour assets (same plugin/folder)** → text/config → other assets, up to `maxScan`. Detection is an allocation-free byte scan run across all cores, so it **scans every file (~1.65M, ~11 GB) by default in about 40 s** — so a plain `?q=RankedTier` finds scattered, path-less matches (12 widgets across many plugins) with no tuning. For a quick check pass a small `maxScan` (e.g. `maxScan=2000`) to scan partially from the top, or narrow with `dir` / `pathContains` / `ext` when you know the target.
 >
-> **Speed**: scanning runs **in parallel across every CPU core** (tunable via `SEARCH_THREADS`), and an **identical query is cached for 15 minutes**, so repeats return instantly (the cache is keyed by the mounted file count, so a new build / new keys invalidate it automatically). On slow storage, set `CONTENT_CACHE_MB` to also cache decompressed bytes and speed up re-scans with different queries.
+> **Speed**: scanning runs **in parallel across every CPU core** (tunable via `SEARCH_THREADS`), and an **identical query is cached for 15 minutes**, so repeats return instantly (the cache is keyed by the mounted file count, so a new build / new keys invalidate it automatically). Decompressed bytes are also cached without a limit by default, reducing re-reads and re-decompression for different queries.
 
 ### AES key extraction — `/aes`
 
