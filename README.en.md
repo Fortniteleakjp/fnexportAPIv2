@@ -255,6 +255,13 @@ Example response (`/api/v1/search`):
 | `GET /api/v1/debug/paks` | List mounted pak / utoc files. |
 | `GET /api/v1/debug/paks/{pakName}/files` | List files inside a mounted pak. |
 
+### Archive information and AES — `/api/v1/archives`
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/v1/archives` | Returns metadata for registered `.pak` / `.utoc` archives, including name, size, file count, mount point, encryption state, GUID, and compression methods. |
+| `GET /api/v1/archives/keys` | Returns an AES response with `version`, `mainKey`, `dynamicKeys`, and `unloaded`, including GUIDs, AES keys, keychain strings, file counts, and sizes. GUIDs are matched against the live mapping from `https://fljpapi.jp/api/v2/keychain?rou=false`; the provider's loaded key is used for Main AES and other missing entries. |
+
 ### Cosmetics extraction — `/api/v1/pak`
 
 | Method & path | Description |

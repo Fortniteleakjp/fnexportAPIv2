@@ -254,6 +254,13 @@ http://localhost:3849/api/v1/search?q=*Athena*Soldier*&mode=wildcard&field=name&
 | `GET /api/v1/debug/paks` | マウント済み pak／utoc ファイル一覧。 |
 | `GET /api/v1/debug/paks/{pakName}/files` | マウント済み pak 内のファイル一覧。 |
 
+### アーカイブ情報・AES — `/api/v1/archives`
+
+| エンドポイント | 説明 |
+|---|---|
+| `GET /api/v1/archives` | 登録済みの `.pak`／`.utoc` アーカイブについて、名前、サイズ、ファイル数、マウントポイント、暗号化状態、GUID、圧縮方式などを返します。 |
+| `GET /api/v1/archives/keys` | `version`、`mainKey`、`dynamicKeys`、`unloaded` を持つAESレスポンスを返します。GUID、AESキー、keychain文字列、ファイル数、サイズを含みます。GUID→AESは `https://fljpapi.jp/api/v2/keychain?rou=false` と照合し、Main AESなどはプロバイダーのキーを使用します。 |
+
 ### コスメ抽出 — `/api/v1/pak`
 
 | メソッド & パス | 説明 |
