@@ -1,7 +1,9 @@
 global using EpicManifestParser;
 
 using CUE4Parse.FileProvider;
+using FortnitePorting.Controllers;
 using FortnitePorting.Services;
+using Microsoft.Extensions.Caching.Memory;
 
 // Configuration for the Docker container environment
 var builder = WebApplication.CreateBuilder(args);
@@ -23,6 +25,8 @@ builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
 // Add services to the container
 builder.Services.AddControllers();
 builder.Services.AddMemoryCache();
+// Gate that blocks requests while the provider is rebuilt for a new Fortnite build.
+builder.Services.AddSingleton(ProviderReloadGate.Instance);
 builder.Services.AddHostedService<AesKeyMonitorService>();
 // Fallback self-sufficient main-key source: extracts the MainAES key from the UEFN Common DLL with the
 // external AesFinder tool and submits it when the external AES API hasn't supplied it (e.g. a fresh build).
@@ -92,6 +96,13 @@ builder.Services.AddSingleton(initializationResult.ManifestService);
 
 var app = builder.Build();
 
+// Register the caches that hold data derived from the mounted build. They are all cleared whenever the
+// provider is rebuilt for a new build, so a cache hit can never keep serving pre-update content.
+CacheRegistry.Register("response cache", () => (app.Services.GetRequiredService<IMemoryCache>() as MemoryCache)?.Clear());
+CacheRegistry.Register("search bytes/exports", SearchController.ClearCaches);
+CacheRegistry.Register("export localization", ExportController.ClearCaches);
+CacheRegistry.Register("localization tables", LocalizationService.ClearCache);
+
 // Configure the HTTP request pipeline
 if (app.Environment.IsDevelopment())
 {
@@ -112,6 +123,45 @@ app.UseSwaggerUI(options =>
     options.DefaultModelsExpandDepth(1);
     options.DisplayRequestDuration();
     options.EnableFilter();
+});
+
+// While the provider is being rebuilt for a new build its archives are torn down and re-registered, so
+// requests must not read from it: they are answered with 503 instead of stale or half-loaded content.
+// The build/status endpoints stay reachable so clients can see why (and poll for completion).
+app.Use(async (context, next) =>
+{
+    var path = context.Request.Path.Value ?? string.Empty;
+    var exempt = path.Equals("/", StringComparison.Ordinal)
+                 || path.StartsWith("/swagger", StringComparison.OrdinalIgnoreCase)
+                 || path.StartsWith("/api/v1/build", StringComparison.OrdinalIgnoreCase);
+
+    if (exempt)
+    {
+        await next();
+        return;
+    }
+
+    if (!ProviderReloadGate.Instance.TryEnter())
+    {
+        context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        context.Response.Headers.RetryAfter = "30";
+        await context.Response.WriteAsJsonAsync(new
+        {
+            status = ProviderReloadGate.Instance.State,
+            message = "The API is reloading the latest Fortnite build. Retry shortly.",
+            statusEndpoint = "/api/v1/build"
+        });
+        return;
+    }
+
+    try
+    {
+        await next();
+    }
+    finally
+    {
+        ProviderReloadGate.Instance.Exit();
+    }
 });
 
 // Configuration for the Docker container

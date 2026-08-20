@@ -42,6 +42,11 @@ namespace FortnitePorting.Controllers
         private readonly ILogger<ExportController> _logger;
         private static readonly ConcurrentDictionary<string, ConcurrentDictionary<string, ConcurrentDictionary<string, string>>> _localizationCache = new(StringComparer.OrdinalIgnoreCase);
 
+        /// <summary>
+        /// Drops the cached localization tables. Called when the provider is rebuilt for a new build.
+        /// </summary>
+        public static void ClearCaches() => _localizationCache.Clear();
+
         private class CacheEntry
         {
             public byte[] Content { get; set; } = [];

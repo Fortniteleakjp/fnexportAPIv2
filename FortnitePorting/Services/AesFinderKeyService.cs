@@ -35,6 +35,7 @@ public class AesFinderKeyService : BackgroundService
 
     private string? _lastKeySubmitted;
     private bool _warnedNoTool;
+    private int _seenReloadGeneration;
 
     public AesFinderKeyService(IServiceProvider serviceProvider, ILogger<AesFinderKeyService> logger)
     {
@@ -76,6 +77,22 @@ public class AesFinderKeyService : BackgroundService
 
     private async Task TickAsync(CancellationToken ct)
     {
+        // Skip while the provider is being rebuilt for a new build (its archives are in flux).
+        if (ProviderReloadGate.Instance.IsReloading)
+        {
+            return;
+        }
+
+        // After a rebuild every key has to be submitted again, so forget which key was submitted last -
+        // otherwise a key that happens to be unchanged would never be re-submitted and its paks would
+        // stay unmounted.
+        var generation = ProviderReloadGate.Instance.Generation;
+        if (generation != _seenReloadGeneration)
+        {
+            _seenReloadGeneration = generation;
+            _lastKeySubmitted = null;
+        }
+
         using var scope = _serviceProvider.CreateScope();
         if (scope.ServiceProvider.GetRequiredService<IFileProvider>() is not AbstractVfsFileProvider provider)
         {

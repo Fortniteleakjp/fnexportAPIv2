@@ -134,6 +134,21 @@ namespace FortnitePorting.Controllers
             return bytes;
         }
 
+        /// <summary>
+        /// Drops every cached byte blob and serialized export. Called when the provider is rebuilt for a
+        /// new build: the cached content belongs to the previous build's containers.
+        /// </summary>
+        public static void ClearCaches()
+        {
+            lock (BytesCache)
+            {
+                BytesCache.Clear();
+                AssetJsonCache.Clear();
+                Interlocked.Exchange(ref _bytesCacheUsed, 0);
+                Volatile.Write(ref _bytesCacheFileCount, -1);
+            }
+        }
+
         private void EnsureBytesCacheVersion()
         {
             if (!ContentCacheEnabled) return;

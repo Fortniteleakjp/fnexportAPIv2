@@ -94,9 +94,9 @@ public static class FileProviderFactory
             Console.WriteLine("Skipped loading the mapping file (SKIP_MAPPING=true)\n");
         }
 
-        // Record that mappings were handled for the current build (prevents a spurious reload on the
-        // first poll; the poll only re-fetches when the build actually changes).
-        manifestService.MarkMappingsApplied();
+        // Record that the VFS files and mappings are applied for the current build (prevents a spurious
+        // rebuild on the first poll; the poll only rebuilds when the build actually changes).
+        manifestService.MarkCurrentBuildApplied();
 
         // 10. Print statistics
         PrintStatistics(provider);

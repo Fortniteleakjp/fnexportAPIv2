@@ -38,6 +38,8 @@ namespace FortnitePorting
         public bool IsReady { get; private set; }
 
         private string _currentBuildVersion = string.Empty;
+        private string _appliedBuildVersion = string.Empty;    // build whose VFS files are currently mounted
+        private string _appliedManifestId = string.Empty;      // manifest whose VFS files are currently mounted
         private string _mappedBuildVersion = string.Empty;   // build whose .usmap is currently applied
         private int _mappingAttempts;                          // retries for the current build's mapping
         private const int MaxMappingAttemptsPerBuild = 120;    // ~1h at 30s, then stop retrying
@@ -77,8 +79,54 @@ namespace FortnitePorting
             Console.WriteLine($"Started manifest polling (interval: {PollingIntervalSeconds} seconds)");
         }
 
-        /// <summary>Records that the .usmap is applied for the current build (called after the startup load).</summary>
-        public void MarkMappingsApplied() => _mappedBuildVersion = _currentBuildVersion;
+        /// <summary>
+        /// Records that the VFS files and the .usmap of the current build are applied (called once the
+        /// startup load has finished), so the first poll does not trigger a redundant rebuild.
+        /// </summary>
+        public void MarkCurrentBuildApplied()
+        {
+            _appliedBuildVersion = _currentBuildVersion;
+            _appliedManifestId = ManifestId;
+            _mappedBuildVersion = _currentBuildVersion;
+        }
+
+        /// <summary>
+        /// True when the mounted content no longer matches the manifest that is loaded. The manifest id
+        /// is part of the check so a re-published manifest (same build version, different content) is
+        /// applied as well.
+        /// </summary>
+        private bool NeedsProviderReload =>
+            _appliedBuildVersion != _currentBuildVersion || _appliedManifestId != ManifestId;
+
+        /// <summary>The build version whose content is currently mounted (empty before the first load).</summary>
+        public string AppliedBuildVersion => _appliedBuildVersion;
+
+        /// <summary>The manifest whose content is currently mounted (empty before the first load).</summary>
+        public string AppliedManifestId => _appliedManifestId;
+
+        /// <summary>True when the mounted content matches the manifest that is currently loaded.</summary>
+        public bool IsUpToDate => !NeedsProviderReload;
+
+        /// <summary>True while the provider is being rebuilt for a new build.</summary>
+        public bool IsReloading => ProviderReloadGate.Instance.IsReloading;
+
+        /// <summary>
+        /// Rebuilds the provider from the newest manifest on demand (used by the manual reload endpoint).
+        /// Re-fetches the build info first so a build that appeared since the last poll is picked up.
+        /// </summary>
+        public async Task<bool> ForceReloadAsync()
+        {
+            var buildInfo = await FetchBuildInfoAsync();
+            if (buildInfo != null &&
+                (buildInfo.BuildVersion != _currentBuildVersion || GetManifestId(buildInfo) != ManifestId))
+            {
+                await DownloadAndLoadManifestAsync(buildInfo);
+            }
+
+            _appliedBuildVersion = string.Empty;  // force the rebuild even when the build is unchanged
+            await ReloadProviderAsync();
+            return !NeedsProviderReload;
+        }
 
         private async void CheckForUpdates(object? state)
         {
@@ -87,18 +135,24 @@ namespace FortnitePorting
                 Console.WriteLine("Checking for build version updates...");
                 var buildInfo = await FetchBuildInfoAsync();
 
-                if (buildInfo != null && buildInfo.BuildVersion != _currentBuildVersion)
+                // A new manifest id with the same build version also means new content, so both are checked.
+                if (buildInfo != null &&
+                    (buildInfo.BuildVersion != _currentBuildVersion || GetManifestId(buildInfo) != ManifestId))
                 {
-                    Console.WriteLine($"Detected a new build version: {_currentBuildVersion} -> {buildInfo.BuildVersion}");
+                    Console.WriteLine($"Detected a new build: {_currentBuildVersion} -> {buildInfo.BuildVersion} (manifest {GetManifestId(buildInfo)})");
                     await DownloadAndLoadManifestAsync(buildInfo);   // reuses the build info just fetched
-
-                    // Auto-apply the new build: register & mount any newly-added VFS archives (no restart).
-                    MountNewArchives();
-                    _mappingAttempts = 0; // fresh mapping-fetch attempts for the new build
                 }
                 else
                 {
                     Console.WriteLine($"Build version is unchanged: {_currentBuildVersion}");
+                }
+
+                // Apply the build the manifest now describes. An update rewrites the existing containers,
+                // so the whole VFS is rebuilt from the new manifest rather than only adding archives that
+                // appeared - otherwise the mounted readers keep streaming the previous build's chunks.
+                if (NeedsProviderReload)
+                {
+                    await ReloadProviderAsync();
                 }
 
                 // Refresh the .usmap so the new build's (possibly changed) types deserialize correctly.
@@ -114,6 +168,38 @@ namespace FortnitePorting
                 // Re-arm the one-shot timer so the next poll runs only after this one completes (no overlap).
                 try { _pollingTimer.Change(TimeSpan.FromSeconds(PollingIntervalSeconds), Timeout.InfiniteTimeSpan); }
                 catch (ObjectDisposedException) { }
+            }
+        }
+
+        /// <summary>
+        /// Rebuilds the provider so it serves the build described by the current manifest. On failure the
+        /// applied build is left untouched, so the next poll retries instead of keeping the previous
+        /// build's content online indefinitely.
+        /// </summary>
+        private async Task ReloadProviderAsync()
+        {
+            if (_cue4ParseProvider is not DefaultFileProvider provider)
+            {
+                Console.WriteLine("Error: the provider is not a DefaultFileProvider; cannot rebuild it for the new build.");
+                return;
+            }
+
+            var target = _currentBuildVersion;
+            try
+            {
+                // The new build ships its own .usmap; force a fresh fetch and apply it inside the reload
+                // (while requests are still blocked) so nothing is deserialized with the old mappings.
+                _mappedBuildVersion = string.Empty;
+                _mappingAttempts = 0;
+
+                await ProviderReloader.ReloadAsync(provider, Manifest, GameBuild, RefreshMappingsIfNeeded);
+                _appliedBuildVersion = target;
+                _appliedManifestId = ManifestId;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"✗ Failed to rebuild the provider for {target}: {ex.Message}");
+                Console.WriteLine("  The rebuild will be retried on the next poll.");
             }
         }
 
@@ -324,8 +410,18 @@ namespace FortnitePorting
                 GameVersion = data[1];
             }
 
-            var uri = buildInfo.Manifests[0].Uri;
-            ManifestId = uri.Split('/').Last().Split('?')[0];
+            ManifestId = GetManifestId(buildInfo);
+        }
+
+        /// <summary>Returns the manifest file name (its id) that the build info points at.</summary>
+        private static string GetManifestId(BuildInfo buildInfo)
+        {
+            if (buildInfo.Manifests.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            return buildInfo.Manifests[0].Uri.Split('/').Last().Split('?')[0];
         }
 
         public void LoadManifestArchives()
@@ -355,62 +451,7 @@ namespace FortnitePorting
             return Manifest.FindFile(fileName)!.GetStream();
         }
 
-        /// <summary>
-        /// Registers and mounts any VFS archives in the (updated) manifest that the provider does not
-        /// yet know about, so a new build's content comes online without a restart. Newly-encrypted
-        /// paks (with brand-new key GUIDs) mount once their key arrives via the AES monitor.
-        /// </summary>
-        public void MountNewArchives()
-        {
-            if (_cue4ParseProvider is not AbstractVfsFileProvider vfsProvider || Manifest is null)
-            {
-                return;
-            }
-
-            var known = new HashSet<string>(
-                vfsProvider.MountedVfs.Select(r => r.Name).Concat(vfsProvider.UnloadedVfs.Select(r => r.Name)),
-                StringComparer.OrdinalIgnoreCase);
-
-            var versions = _cue4ParseProvider.Versions;
-            int registered = 0;
-            foreach (var file in Manifest.Files.Where(x => VfsRegex().IsMatch(x.FileName)))
-            {
-                var name = Path.GetFileName(file.FileName);
-                if (known.Contains(name))
-                {
-                    continue;
-                }
-
-                try
-                {
-                    vfsProvider.RegisterVfs(file.FileName, [file.GetStream()],
-                        it => new FRandomAccessStreamArchive(it, GetStream(it), versions));
-                    known.Add(name);
-                    registered++;
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"Failed to register new VFS '{name}': {ex.Message}");
-                }
-            }
-
-            if (registered == 0)
-            {
-                Console.WriteLine("No new VFS archives in the updated build.");
-                return;
-            }
-
-            Console.WriteLine($"Registered {registered} new VFS archive(s) from the updated build. Mounting...");
-            var mounted = vfsProvider.Mount();                   // non-encrypted / globally-available archives
-            mounted += vfsProvider.SubmitKeys(vfsProvider.Keys); // re-apply known keys -> mount new paks with known GUIDs
-            Console.WriteLine($"Mounted {mounted} new VFS file(s). Total files: {_cue4ParseProvider.Files.Count}. " +
-                              "(Newly-encrypted paks mount as their keys arrive via the AES monitor.)");
-        }
-
         [GeneratedRegex(@"^FortniteGame[/\\]Content[/\\]Paks[/\\]", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.CultureInvariant)]
         private static partial Regex MyRegex();
-
-        [GeneratedRegex(@"FortniteGame[/\\](Content|Plugins)[/\\].*\.(utoc|pak)$", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant)]
-        private static partial Regex VfsRegex();
     }
 }

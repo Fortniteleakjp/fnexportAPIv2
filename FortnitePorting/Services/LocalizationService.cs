@@ -19,6 +19,12 @@ public static class LocalizationService
         new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
+    /// Drops the cached localization tables. Called when the provider is rebuilt for a new build, since
+    /// the .locres files themselves are replaced by the update.
+    /// </summary>
+    public static void ClearCache() => Cache.Clear();
+
+    /// <summary>
     /// Loads (and caches) the merged localization table for a language. When <paramref name="chunkNo"/>
     /// is supplied, only matching chunk locres files are used (with a language-only fallback).
     /// </summary>

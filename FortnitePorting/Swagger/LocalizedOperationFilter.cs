@@ -42,6 +42,8 @@ public sealed class LocalizedOperationFilter : IOperationFilter
         ["AesController.Extract"] = L("AESキー抽出を実行", "スケジュール済みバイナリからAESキー候補を抽出します。", "Extract AES keys", "Extracts AES key candidates from the configured manifest binary.", "AES抽出結果", "Extracted keys and verification information."),
         ["AesController.SelfTest"] = L("AES Finderを自己診断", "外部AES Finderの設定と実行可否を確認します。", "Run the AES Finder self-test", "Checks whether the external AES Finder can be located and executed.", "自己診断結果", "The self-test result."),
         ["AesController.ScanLocal"] = L("ローカルバイナリをスキャン", "指定したローカルファイルまたはディレクトリからAESキー候補を抽出します。", "Scan local binaries", "Scans a local file or directory for AES key candidates.", "ローカルスキャン結果", "Extracted key candidates."),
+        ["BuildController.GetBuild"] = L("現在のビルド状態を取得", "配信中のビルド、マニフェストのビルド、再読み込みの進行状況を返します。", "Get the current build state", "Reports the mounted build, the build the manifest points at, and the reload progress.", "ビルド状態", "The current build and reload state."),
+        ["BuildController.Reload"] = L("最新ビルドへ再読み込み", "ポーリングを待たずに最新マニフェストでプロバイダーを再構築します。再構築中は他のエンドポイントが503を返します。", "Reload the newest build", "Rebuilds the provider from the newest manifest without waiting for the poll. Other endpoints return 503 while it runs.", "再読み込み結果", "The reload result."),
         ["AesController.Binaries"] = L("AES対象バイナリを一覧", "現在のマニフェストに含まれるAESスキャン対象バイナリを一覧します。", "List AES binaries", "Lists binaries available for AES extraction from the current manifest.", "バイナリ一覧", "The available binaries.")
     };
 
