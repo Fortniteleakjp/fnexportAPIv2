@@ -52,6 +52,18 @@ namespace CUE4Parse.UE4.VirtualFileSystem
 
         protected void ValidateMountPoint(ref string mountPoint)
         {
+            // UE6 stores the mount point as a plain path relative to the staging root
+            // ("FortniteGame/", "FortniteGame/Plugins/GameFeatures/") instead of the classic
+            // "../../../FortniteGame/" form. Without this the check below rejects it, the container
+            // silently mounts to root, and all of its files show up under whatever the container
+            // happens to store them as instead of under the project.
+            if (Game >= EGame.GAME_UE5_9 && IsRootRelativeMountPoint(mountPoint))
+            {
+                mountPoint = mountPoint[^1] == '/' ? mountPoint : mountPoint + '/';
+                VerifyReadOrder();
+                return;
+            }
+
             var badMountPoint = !mountPoint.StartsWith("../../..");
             mountPoint = mountPoint.SubstringAfter("../../..");
             if (mountPoint == "" || mountPoint[0] != '/' || ( (mountPoint.Length > 1) && (mountPoint[1] == '.') ))
@@ -70,6 +82,16 @@ namespace CUE4Parse.UE4.VirtualFileSystem
             mountPoint = mountPoint[1..];
             VerifyReadOrder();
         }
+
+        /// <summary>
+        /// A mount point that is already a clean path relative to the staging root: not empty,
+        /// not absolute and without any directory traversal.
+        /// </summary>
+        private static bool IsRootRelativeMountPoint(string mountPoint)
+            => mountPoint.Length > 0 &&
+               mountPoint[0] != '/' &&
+               !mountPoint.Contains("..") &&
+               !mountPoint.Contains(':');
 
         private void VerifyReadOrder()
         {
