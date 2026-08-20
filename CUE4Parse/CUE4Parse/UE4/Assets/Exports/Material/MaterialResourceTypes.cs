@@ -1250,8 +1250,18 @@ public class FMaterialShaderMap : TShaderMap<FMaterialShaderMapContent, FShaderM
 
     public new void Deserialize(FMaterialResourceProxyReader Ar)
     {
-        ShaderMapId = new FMaterialShaderMapId(Ar);
-        base.Deserialize(Ar);
+        // UE6 swapped the two around: the cooked shader map id now hashes the content, so the content
+        // has to be written first. See FMaterialShaderMap::Serialize in MaterialShader.cpp.
+        if (Ar.Game >= EGame.GAME_UE5_9)
+        {
+            base.Deserialize(Ar);
+            ShaderMapId = new FMaterialShaderMapId(Ar);
+        }
+        else
+        {
+            ShaderMapId = new FMaterialShaderMapId(Ar);
+            base.Deserialize(Ar);
+        }
     }
 }
 

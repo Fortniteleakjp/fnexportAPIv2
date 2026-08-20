@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Buffers.Binary;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.CompilerServices;
@@ -290,6 +291,13 @@ namespace CUE4Parse.UE4.Pak
 
             var files = new Dictionary<string, GameFile>(fileCount, pathComparer);
 
+            if (Info.Version >= PakFile_Version_SortedDirectoryIndex && Ar.Game >= EGame.GAME_UE5_9)
+            {
+                ReadFlatDirectoryIndex(directoryIndex, files, encodedPakEntries, NonEncodedEntries);
+                Files = files;
+                return;
+            }
+
             const int poolLength = 256;
             var mountPointSpan = MountPoint.AsSpan();
             using var charsPool = SpanOwner<char>.Allocate(poolLength * 2);
@@ -340,6 +348,101 @@ namespace CUE4Parse.UE4.Pak
             }
 
             Files = files;
+        }
+
+        /// <summary>
+        /// From PakFile_Version_SortedDirectoryIndex the FullDirectoryIndex is a flat FPakFlatDirectoryIndex:
+        /// a header, a sorted path hash table, front-coded directory names and one parallel array of file
+        /// locations, instead of the nested directory -> file map. Mirrors FPakFlatDirectoryIndex::Construct.
+        /// </summary>
+        private void ReadFlatDirectoryIndex(
+            GenericBufferReader directoryIndex, Dictionary<string, GameFile> files,
+            GenericBufferReader encodedPakEntries, FPakEntry[] nonEncodedEntries
+        )
+        {
+            const int flatMagic = 0x50464451; // 'PFDQ'
+            if (directoryIndex.Read<int>() != flatMagic)
+                throw new ParserException("Corrupt pak FullDirectoryIndex (flat) detected");
+
+            var numDirs = directoryIndex.Read<int>();
+            var numFiles = directoryIndex.Read<int>();
+            var restartInterval = directoryIndex.Read<int>();
+            var dirBlobBytes = directoryIndex.Read<int>();
+            var fileBlobBytes = directoryIndex.Read<int>();
+            var numPathHashes = directoryIndex.Read<int>();
+            directoryIndex.Position += sizeof(int); // pad that 8-aligns the following uint64 hash table
+
+            if (numDirs < 0 || numFiles < 0 || restartInterval <= 0 || dirBlobBytes < 0 || fileBlobBytes < 0 || numPathHashes < 0)
+                throw new ParserException("Corrupt pak FullDirectoryIndex (flat) detected");
+
+            var numDirAnchors = (numDirs + restartInterval - 1) / restartInterval;
+
+            directoryIndex.Position += numPathHashes * sizeof(ulong); // SortedPathHashes
+            directoryIndex.Position += numPathHashes * sizeof(int); // HashLocations
+            directoryIndex.Position += (numDirAnchors + 1) * sizeof(int); // DirAnchorOffset
+
+            var dirFileStart = directoryIndex.ReadArray<int>(numDirs + 1);
+            var fileNameOffsets = directoryIndex.ReadArray<int>(numFiles + 1);
+            var fileLocations = directoryIndex.ReadArray<int>(numFiles);
+            var dirBlob = directoryIndex.ReadArray<byte>(dirBlobBytes);
+            var fileBlob = directoryIndex.ReadArray<byte>(fileBlobBytes);
+            var trimMountSep = MountPoint.Length > 0 && MountPoint[^1] == '/';
+
+            var dirPos = 0;
+            var nameBytes = new byte[256];
+            for (var dirIndex = 0; dirIndex < numDirs; dirIndex++)
+            {
+                var sharedLen = BinaryPrimitives.ReadInt32LittleEndian(dirBlob.AsSpan(dirPos));
+                dirPos += sizeof(int);
+                var suffixLen = BinaryPrimitives.ReadInt32LittleEndian(dirBlob.AsSpan(dirPos));
+                dirPos += sizeof(int);
+                var nameLen = sharedLen + suffixLen;
+                if (nameBytes.Length < nameLen)
+                {
+                    var grown = new byte[Math.Max(nameLen, nameBytes.Length * 2)];
+                    Array.Copy(nameBytes, grown, sharedLen);
+                    nameBytes = grown;
+                }
+
+                dirBlob.AsSpan(dirPos, suffixLen).CopyTo(nameBytes.AsSpan(sharedLen));
+                dirPos += suffixLen;
+
+                var dirSpan = nameBytes.AsSpan(0, nameLen);
+                // Mirror ReadIndexUpdated
+                var trimDir = trimMountSep && nameLen > 0 && nameBytes[0] == (byte) '/';
+                var dir = Encoding.UTF8.GetString(trimDir ? dirSpan[1..] : dirSpan);
+
+                for (var global = dirFileStart[dirIndex]; global < dirFileStart[dirIndex + 1]; global++)
+                {
+                    var location = fileLocations[global];
+                    if (location == int.MinValue) continue;
+
+                    var nameStart = fileNameOffsets[global];
+                    var fileName = Encoding.UTF8.GetString(fileBlob.AsSpan(nameStart, fileNameOffsets[global + 1] - nameStart));
+                    var path = string.Concat(MountPoint, dir, fileName);
+
+                    FPakEntry entry;
+                    if (location >= 0)
+                    {
+                        entry = new FPakEntry(this, path, encodedPakEntries, location);
+                    }
+                    else
+                    {
+                        var entryIndex = -location - 1;
+                        if (entryIndex < 0 || entryIndex >= nonEncodedEntries.Length)
+                        {
+                            Log.Warning("Invalid nonencoded pak entry with index {Index}, path {Path}", entryIndex, path);
+                            continue;
+                        }
+
+                        entry = nonEncodedEntries[entryIndex];
+                        entry.Path = path;
+                    }
+
+                    if (entry.IsEncrypted) EncryptedFileCount++;
+                    files[path] = entry;
+                }
+            }
         }
 
         private void ReadFrozenIndex(StringComparer pathComparer)

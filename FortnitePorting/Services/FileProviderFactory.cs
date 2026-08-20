@@ -54,7 +54,7 @@ public static class FileProviderFactory
         var provider = new DefaultFileProvider(
             tempDir, 
             SearchOption.TopDirectoryOnly, 
-            versions: new VersionContainer(EGame.GAME_UE5_LATEST), 
+            versions: new VersionContainer(EGame.GAME_UE6_0), 
             pathComparer: StringComparer.OrdinalIgnoreCase);
 
         // 6. Initialize the ManifestService

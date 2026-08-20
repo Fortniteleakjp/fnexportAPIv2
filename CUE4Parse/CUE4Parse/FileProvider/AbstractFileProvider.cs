@@ -386,8 +386,8 @@ namespace CUE4Parse.FileProvider
                     if (!filePath.EndsWith(".uplugin")) continue;
                     if (!TryCreateReader(gameFile.Path, out var stream)) continue;
                     using var reader = new StreamReader(stream);
-                    var pluginFile = JsonConvert.DeserializeObject<UPluginDescriptor>(reader.ReadToEnd());
-                    if (!pluginFile!.CanContainContent) continue;
+                    var pluginFile = TryDeserializePluginJson<UPluginDescriptor>(reader.ReadToEnd(), filePath);
+                    if (pluginFile is not { CanContainContent: true }) continue;
 
                     var virtPath = gameFile.NameWithoutExtension;
                     var path = gameFile.Directory;
@@ -398,9 +398,10 @@ namespace CUE4Parse.FileProvider
                     if (!regex.IsMatch(filePath)) continue;
                     if (!TryCreateReader(gameFile.Path, out var stream)) continue;
                     using var reader = new StreamReader(stream);
-                    var manifest = JsonConvert.DeserializeObject<UPluginManifest>(reader.ReadToEnd());
+                    var manifest = TryDeserializePluginJson<UPluginManifest>(reader.ReadToEnd(), filePath);
+                    if (manifest?.Contents == null) continue;
 
-                    foreach (var content in manifest!.Contents)
+                    foreach (var content in manifest.Contents)
                     {
                         cancellationToken.ThrowIfCancellationRequested();
 
@@ -414,6 +415,23 @@ namespace CUE4Parse.FileProvider
             }
 
             return VirtualPaths.Count;
+        }
+
+        /// <summary>
+        /// A single unreadable plugin descriptor must not cost us every other virtual path,
+        /// let alone abort the whole load.
+        /// </summary>
+        private static T? TryDeserializePluginJson<T>(string json, string filePath) where T : class
+        {
+            try
+            {
+                return JsonConvert.DeserializeObject<T>(json);
+            }
+            catch (Exception e)
+            {
+                Log.Warning(e, "Could not deserialize plugin descriptor '{FilePath}'", filePath);
+                return null;
+            }
         }
 
         protected bool LoadIniConfigs()

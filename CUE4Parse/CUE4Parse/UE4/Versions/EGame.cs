@@ -191,14 +191,22 @@ public enum EGame : uint
     GAME_UE5_6 = GameUtils.GameUe5Base + (6 << 16),
     GAME_UE5_7 = GameUtils.GameUe5Base + (7 << 16),
     GAME_UE5_8 = GameUtils.GameUe5Base + (8 << 16),
+    GAME_UE5_9 = GameUtils.GameUe5Base + (9 << 16),
 
-    GAME_UE5_LATEST = GAME_UE5_8
+    GAME_UE5_LATEST = GAME_UE5_9,
+
+    // Initial UE6 integration. Fortnite ships on it since 42.00, which is what the
+    // pak trailer and inline shader map handling below key off.
+    GAME_UE6_0 = GameUtils.GameUe6Base + (0 << 16),
+
+    GAME_UE6_LATEST = GAME_UE6_0
 }
 
 public static class GameUtils
 {
     public const int GameUe4Base = 0x4000000;
     public const int GameUe5Base = 0x5000000;
+    public const int GameUe6Base = 0x6000000;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int GAME_UE4(int x)
