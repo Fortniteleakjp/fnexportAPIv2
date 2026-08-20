@@ -529,7 +529,41 @@ namespace CUE4Parse.FileProvider
                 ret = string.Concat(ProjectName, $"/Plugins/GameFeatures/{root}/Content/", tree);
             }
 
-            return ret;
+            return ResolveMountPoint(ret, root, tree);
+        }
+
+        /// <summary>
+        /// UE6 mounts a lot of content relative to the project root instead of under the project
+        /// directory, and both layouts live side by side holding *different* files:
+        /// "FortniteGame/Plugins/GameFeatures/X/Content/y" and "Plugins/GameFeatures/X/Content/y"
+        /// are disjoint, and plugins are additionally mounted under their bare name.
+        /// FixPath only knows the classic layout, so fall through the alternatives whenever the
+        /// path it produced is not actually mounted. Games that were always fine never get here.
+        /// </summary>
+        private string ResolveMountPoint(string path, string root, string tree)
+        {
+            if (Files.Count == 0 || Exists(path)) return path;
+
+            // same path, but mounted relative to the project root
+            if (path.Length > ProjectName.Length && path[ProjectName.Length] == '/' &&
+                path.AsSpan(0, ProjectName.Length).Equals(ProjectName, StringComparison.OrdinalIgnoreCase))
+            {
+                var rootRelative = path[(ProjectName.Length + 1)..];
+                if (Exists(rootRelative)) return rootRelative;
+            }
+
+            // a plugin mounted under its own name, without any Plugins/GameFeatures prefix
+            if (!string.IsNullOrEmpty(tree) && !PathComparer.Equals(root, ProjectName) &&
+                !PathComparer.Equals(root, "Game") && !PathComparer.Equals(root, "Engine"))
+            {
+                var byPluginName = string.Concat(root, "/Content/", tree);
+                if (Exists(byPluginName)) return byPluginName;
+            }
+
+            return path;
+
+            bool Exists(string p) => Files.ContainsKey(p) ||
+                                     Files.ContainsKey(p.SubstringBeforeWithLast('.') + GameFile.UePackageExtensions[1]);
         }
 
         #region SaveAsset Methods
