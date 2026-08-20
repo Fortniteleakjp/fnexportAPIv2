@@ -128,7 +128,7 @@ docker run -p 3849:3849 \
 
 > **Mapping (.usmap) behavior**: by default the `.usmap` mapping is loaded. If `USMAP_PATH` is set and the file exists it is used; **otherwise (unset, or the file is missing) the latest mapping is auto-downloaded** (falling back to an existing local file). Only if none can be obtained is it skipped instead of failing startup (some assets cannot deserialize without mappings). Set `SKIP_MAPPING=true` to disable it explicitly.
 
-> **Auto-update (no restart)**:<br>・**New decryption keys**: every ~30s AES keys are fetched (`api.fortniteapi.com` → `uedb.dev` on failure) and any still-required keys are submitted **by GUID**, auto-mounting the matching paks (no dependency on pak names).<br>・**New builds**: build info is polled every ~30s; when it changes the manifest is re-fetched and any newly-added VFS archives (utoc/pak) are **registered and mounted automatically**. Newly-encrypted paks mount once their key arrives (via the AES monitor above).<br>・**Mappings (.usmap)**: when a new build is detected the **latest .usmap for that build is re-downloaded and hot-swapped** (a pinned `USMAP_PATH` file is kept as-is).<br>All of this happens without restarting the process (until the external APIs publish the new build's keys/mapping, only that build's new content is unavailable — it appears automatically once they do).
+> **Auto-update (no restart)**:<br>・**New decryption keys**: every ~30s the monitor reads the local `/api/v1/archives/keys` endpoint and submits any still-required keys **by GUID**, auto-mounting the matching paks (no dependency on pak names). That endpoint aggregates the current archives and external keychain data.<br>・**New builds**: build info is polled every ~30s; when the build or the manifest id changes the manifest is re-fetched and **every VFS archive of the previous build is dropped and re-registered/mounted from the new manifest** (exactly what a restart used to do). An update rewrites the existing `pakchunk*.utoc/.ucas` under the same names, so mounting only the archives that are *new* would keep serving the previous build's content. The other endpoints answer `503` (`Retry-After: 30`) while the rebuild runs, and every cache derived from the old build (responses, search, localization) is cleared afterwards. Newly-encrypted paks mount once their key arrives (via the AES monitor above).<br>・**Mappings (.usmap)**: when a new build is detected the **latest .usmap for that build is re-downloaded and hot-swapped** (a pinned `USMAP_PATH` file is kept as-is).<br>All of this happens without restarting the process (until the external APIs publish the new build's keys/mapping, only that build's new content is unavailable — it appears automatically once they do).
 
 ## API endpoints
 
@@ -245,6 +245,13 @@ Example response (`/api/v1/search`):
 > **Automatic submission (fallback):** the background `AesFinderKeyService` extracts and submits the main key **only while it is missing** (e.g. a fresh build whose key the external AES API hasn't published yet), mounting the paks automatically. In normal operation, when the key is already applied, it **stays idle and downloads nothing** (disable with `AESFINDER_AUTO=false`). This lets the API follow a new build without waiting for the external AES API. **Dynamic (per-GUID) keys** are out of scope for AesFinder and remain handled by the external AES monitor (`api.fortniteapi.com` / `uedb.dev`).
 >
 > The built-in schedule scanners (`GET /api/v1/aes/extract`, `/api/v1/aes/scan/local`, `/api/v1/aes/finder/selftest`) are also available as helpers.
+
+### Build status — `/api/v1/build`
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/v1/build` | Returns the build currently served (`appliedBuild` / `appliedManifestId`), the build the manifest points at, the mounted VFS count, how many keys are still missing, and whether a rebuild is running (`reloading`). It keeps answering during a rebuild. |
+| `POST /api/v1/build/reload` | Rebuilds the provider from the newest manifest immediately instead of waiting for the ~30s poll. Other endpoints return `503` while it runs. |
 
 ### Debug — `/api/v1/debug`
 

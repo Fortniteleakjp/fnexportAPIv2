@@ -18,6 +18,7 @@ public sealed class LocalizedDocumentFilter : IDocumentFilter
         ["Aes"] = ("ローカル実行環境でのAESキー抽出・適用。", "AES key extraction and application in the local process."),
         ["Pak"] = ("現在マウントされているPAK/UTOCの一覧と内容。", "Mounted PAK/UTOC inventory and contents."),
         ["Config"] = ("読み込み済みINIファイルの一覧と設定値検索。", "Loaded INI file listing and configuration lookup."),
+        ["Build"] = ("配信中のFortniteビルドの確認と最新ビルドへの再読み込み。", "Current Fortnite build status and reload onto the newest build."),
         ["Assets"] = ("アセット間のハード参照・ソフト参照の解析。", "Hard and soft reference inspection between assets.")
     };
 
