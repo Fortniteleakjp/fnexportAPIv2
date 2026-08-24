@@ -1,9 +1,10 @@
 # ステージ1: ビルド環境
-FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
 # プロジェクトファイルをコピーして依存関係を復元
 COPY ["FortnitePorting/FortnitePorting.csproj", "FortnitePorting/"]
+COPY ["CUE4Parse/Directory.Build.props", "CUE4Parse/Directory.Packages.props", "CUE4Parse/"]
 COPY ["CUE4Parse/CUE4Parse/CUE4Parse.csproj", "CUE4Parse/CUE4Parse/"]
 COPY ["CUE4Parse/CUE4Parse-Conversion/CUE4Parse-Conversion.csproj", "CUE4Parse/CUE4Parse-Conversion/"]
 COPY ["EpicManifestParser/src/EpicManifestParser.ZlibngDotNetDecompressor/EpicManifestParser.ZlibngDotNetDecompressor.csproj", "EpicManifestParser/src/EpicManifestParser.ZlibngDotNetDecompressor/"]
@@ -16,7 +17,7 @@ WORKDIR /src/FortnitePorting
 RUN dotnet publish -c Release -o /app/publish --self-contained false -r linux-x64
 
 # ステージ2: 実行環境
-FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS final
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
 WORKDIR /app
 
 # 必要なネイティブライブラリの依存関係をインストール

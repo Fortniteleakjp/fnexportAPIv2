@@ -27,7 +27,7 @@ public struct FZenPackageVersioningInfo
     public FZenPackageVersioningInfo(FArchive Ar)
     {
         ZenVersion = Ar.Read<EZenPackageVersion>();
-        PackageVersion = Ar.Read<FPackageFileVersion>();
+        PackageVersion = new FPackageFileVersion(Ar.Read<int>(), Ar.Read<int>());
         LicenseeVersion = Ar.Read<int>();
         CustomVersions = new FCustomVersionContainer(Ar);
     }
@@ -68,7 +68,7 @@ public readonly struct FZenPackageSummary
         ExportMapOffset = Ar.Read<int>();
         ExportBundleEntriesOffset = Ar.Read<int>();
 
-        if (Ar.Game >= EGame.GAME_UE5_3)
+        if (Ar.Game >= GAME_UE5_3)
         {
             DependencyBundleHeadersOffset = Ar.Read<int>();
             DependencyBundleEntriesOffset = Ar.Read<int>();

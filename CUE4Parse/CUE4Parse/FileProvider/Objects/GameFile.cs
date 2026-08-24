@@ -1,33 +1,34 @@
-﻿using System;
-using System.Collections.Generic;
+using System.Collections.Frozen;
+using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
-using System.Linq;
 using System.Runtime.CompilerServices;
-using System.Threading.Tasks;
 using CUE4Parse.Compression;
+using CUE4Parse.UE4.Assets.Objects;
 using CUE4Parse.UE4.Readers;
 using CUE4Parse.Utils;
-using Serilog;
 
 namespace CUE4Parse.FileProvider.Objects;
 
 public abstract class GameFile
 {
+    
     public static readonly string[] UePackageExtensions = ["uasset", "umap"];
     public static readonly string[] UePackagePayloadExtensions = ["uexp", "ubulk", "uptnl"];
     public static readonly string[] UeKnownExtensions =
     [
         ..UePackageExtensions, ..UePackagePayloadExtensions,
         "bin", "ini", "uplugin", "upluginmanifest", "locres", "locmeta",
+        "wem", "bnk", "pck", "bank", "awb", "acb"
     ];
 
-    // hashset for quick lookup
-    public static readonly HashSet<string> UePackageExtensionsSet = UePackageExtensions.ToHashSet(StringComparer.OrdinalIgnoreCase);
-    public static readonly HashSet<string> UePackagePayloadExtensionsSet = UePackagePayloadExtensions.ToHashSet(StringComparer.OrdinalIgnoreCase);
-    public static readonly HashSet<string> UeKnownExtensionsSet = UeKnownExtensions.ToHashSet(StringComparer.OrdinalIgnoreCase);
+    // Immutable lookup tables optimized once during startup.
+    public static readonly FrozenSet<string> UePackageExtensionsSet = UePackageExtensions.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
+    public static readonly FrozenSet<string> UePackagePayloadExtensionsSet = UePackagePayloadExtensions.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
+    public static readonly FrozenSet<string> UeKnownExtensionsSet = UeKnownExtensions.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
 
-    // so we don't end up with a lot of duplicate "uasset"s in memory
-    private static readonly Dictionary<string, string> InternedExtensions = new(StringComparer.OrdinalIgnoreCase);
+    // Avoid retaining duplicate extension and directory strings for every file.
+    private static readonly ConcurrentDictionary<string, string> _internedExtensions = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly ConcurrentDictionary<string, string> _internedDirectories = new(StringComparer.Ordinal);
 
     private string _path;
     private string? _directory;
@@ -62,91 +63,91 @@ public abstract class GameFile
     }
     public long Size { get; protected init; }
 
-    public string Directory => _directory ??= Path.SubstringBeforeLast('/');
+    public string Directory => _directory ??= Intern(_internedDirectories, Path.SubstringBeforeLast('/'));
     public string PathWithoutExtension => _pathWithoutExtension ??= Path.SubstringBeforeLast('.');
     public string Name => _name ??= Path.SubstringAfterLast('/');
-    public string NameWithoutExtension => _nameWithoutExtension ??= Name.SubstringBeforeLast('.');
-    public string Extension => _extension ??= InternExtension(Name.SubstringAfterLast('.'));
+    public string NameWithoutExtension
+    {
+        get
+        {
+            if (_nameWithoutExtension is not null) return _nameWithoutExtension;
+
+            var nameStart = Path.LastIndexOf('/') + 1;
+            var extensionSeparator = Path.LastIndexOf('.');
+            return _nameWithoutExtension = extensionSeparator < nameStart
+                ? Name
+                : Path.Substring(nameStart, extensionSeparator - nameStart);
+        }
+    }
+    public string Extension => _extension ??= Intern(_internedExtensions, Name.SubstringAfterLast('.'));
 
     public bool IsUePackage => UePackageExtensionsSet.Contains(Extension);
     public bool IsUePackagePayload => UePackagePayloadExtensionsSet.Contains(Extension);
 
-    public abstract byte[] Read();
-    public abstract FArchive CreateReader();
+    public abstract byte[] Read(FByteBulkDataHeader? header = null);
+    public abstract FArchive CreateReader(FByteBulkDataHeader? header = null);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool TryRead([MaybeNullWhen(false)] out byte[] data)
+    public bool TryRead([MaybeNullWhen(false)] out byte[] data, FByteBulkDataHeader? header = null)
     {
         try
         {
-            data = Read();
+            data = Read(header);
         }
         catch (Exception e)
         {
-            Log.Error(e, $"Could not read GameFile {this}");
+            Log.Error(e, "Could not read GameFile {GameFile}", this);
             data = null;
         }
         return data != null;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool TryCreateReader([MaybeNullWhen(false)] out FArchive reader)
+    public bool TryCreateReader([MaybeNullWhen(false)] out FArchive reader, FByteBulkDataHeader? header = null)
     {
         try
         {
-            reader = CreateReader();
+            reader = CreateReader(header);
         }
         catch (Exception e)
         {
-            Log.Error(e, $"Could not create reader for GameFile {this}");
+            Log.Error(e, "Could not create reader for GameFile {GameFile}", this);
             reader = null;
         }
         return reader != null;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public byte[]? SafeRead()
+    public byte[]? SafeRead(FByteBulkDataHeader? header = null)
     {
-        TryRead(out var data);
+        TryRead(out var data, header);
         return data;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public FArchive? SafeCreateReader()
+    public FArchive? SafeCreateReader(FByteBulkDataHeader? header = null)
     {
-        TryCreateReader(out var reader);
+        TryCreateReader(out var reader, header);
         return reader;
     }
 
     // No ConfigureAwait(false) here since the context is needed handling exceptions
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public async Task<byte[]> ReadAsync() => await Task.Run(Read);
+    public async Task<byte[]> ReadAsync() => await Task.Run(() => Read());
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public async Task<FArchive> CreateReaderAsync() => await Task.Run(CreateReader);
+    public async Task<FArchive> CreateReaderAsync() => await Task.Run(() => CreateReader());
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public async Task<byte[]?> SafeReadAsync() => await Task.Run(SafeRead);
+    public async Task<byte[]?> SafeReadAsync() => await Task.Run(() => SafeRead());
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public async Task<FArchive?> SafeCreateReaderAsync() => await Task.Run(SafeCreateReader);
+    public async Task<FArchive?> SafeCreateReaderAsync() => await Task.Run(() => SafeCreateReader());
 
     public override string ToString() => Path;
-    
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static string InternExtension(string extension)
-    {
-        if (InternedExtensions.TryGetValue(extension, out var interned))
-            return interned;
-        
-        lock (InternedExtensions)
-        {
-            if (InternedExtensions.TryGetValue(extension, out interned))
-                return interned;
-            
-            InternedExtensions[extension] = extension;
-            return extension;
-        }
-    }
+    private static string Intern(ConcurrentDictionary<string, string> pool, string value) =>
+        pool.GetOrAdd(value, static candidate => candidate);
 }

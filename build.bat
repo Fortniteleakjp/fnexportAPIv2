@@ -10,7 +10,7 @@ rem   build.bat Debug
 rem   build.bat Release
 rem
 rem Output:
-rem   FortnitePorting\bin\<Configuration>\net9.0\
+rem   FortnitePorting\bin\<Configuration>\net10.0\
 rem ============================================================================
 
 set "ROOT=%~dp0"
@@ -18,7 +18,7 @@ set "PROJECT=%ROOT%FortnitePorting\FortnitePorting.csproj"
 set "NATIVE_BUILD=%ROOT%RADADecoder\shim\build.bat"
 set "LIBS=%ROOT%libs"
 set "CONFIG=%~1"
-set "FRAMEWORK=net9.0"
+set "FRAMEWORK=net10.0"
 
 if "%CONFIG%"=="" set "CONFIG=Release"
 

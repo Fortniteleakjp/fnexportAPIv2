@@ -2,9 +2,11 @@
 
 [日本語](README.md) | **English**
 
-A Fortnite asset-export Web API built on **CUE4Parse**. It downloads the live
+A Fortnite asset-export Web API built on **CUE4Parse**. It keeps itself up to date from
+GitHub releases. It downloads the live
 Fortnite manifest, streams the required paks/chunks from the Epic CDN, and
-exposes the parsed assets (JSON / PNG / audio) over HTTP. All endpoints are
+exposes the parsed assets (JSON / PNG / audio) over HTTP. It also serves an FModel
+backup (`.fbkp`) of the mounted build. All endpoints are
 documented and explorable through **Swagger UI** (Japanese and English).
 
 ## Requirements
@@ -23,10 +25,10 @@ There are three ways to make it available (checked in this order):
 **Option A — place it next to the executable / build output**
 ```bash
 # Windows
-copy oo2core_9_win64.dll FortnitePorting/bin/Debug/net9.0/
+copy oo2core_9_win64.dll FortnitePorting/bin/Debug/net10.0/
 
 # Linux
-cp liboo2corelinux64.so.9 FortnitePorting/bin/Debug/net9.0/
+cp liboo2corelinux64.so.9 FortnitePorting/bin/Debug/net10.0/
 ```
 
 **Option B — place it in the project `libs/` directory**
@@ -80,7 +82,7 @@ every endpoint; the root path `/` redirects there.
 
 ### Build a normal Windows output
 
-The root `build.bat` creates a normal `net9.0` build output and copies the
+The root `build.bat` creates a normal `net10.0` build output and copies the
 native runtime DLLs next to the framework-dependent executable:
 
 ```bash
@@ -90,7 +92,7 @@ build.bat
 Output:
 
 ```
-FortnitePorting/bin/Release/net9.0/FortnitePorting.exe
+FortnitePorting/bin/Release/net10.0/FortnitePorting.exe
 ```
 
 > The Oodle / zlib-ng / RAD Audio native libraries are acquired at runtime and are
@@ -123,8 +125,16 @@ docker run -p 3849:3849 \
 | `LOAD_ALL_VFS` | `false` | Mount every VFS file instead of a curated subset. |
 | `SEARCH_THREADS` | (CPU count) | Content-search scan parallelism. Defaults to the logical CPU count (use every core). |
 | `CONTENT_CACHE_MB` | `unlimited` | Cache decompressed bytes read during content search. Unlimited by default until the mounted PAK state changes; set `0` to disable or a positive value to impose an MB limit. |
+| `SEARCH_CONTENT_CACHE_MINUTES` | `1440` (24h) | Sliding lifetime, in minutes, of a cached content-search response (`/api/v1/search/content`). `0` disables the cache. |
+| `SEARCH_PATH_CACHE_MINUTES` | `1440` (24h) | Sliding lifetime, in minutes, of a cached path-search response (`/api/v1/search`). `0` disables the cache. |
+| `SEARCH_CACHE_MAX_MINUTES` | `10080` (7d) | Absolute ceiling on a cached search response, so a repeatedly hit query cannot pin its memory indefinitely. |
 | `AESFINDER_PATH` | `D:\AesFinder-main\...\AesFinder.exe` | Path to the external AesFinder tool used by `/aes` (a `.exe`, a `.dll`, or a directory containing it). |
 | `AESFINDER_AUTO` | `true` | Background auto-extraction/submission of the MainAES key via AesFinder (**only acts while the main key is missing**; set `false` to disable). |
+| `AUTO_UPDATE` | (unset) | `true` = always update without asking, `false` = never contact GitHub, **unset = ask (y/n) at startup, but only when an update exists**. |
+| `UPDATE_CHECK_ONLY` | `false` | Report a newer release but never install it. |
+| `UPDATE_RESTART` | `true` | Relaunch after the swap. `false` swaps the files and leaves starting it to you. |
+| `UPDATE_REPO` | `Fortniteleakjp/fnexportAPIv2` | The `owner/name` releases are read from (for forks). |
+| `GITHUB_TOKEN` | – | Optional; lifts the anonymous GitHub API rate limit (60 requests/hour). |
 
 > **Mapping (.usmap) behavior**: by default the `.usmap` mapping is loaded. If `USMAP_PATH` is set and the file exists it is used; **otherwise (unset, or the file is missing) the latest mapping is auto-downloaded** (falling back to an existing local file). Only if none can be obtained is it skipped instead of failing startup (some assets cannot deserialize without mappings). Set `SKIP_MAPPING=true` to disable it explicitly.
 
@@ -136,7 +146,7 @@ Base URL: `http://localhost:3849`
 
 > **CORS**: enabled for any origin (any origin/method/header). The audio diagnostic
 > headers (`X-Audio-Format` / `X-Audio-Decoded` / `X-Rada-Native-Decoder`) and
-> `Content-Disposition` are exposed so browser clients can read them.
+> `Content-Disposition`, and the backup headers (`X-Backup-Entries` / `X-Backup-Version`) are exposed so browser clients can read them.
 
 ### Asset export — `/api/v1/export`
 
@@ -229,7 +239,7 @@ Example response (`/api/v1/search`):
 
 > **Note**: The path search scans all files (~2.4M). `regex` is bounded by a per-evaluation timeout (250 ms), an overall time budget, and a pattern-length limit. The content search (`/content`) covers **assets plus config/text files** (`.ini`/`.bin`/`.json`, etc.) and scans in the order: path-contains-query → **neighbour assets (same plugin/folder)** → text/config → other assets, up to `maxScan`. Detection is an allocation-free byte scan run across all cores, so it **scans every file (~1.65M, ~11 GB) by default in about 40 s** — so a plain `?q=RankedTier` finds scattered, path-less matches (12 widgets across many plugins) with no tuning. For a quick check pass a small `maxScan` (e.g. `maxScan=2000`) to scan partially from the top, or narrow with `dir` / `pathContains` / `ext` when you know the target.
 >
-> **Speed**: scanning runs **in parallel across every CPU core** (tunable via `SEARCH_THREADS`), and an **identical query is cached for 15 minutes**, so repeats return instantly (the cache is keyed by the mounted file count, so a new build / new keys invalidate it automatically). Decompressed bytes are also cached without a limit by default, reducing re-reads and re-decompression for different queries.
+> **Speed**: scanning runs **in parallel across every CPU core** (tunable via `SEARCH_THREADS`), and an **identical query is cached for 24 hours by default**, so repeats return instantly (a sliding lifetime from the last hit, capped by the 7-day `SEARCH_CACHE_MAX_MINUTES`). The cache key includes the mounted file count, and a provider rebuild for a new build clears the response cache outright, so **a stale build's result can never be served**. Tune the lifetime with `SEARCH_CONTENT_CACHE_MINUTES` / `SEARCH_PATH_CACHE_MINUTES`, or set `0` to disable. A path search that the wall-clock budget cut short is cached for **5 minutes only**, so a retry can still produce the complete answer. Decompressed bytes are also cached without a limit by default, reducing re-reads and re-decompression for different queries.
 
 ### AES key extraction — `/aes`
 
@@ -252,6 +262,73 @@ Example response (`/api/v1/search`):
 |---|---|
 | `GET /api/v1/build` | Returns the build currently served (`appliedBuild` / `appliedManifestId`), the build the manifest points at, the mounted VFS count, how many keys are still missing, and whether a rebuild is running (`reloading`). It keeps answering during a rebuild. |
 | `POST /api/v1/build/reload` | Rebuilds the provider from the newest manifest immediately instead of waiting for the ~30s poll. Other endpoints return `503` while it runs. |
+
+### FModel backup — `/api/v1/backup`
+
+Returns the mounted build's file list as an **FModel backup (`.fbkp`)**. Loading it in FModel
+("Load → All But New" / "All But Modified") lists only what a later build added or changed
+relative to this one.
+
+| Method & path | Description |
+|---|---|
+| `GET /api/v1/backup/fbkp?name={base}&includePayloads={bool}&compress={bool}` | Downloads the `.fbkp`. The default file name matches FModel's own: `FortniteGame_MM_dd_yyyy.fbkp`. |
+| `GET /api/v1/backup?name={base}&includePayloads={bool}` | Reports the entry count, version, suggested file name, and current build without generating the file. |
+
+```
+curl -OJ http://localhost:3849/api/v1/backup/fbkp
+```
+
+> **Format**: an LZ4 frame wrapping the magic `FBKP` (`0x504B4246`), backup version `2` (`PerfectPath`),
+> the entry count (int32), then per file the size (int64), the encrypted flag (bool), and the path
+> (7-bit length-prefixed string) — byte for byte what
+> [FModel's `BackupManagerViewModel.CreateBackup`](https://github.com/4sval/FModel/blob/63a7cbccd9fbaae9db45240069a49bd6a3a00b73/FModel/ViewModels/BackupManagerViewModel.cs#L23) writes.
+>
+> **Contents**: like FModel, `.uexp` / `.ubulk` / `.uptnl` payloads are excluded (`includePayloads=true` keeps them).
+> `compress=false` writes the plain body; FModel sniffs the LZ4 magic first, so it loads either form.
+> The entry count and version are also returned in the `X-Backup-Entries` / `X-Backup-Version` headers.
+
+### Auto-update — `/api/v1/update`
+
+**At startup the API queries the GitHub releases API**
+(`https://api.github.com/repos/{owner}/{repo}/releases/latest`) **and, when a newer release exists,
+downloads it, swaps it in, and restarts.** The check runs before the Fortnite build is mounted, so an
+update never pays for an initialization it is about to discard.
+
+**You are asked to confirm, but only when there is something to install** (with `AUTO_UPDATE` unset):
+
+```
+Auto-update: current 1.1.0, v1.1.14 is available
+Update to v1.1.14 now? [Y/n] (Y after 30s):
+```
+
+- `y`, Enter, or 30 seconds of silence installs it and restarts.
+- `n` prints how to set `AUTO_UPDATE`, then **continues the normal startup after 5 seconds** without updating.
+- Nothing is asked when the build is already current.
+- Setting `AUTO_UPDATE=true`/`false` stops the prompt for good. It is also skipped when stdin is not a
+  terminal (a service, a container, a pipe), where the previous non-interactive behaviour applies.
+
+| Method & path | Description |
+|---|---|
+| `GET /api/v1/update` | Reports the running version, the newest GitHub release, and whether an update applies (with the reason when it does not). |
+| `POST /api/v1/update?force={bool}` | Installs the newest release now instead of at the next startup. The process shuts down so the swap can complete. |
+
+```
+curl http://localhost:3849/api/v1/update
+```
+
+> **How the swap works**: a running executable cannot overwrite itself, so the release asset
+> (`FortnitePorting-win-x64.zip` / `FortnitePorting-linux-x64.tar.gz`) is extracted into
+> `.update/staging`, and a script (`apply.cmd` / `apply.sh`) that waits for this process to exit is
+> started before shutdown. The swap **copies** rather than mirrors: the Oodle and zlib-ng natives,
+> `libs/`, `mappings/`, `chunk_cache/`, and local configuration are not in the archive and survive.
+>
+> **When it does not update** (the reason is reported by `GET /api/v1/update`):
+> <br>- **Local builds**: a build the release workflow did not stamp (`0.0.0-dev`) has no version to
+> compare, and overwriting a development working copy with a release archive would be destructive.
+> <br>- **Containers**: the image runs `dotnet FortnitePorting.dll` while the release assets are
+> self-contained builds, and anything written to the container layer is lost on the next run. Pull a new image.
+> <br>- **A version that failed to apply**: if the process comes back up still on the old version, it is
+> not retried automatically (that would loop). `POST /api/v1/update?force=true` clears the guard.
 
 ### Debug — `/api/v1/debug`
 

@@ -1,8 +1,6 @@
-﻿using System;
-using System.IO;
-using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text;
+using CUE4Parse_Conversion.Options;
 using CUE4Parse.UE4.Assets.Exports.Texture;
 using CUE4Parse.UE4.Objects.Core.Math;
 using OffiUtils;
@@ -12,7 +10,8 @@ namespace CUE4Parse_Conversion.Textures;
 
 public static class TextureEncoder
 {
-    public static byte[] Encode(this CTexture bitmap, ETextureFormat format, bool saveHdrAsHdr, out string ext)
+    public static byte[] Encode(this CTexture bitmap, ExportOptions options, out string ext) => bitmap.Encode(options.TextureFormat, options.ExportHdrTexturesAsHdr, out ext, options.TextureQuality);
+    public static byte[] Encode(this CTexture bitmap, ETextureFormat format, bool saveHdrAsHdr, out string ext, int quality = 100)
     {
         if (saveHdrAsHdr && PixelFormatUtils.IsHDR(bitmap.PixelFormat))
         {
@@ -26,22 +25,27 @@ public static class TextureEncoder
             {
                 ext = "png";
                 using var bmp = bitmap.ToSkBitmap();
-                using var data = bmp.Encode(SKEncodedImageFormat.Png, 100);
+                using var data = bmp.Encode(SKEncodedImageFormat.Png, quality);
                 return data.ToArray();
             }
             case ETextureFormat.Jpeg:
             {
                 ext = "jpg";
                 using var bmp = bitmap.ToSkBitmap();
-                using var data = bmp.Encode(SKEncodedImageFormat.Jpeg, 100);
+                using var data = bmp.Encode(SKEncodedImageFormat.Jpeg, quality);
+                return data.ToArray();
+            }
+            case ETextureFormat.Webp:
+            {
+                ext = "webp";
+                using var bmp = bitmap.ToSkBitmap();
+                using var data = bmp.Encode(SKEncodedImageFormat.Webp, quality);
                 return data.ToArray();
             }
             case ETextureFormat.Tga:
                 ext = "tga";
                 return EncodeTga(bitmap);
-            default:
-                ext = "unk";
-                return [];
+            default: throw new NotImplementedException("Unsupported texture format: " + format);
             //TODO: ETextureFormat.Dds
         }
     }
@@ -139,7 +143,10 @@ public static class TextureEncoder
     // TODO cant cast to float from T so have to use Func<T, float>
     private static unsafe nint ConvertToRGBE<T>(EPixelFormat pixelFormat, int width, int height, ReadOnlySpan<byte> inp, Func<T, float> toFloat, bool flipOrder = false) where T : unmanaged
     {
-        int channelCount = PixelFormatUtils.PixelFormats.First(x => x.UnrealFormat == pixelFormat).NumComponents;
+        if (!PixelFormatUtils.PixelFormats.TryGetValue(pixelFormat, out var formatInfo))
+            throw new NotImplementedException("Unsupported pixel format: " + pixelFormat);
+
+        int channelCount = formatInfo.NumComponents;
 
         MemoryUtils.NativeAlloc<byte>(width * height * 4, out var retPtr);
 
@@ -281,6 +288,7 @@ public static class TextureEncoder
         {
             case EPixelFormat.PF_R8G8B8A8:
                 break;
+            case EPixelFormat.PF_A8R8G8B8:
             case EPixelFormat.PF_B8G8R8A8:
                 skColorType = SKColorType.Bgra8888;
                 break;
@@ -317,6 +325,9 @@ public static class TextureEncoder
             case EPixelFormat.PF_R16F:
                 convertedData = ConvertTo8<Half>(texture.PixelFormat, texture.Width, texture.Height, dataSpan, ConvertHalfTo8);
                 break;
+            case EPixelFormat.PF_V8U8:
+                convertedData = ConvertV8U8ToRGBA(texture.Width, texture.Height, dataSpan);
+                break;
             default:
                 throw new NotImplementedException("Unsupported pixel format: " + texture.PixelFormat);
         }
@@ -343,9 +354,38 @@ public static class TextureEncoder
         return (byte)Math.Clamp((float)value * 255.0f, 0, byte.MaxValue);
     }
 
+    private static unsafe nint ConvertV8U8ToRGBA(int width, int height, ReadOnlySpan<byte> data)
+    {
+        int pixelCount = width * height;
+        const int bytesPerPixel = 4;
+
+        MemoryUtils.NativeAlloc<byte>(pixelCount * bytesPerPixel, out var retPtr);
+        byte* dst = (byte*)retPtr;
+
+        for (int i = 0; i < pixelCount; i++)
+        {
+            sbyte v = (sbyte)data[i * 2 + 0];
+            sbyte u = (sbyte)data[i * 2 + 1];
+
+            float fx = u / 127f;
+            float fy = v / 127f;
+            float fz = MathF.Sqrt(MathF.Max(0f, 1f - (fx * fx + fy * fy)));
+
+            int offset = i * bytesPerPixel;
+            dst[offset + 0] = (byte)((fx * 0.5f + 0.5f) * 255f);
+            dst[offset + 1] = (byte)((fy * 0.5f + 0.5f) * 255f);
+            dst[offset + 2] = (byte)((fz * 0.5f + 0.5f) * 255f);
+            dst[offset + 3] = 255;
+        }
+
+        return retPtr;
+    }
+
     private static unsafe nint ConvertTo8<T>(EPixelFormat pixelFormat, int width, int height, ReadOnlySpan<byte> inp, Func<T, byte> conversionFunc, bool flipOrder = false)
     {
-        int channelCount = PixelFormatUtils.PixelFormats.First(x => x.UnrealFormat == pixelFormat).NumComponents;
+        if (!PixelFormatUtils.PixelFormats.TryGetValue(pixelFormat, out var formatInfo))
+            throw new NotImplementedException("Unsupported pixel format: " + pixelFormat);
+        int channelCount = formatInfo.NumComponents;
 
         //(4 bytes per pixel for RGBA)
         MemoryUtils.NativeAlloc<byte>(width * height * 4, out var retPtr);
@@ -366,14 +406,14 @@ public static class TextureEncoder
                         *outPtr = conversionFunc(value);
                         outPtr += sizeof(byte);
                     }
-                    FillMissingChannels(outPtr, channelCount);
+                    FillMissingChannels(ref outPtr, channelCount);
                 }
             }
         }
         return retPtr;
     }
 
-    private static unsafe void FillMissingChannels(byte* outPtr, int channelCount)
+    private static unsafe void FillMissingChannels(ref byte* outPtr, int channelCount)
     {
         for (int i = channelCount; i < 4; i++)
         {

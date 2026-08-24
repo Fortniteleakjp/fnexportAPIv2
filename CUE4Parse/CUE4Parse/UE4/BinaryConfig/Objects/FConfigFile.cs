@@ -1,5 +1,4 @@
-﻿using System.Collections.Generic;
-using CUE4Parse.UE4.Objects.UObject;
+﻿using CUE4Parse.UE4.Objects.UObject;
 using CUE4Parse.UE4.Readers;
 using FConfigFileMap = System.Collections.Generic.Dictionary<string, CUE4Parse.UE4.BinaryConfig.Objects.FConfigSection>;
 
@@ -9,7 +8,7 @@ public class FConfigFile
 {
     public FConfigFileMap ConfigFileMap;
     public bool Dirty;
-    public bool bNoSave;
+    public bool NoSave;
     public bool bHasPlatformName;
     public FName Name;
     public string PlatformName;
@@ -19,7 +18,7 @@ public class FConfigFile
     {
         ConfigFileMap = Ar.ReadMap(Ar.ReadFString, () => new FConfigSection(Ar));
         Dirty = Ar.ReadBoolean();
-        bNoSave = Ar.ReadBoolean();
+        NoSave = Ar.ReadBoolean();
         bHasPlatformName = Ar.ReadBoolean();
         Name = Ar.ReadFName();
         PlatformName = Ar.ReadFString();

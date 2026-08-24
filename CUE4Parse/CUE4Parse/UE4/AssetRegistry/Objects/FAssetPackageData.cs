@@ -49,7 +49,7 @@ namespace CUE4Parse.UE4.AssetRegistry.Objects
             {
                 if (Ar.Header.Version >= FAssetRegistryVersionType.PackageFileSummaryVersionChange)
                 {
-                    FileVersionUE = Ar.Read<FPackageFileVersion>();
+                    FileVersionUE = new FPackageFileVersion(Ar.Read<int>(), Ar.Read<int>());
                 }
                 else
                 {
@@ -59,7 +59,6 @@ namespace CUE4Parse.UE4.AssetRegistry.Objects
 
                 FileVersionLicenseeUE = Ar.Read<int>();
                 Flags = Ar.Read<uint>();
-                if (Ar.Game is EGame.GAME_MarvelRivals) Ar.Position += 4;
                 CustomVersions = new FCustomVersionContainer(Ar);
             }
             if (Ar.Header.Version >= FAssetRegistryVersionType.PackageImportedClasses)

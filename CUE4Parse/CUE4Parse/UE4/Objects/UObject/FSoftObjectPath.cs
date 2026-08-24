@@ -1,8 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
-using System.Text;
-using System.Threading.Tasks;
 using CUE4Parse.FileProvider;
+using CUE4Parse.GameTypes.AoC.Objects;
 using CUE4Parse.GameTypes.OuterWorlds2.Readers;
 using CUE4Parse.UE4.Assets;
 using CUE4Parse.UE4.Assets.Readers;
@@ -10,7 +9,6 @@ using CUE4Parse.UE4.Exceptions;
 using CUE4Parse.UE4.Versions;
 using CUE4Parse.Utils;
 using Newtonsoft.Json;
-using Serilog;
 using UExport = CUE4Parse.UE4.Assets.Exports.UObject;
 
 namespace CUE4Parse.UE4.Objects.UObject;
@@ -18,6 +16,7 @@ namespace CUE4Parse.UE4.Objects.UObject;
 [JsonConverter(typeof(FSoftObjectPathConverter))]
 public readonly struct FSoftObjectPath : IUStruct
 {
+    
     /** Asset path, patch to a top level object in a package. This is /package/path.assetname */
     public readonly FName AssetPathName;
     /** Optional FString for subobject within an asset. This is the sub path after the : */
@@ -27,9 +26,9 @@ public readonly struct FSoftObjectPath : IUStruct
 
     public FSoftObjectPath(FAssetArchive Ar)
     {
-        if (Ar.Ver < EUnrealEngineObjectUE4Version.ADDED_SOFT_OBJECT_PATH || Ar.Game == EGame.GAME_DragonQuestXI)
+        if (Ar.Ver < EUnrealEngineObjectUE4Version.ADDED_SOFT_OBJECT_PATH || Ar.Game == GAME_DragonQuestXI)
         {
-            var path = Ar.Game != EGame.GAME_DragonQuestXI ? Ar.ReadFString() : Ar.ReadFName().Text;
+            var path = Ar.Game != GAME_DragonQuestXI ? Ar.ReadFString() : Ar.ReadFName().Text;
             AssetPathName = path.SubstringBeforeLast('.');
             SubPathString = path.SubstringAfterLast('.');
             Owner = Ar.Owner;
@@ -54,12 +53,21 @@ public readonly struct FSoftObjectPath : IUStruct
             return;
         }
 
-        if (Ar.Game is EGame.GAME_OuterWorlds2 && Ar is FOW2ObjectsArchive OW2Ar)
+        if (Ar.Game is GAME_AshesOfCreation && Ar is FAoCDBCReader)
+        {
+            var str = Ar.ReadFName().Text;
+            AssetPathName = str.SubstringBeforeLast(':');
+            var index = str.LastIndexOf(':');
+            SubPathString = index <= 0 ? string.Empty : str[(index+1)..];
+            return;
+        }
+
+        if (Ar.Game is GAME_OuterWorlds2 && Ar is FOW2ObjectsArchive OW2Ar)
         {
             while (true)
             {
                 var data = Ar.Read<uint>();
-                var idktype = (data >> 24) & 0xFF; 
+                var idktype = (data >> 24) & 0xFF;
                 if (idktype == 0xa9)
                 {
                     var path = OW2Ar.Objects.SoftObjectPathStore[(int) (data & 0xFFFFFF)];
@@ -72,7 +80,7 @@ public readonly struct FSoftObjectPath : IUStruct
             return;
         }
 
-        AssetPathName = Ar.Ver >= EUnrealEngineObjectUE5Version.FSOFTOBJECTPATH_REMOVE_ASSET_PATH_FNAMES || Ar.Game == EGame.GAME_TheFirstDescendant ? new FName(new FTopLevelAssetPath(Ar).ToString()) : Ar.ReadFName();
+        AssetPathName = Ar.Ver >= EUnrealEngineObjectUE5Version.FSOFTOBJECTPATH_REMOVE_ASSET_PATH_FNAMES || Ar.Game == GAME_TheFirstDescendant ? new FName(new FTopLevelAssetPath(Ar).ToString()) : Ar.ReadFName();
         SubPathString = FFortniteMainBranchObjectVersion.Get(Ar) < FFortniteMainBranchObjectVersion.Type.SoftObjectPathUtf8SubPaths ? Ar.ReadFString() : Ar.ReadFUtf8String();
         Owner = Ar.Owner;
     }
@@ -167,17 +175,64 @@ public readonly struct FSoftObjectPath : IUStruct
     public UExport Load(IFileProvider provider) => provider.LoadPackageObject(AssetPathName.Text);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool TryLoad(IFileProvider provider, [MaybeNullWhen(false)] out UExport export) =>
-        provider.TryLoadPackageObject(AssetPathName.Text, out export);
+    public bool TryLoad(IFileProvider provider, [MaybeNullWhen(false)] out UExport export)
+    {
+        if (!provider.TryLoadPackageObject(AssetPathName.Text, out var asset))
+        {
+            export = null;
+            return false;
+        }
+
+        return TryResolveSubObject(asset, out export);
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public async Task<UExport> LoadAsync(IFileProvider provider) => await provider.LoadPackageObjectAsync(AssetPathName.Text);
+    public async Task<UExport?> LoadAsync(IFileProvider provider)
+    {
+        var asset = await provider.LoadPackageObjectAsync(AssetPathName.Text);
+        return TryResolveSubObject(asset, out var export) ? export : null;
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public async Task<UExport?> TryLoadAsync(IFileProvider provider)
     {
         // TODO: this aint a "Try"
-        return await provider.LoadPackageObjectAsync(AssetPathName.Text);
+        var asset = await provider.LoadPackageObjectAsync(AssetPathName.Text);
+        return TryResolveSubObject(asset, out var export) ? export : null;
+    }
+    
+    private bool TryResolveSubObject(UExport asset, [MaybeNullWhen(false)] out UExport export)
+    {
+        if (string.IsNullOrEmpty(SubPathString))
+        {
+            export = asset;
+            return true;
+        }
+        
+        var current = asset;
+        
+        var parts = SubPathString.Split('.');
+        foreach (var part in parts)
+        {
+            if (current.Owner == null)
+            {
+                export = null;
+                return false;
+            }
+            
+            var foundExport = current.Owner.GetExportOrNull(part);
+            if (foundExport == null)
+            {
+                Log.Warning("SoftObjectPath: Could not find subobject '{ObjectName}' in path '{SubPath}' for asset '{AssetPath}'", part, SubPathString, AssetPathName.Text);
+                export = null;
+                return false;
+            }
+            
+            current = foundExport;
+        }
+        
+        export = current;
+        return true;
     }
     #endregion
 

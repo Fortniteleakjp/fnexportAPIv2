@@ -1,6 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Text.RegularExpressions;
 using CUE4Parse.UE4.Assets.Exports.Texture;
 using CUE4Parse.UE4.Assets.Objects;
@@ -14,6 +11,7 @@ namespace CUE4Parse.UE4.Assets.Exports.Material;
 
 public class UMaterial : UMaterialInterface
 {
+    
     public bool TwoSided { get; private set; }
     public bool bDisableDepthTest { get; private set; }
     public bool bIsMasked { get; private set; }
@@ -23,13 +21,14 @@ public class UMaterial : UMaterialInterface
     public EMaterialShadingModel ShadingModel { get; private set; } = EMaterialShadingModel.MSM_Unlit;
     public float OpacityMaskClipValue { get; private set; } = 0.333f;
     public List<UTexture> ReferencedTextures { get; } = [];
+    public bool bForceNaniteUsage;
 
     private readonly List<IObject> _displayedReferencedTextures = [];
     private bool _shouldDisplay;
 
     public override void Deserialize(FAssetArchive Ar, long validPos)
     {
-        if(Ar.Game == EGame.GAME_WorldofJadeDynasty) Ar.Position += 16;
+        if (Ar.Game == GAME_WorldofJadeDynasty) Ar.Position += 16;
         base.Deserialize(Ar, validPos);
         TwoSided = GetOrDefault<bool>(nameof(TwoSided));
         bDisableDepthTest = GetOrDefault<bool>(nameof(bDisableDepthTest));
@@ -41,32 +40,58 @@ public class UMaterial : UMaterialInterface
         OpacityMaskClipValue = GetOrDefault(nameof(OpacityMaskClipValue), OpacityMaskClipValue);
 
         // 4.25+
-        if (Ar.Game >= EGame.GAME_UE4_25)
+        if (Ar.Game >= GAME_UE4_25 || Ar.Game < GAME_UE4_0)
         {
             CachedExpressionData ??= GetOrDefault<FStructFallback>(nameof(CachedExpressionData));
             if (CachedExpressionData != null && CachedExpressionData.TryGetValue(out UTexture[] referencedTextures, "ReferencedTextures"))
                 ReferencedTextures.AddRange(referencedTextures);
 
-            if (TryGetValue(out referencedTextures, "ReferencedTextures")) // is this a thing ?
+            if (TryGetValue(out referencedTextures, "ReferencedTextures"))
                 ReferencedTextures.AddRange(referencedTextures);
         }
 
         // UE4 has complex FMaterialResource format, so avoid reading anything here, but
         // scan package's imports for UTexture objects instead
+        // Scanning is not gated on UE5: the API serves UE4-era Fortnite assets too, and their
+        // referenced textures are only discoverable through the package imports.
         if (Ar is { Owner.Provider.SkipReferencedTextures: false })
             ScanForTextures(Ar);
 
         if (Ar.Ver >= EUnrealEngineObjectUE4Version.PURGED_FMATERIAL_COMPILE_OUTPUTS)
         {
-            if (Ar is { Game: >= EGame.GAME_UE4_25, Owner.Provider.ReadShaderMaps: true })
+            if (Ar is { Game: >= GAME_UE4_25, Owner.Provider.ReadShaderMaps: true })
             {
+                var saved = Ar.Position;
                 try
                 {
                     DeserializeInlineShaderMaps(Ar, LoadedMaterialResources);
+                    if (!Ar.IsFilterEditorOnly)
+                    {
+                        bool bLocalSavedCachedExpressionData_DEPRECATED = false;
+                        if (FUE5MainStreamObjectVersion.Get(Ar) >= FUE5MainStreamObjectVersion.Type.MaterialSavedCachedData &&
+                            FUE5ReleaseStreamObjectVersion.Get(Ar) < FUE5ReleaseStreamObjectVersion.Type.MaterialInterfaceSavedCachedData)
+                        {
+                            bLocalSavedCachedExpressionData_DEPRECATED = Ar.ReadBoolean();
+                        }
+                        var bSavedCachedExpressionData_DEPRECATED = GetOrDefault("bSavedCachedExpressionData_DEPRECATED", false);
+                        if (bSavedCachedExpressionData_DEPRECATED)
+                        {
+                            bSavedCachedExpressionData_DEPRECATED = false;
+                            bLocalSavedCachedExpressionData_DEPRECATED = true;
+                        }
+
+                        if (bLocalSavedCachedExpressionData_DEPRECATED)
+                        {
+                            CachedExpressionData = new FStructFallback(Ar, "MaterialCachedExpressionData");
+                        }
+                    }
+                    if (FRenderingObjectVersion.Get(Ar) >= FRenderingObjectVersion.Type.NaniteForceMaterialUsage)
+                        bForceNaniteUsage = Ar.ReadBoolean();
                 }
-                finally
+                catch (Exception e)
                 {
-                    Ar.Position = validPos;
+                    Log.Error(e, "Failed to deserialize inline shader maps.");
+                    Ar.Position = saved;
                 }
             }
             else
@@ -77,7 +102,7 @@ public class UMaterial : UMaterialInterface
     }
 
     public UTexture? GetFirstTexture() => ReferencedTextures.Count > 0 ? ReferencedTextures[0] : null;
-    public UTexture? GetTextureAtIndex(int index) => ReferencedTextures.Count >= index ? ReferencedTextures[index] : null;
+    public UTexture? GetTextureAtIndex(int index) => ReferencedTextures.Count > index ? ReferencedTextures[index] : null;
 
     private void ScanForTextures(FAssetArchive Ar)
     {
@@ -238,7 +263,7 @@ public class UMaterial : UMaterialInterface
             parameters.Diffuse = null;
         }
     }
-    public override void GetParams(CMaterialParams2 parameters, EMaterialFormat format)
+    public override void GetParams(CMaterialParams2 parameters, EMaterialDepth depth)
     {
         parameters.BlendMode = BlendMode;
         parameters.ShadingModel = ShadingModel;
@@ -269,7 +294,7 @@ public class UMaterial : UMaterialInterface
             }
         }
 
-        if (format != EMaterialFormat.AllLayersNoRef)
+        if (depth != EMaterialDepth.AllLayersNoRef)
         {
             for (int i = 0; i < ReferencedTextures.Count; i++)
             {
@@ -278,8 +303,8 @@ public class UMaterial : UMaterialInterface
             }
         }
 
-        base.GetParams(parameters, format);
-        if (format == EMaterialFormat.AllLayersNoRef) return;
+        base.GetParams(parameters, depth);
+        if (depth == EMaterialDepth.AllLayersNoRef) return;
 
         if (ReferencedTextures.Count == 1 && ReferencedTextures[0] is { } fallback)
         {
@@ -323,7 +348,6 @@ public class UMaterial : UMaterialInterface
                 Regex.IsMatch(texture.Name, CMaterialParams2.RegexEmissive, RegexOptions.IgnoreCase))
             {
                 parameters.Textures[CMaterialParams2.FallbackEmissive] = texture;
-                continue;
             }
         }
     }

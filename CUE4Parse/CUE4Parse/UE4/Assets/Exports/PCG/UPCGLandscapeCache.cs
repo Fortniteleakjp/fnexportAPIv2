@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using CUE4Parse.UE4.Assets.Objects;
 using CUE4Parse.UE4.Assets.Readers;
@@ -6,6 +5,8 @@ using CUE4Parse.UE4.Objects.Core.Math;
 using CUE4Parse.UE4.Objects.Core.Misc;
 using CUE4Parse.UE4.Objects.UObject;
 using CUE4Parse.UE4.Readers;
+using CUE4Parse.UE4.Versions;
+using Newtonsoft.Json;
 
 namespace CUE4Parse.UE4.Assets.Exports.PCG;
 
@@ -19,7 +20,7 @@ public class UPCGLandscapeCache : UObject
         CachedData = Ar.ReadMap(Ar.Read<CacheMapKey>, () => new FPCGLandscapeCacheEntry(Ar));
     }
 
-    override protected internal void WriteJson(Newtonsoft.Json.JsonWriter writer, Newtonsoft.Json.JsonSerializer serializer)
+    override protected internal void WriteJson(JsonWriter writer, JsonSerializer serializer)
     {
         base.WriteJson(writer, serializer);
         writer.WritePropertyName(nameof(CachedData));
@@ -32,18 +33,21 @@ public class FPCGLandscapeCacheEntry
     public FVector PointHalfSize;
     public int Stride;
     public FName[] LayerDataNames;
-    public FVector[] PositionsAndNormals;
-    public byte[][] LayerData;
+    [JsonIgnore] public FVector[] PositionsAndNormals;
+    [JsonIgnore] public byte[][] LayerData;
 
     public FPCGLandscapeCacheEntry(FAssetArchive Ar)
     {
+        if (Ar.Game < GAME_UE5_4) _ = new FPackageIndex(Ar); // DummyComponent
         PointHalfSize = new FVector(Ar);
         Stride = Ar.Read<int>();
         LayerDataNames = Ar.ReadArray(Ar.ReadFName);
-        var BulkData = new FByteBulkData(Ar);
-        using var reader = new FByteArchive("FPCGLandscapeCacheEntry", BulkData.Data, Ar.Versions);
+        var bulkData = new FByteBulkData(Ar);
+        if (bulkData.Data is null)
+            return;
+        using var reader = new FByteArchive("FPCGLandscapeCacheEntry", bulkData.Data, Ar.Versions);
         PositionsAndNormals = reader.ReadArray(() => new FVector(reader));
-        LayerData = Ar.ReadArray(() => reader.ReadArray<byte>());
+        LayerData = reader.ReadArray(() => reader.ReadArray<byte>());
     }
 }
 

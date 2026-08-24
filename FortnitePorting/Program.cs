@@ -79,12 +79,22 @@ builder.Services.AddCors(options =>
               .WithExposedHeaders("X-Audio-Format", "X-Audio-Decoded", "X-Rada-Native-Decoder", "Content-Disposition",
                   "X-Usmap-Bytes", "X-Usmap-Names", "X-Usmap-Enums", "X-Usmap-Structs",
                   "X-Usmap-UnknownProps", "X-Usmap-OptionalProps", "X-Usmap-Output", "X-Usmap-Loaded",
-                  "X-Usmap-ParsedEnums", "X-Usmap-ParsedStructs"));
+                  "X-Usmap-ParsedEnums", "X-Usmap-ParsedStructs",
+                  "X-Backup-Entries", "X-Backup-Version"));
 });
 
 Console.WriteLine("=================================");
 Console.WriteLine("Fortnite Asset Export API");
+Console.WriteLine($"Version {SelfUpdateService.CurrentVersionDisplay}");
 Console.WriteLine("=================================\n");
+
+// Check GitHub for a newer release before anything expensive happens. When one is installed the
+// swap is performed by a helper script that waits for this process to exit, so we stop right here
+// rather than mounting a whole build we are about to throw away.
+if (SelfUpdateService.RunStartupUpdate())
+{
+    return;
+}
 
 // Initialize the FileProvider at startup and register it as a singleton
 Console.WriteLine("Initializing FileProvider...\n");

@@ -1,4 +1,3 @@
-using System;
 using CUE4Parse.UE4.Assets.Readers;
 using CUE4Parse.UE4.Objects.UObject;
 using CUE4Parse.UE4.Versions;
@@ -9,7 +8,7 @@ public class FEdGraphTerminalType
 {
     public FName TerminalCategory;
     public FName TerminalSubCategory;
-    public FSoftObjectPath TerminalSubCategoryObject;
+    public FPackageIndex TerminalSubCategoryObject;
     public FName TerminalSubCategoryMemberReference;
     public bool bIsConst;
     public bool bIsWeakPointer;
@@ -40,8 +39,9 @@ public class FEdGraphTerminalType
             TerminalCategory = TerminalCategoryStr;
             TerminalSubCategory = Ar.ReadFString();
         }
-        // if (!Ar.IsObjectReferenceCollector() || Ar.IsModifyingWeakAndStrongReferences() || Ar.IsPersistent())
-        //     Ar << Object;
+
+        //if (!Ar.IsObjectReferenceCollector() || Ar.IsModifyingWeakAndStrongReferences() || Ar.IsPersistent())
+        TerminalSubCategoryObject = new FPackageIndex(Ar);
 
         bIsConst = Ar.ReadBoolean();
         bIsWeakPointer = Ar.ReadBoolean();

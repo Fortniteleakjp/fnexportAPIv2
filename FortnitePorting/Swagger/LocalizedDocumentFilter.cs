@@ -19,7 +19,9 @@ public sealed class LocalizedDocumentFilter : IDocumentFilter
         ["Pak"] = ("現在マウントされているPAK/UTOCの一覧と内容。", "Mounted PAK/UTOC inventory and contents."),
         ["Config"] = ("読み込み済みINIファイルの一覧と設定値検索。", "Loaded INI file listing and configuration lookup."),
         ["Build"] = ("配信中のFortniteビルドの確認と最新ビルドへの再読み込み。", "Current Fortnite build status and reload onto the newest build."),
-        ["Assets"] = ("アセット間のハード参照・ソフト参照の解析。", "Hard and soft reference inspection between assets.")
+        ["Assets"] = ("アセット間のハード参照・ソフト参照の解析。", "Hard and soft reference inspection between assets."),
+        ["Backup"] = ("現在のビルドのファイル一覧をFModelの.fbkp形式で配信。", "Serves the mounted build's file list as an FModel .fbkp backup."),
+        ["Update"] = ("GitHubリリースとの比較と、最新版への自動更新。", "Comparison against GitHub releases and self-update to the newest one.")
     };
 
     public void Apply(OpenApiDocument document, DocumentFilterContext context)

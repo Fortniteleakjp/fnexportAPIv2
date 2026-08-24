@@ -1,5 +1,3 @@
-using System;
-using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using CUE4Parse.MappingsProvider;
 using CUE4Parse.UE4.Assets.Objects.Properties;
@@ -9,7 +7,6 @@ using CUE4Parse.UE4.Objects.Core.Misc;
 using CUE4Parse.UE4.Objects.UObject;
 using CUE4Parse.UE4.Objects.UObject.BlueprintDecompiler;
 using CUE4Parse.UE4.Versions;
-using Serilog;
 
 namespace CUE4Parse.UE4.Assets.Objects;
 
@@ -79,6 +76,7 @@ public static class FPropertyTypeNameUtils
 
 public class FPropertyTag
 {
+    
     public FName Name;
     public FName PropertyType;
     public int Size;
@@ -89,6 +87,9 @@ public class FPropertyTag
     public FGuid? PropertyGuid;
     public FPropertyTagType? Tag;
     public EPropertyTagFlags PropertyTagFlags;
+#if DEBUG
+    public long Position;
+#endif
 
     public EPropertyTagSerializeType SerializeType => PropertyTagFlags.HasFlag(EPropertyTagFlags.SkippedSerialize)
             ? EPropertyTagSerializeType.Skipped
@@ -115,6 +116,9 @@ public class FPropertyTag
         PropertyTagFlags = ArraySize > 1 ? EPropertyTagFlags.HasArrayIndex : EPropertyTagFlags.None;
 
         var pos = Ar.Position;
+#if DEBUG
+        Position = pos;
+#endif
         try
         {
             Tag = FPropertyTagType.ReadPropertyTagType(Ar, PropertyType.Text, TagData, type);
@@ -150,7 +154,7 @@ public class FPropertyTag
             TagData = new FPropertyTagData(typeName, Name.Text);
 
             Size = Ar.Read<int>();
-            PropertyTagFlags = (EPropertyTagFlags) Ar.ReadByte();
+            PropertyTagFlags = (EPropertyTagFlags) Ar.Read<byte>();
             if (PropertyTagFlags.HasFlag(EPropertyTagFlags.BoolTrue)) TagData.Bool = true;
             ArrayIndex = PropertyTagFlags.HasFlag(EPropertyTagFlags.HasArrayIndex) ? Ar.Read<int>() : 0;
             HasPropertyGuid = PropertyTagFlags.HasFlag(EPropertyTagFlags.HasPropertyGuid);
@@ -196,6 +200,9 @@ public class FPropertyTag
         if (!readData) return;
 
         var pos = Ar.Position;
+#if DEBUG
+        Position = pos;
+#endif
         var finalPos = pos + Size;
         try
         {

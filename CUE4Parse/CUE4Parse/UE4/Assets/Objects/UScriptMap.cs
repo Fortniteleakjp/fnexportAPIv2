@@ -1,11 +1,11 @@
-using CUE4Parse.UE4.Assets.Readers;
-using CUE4Parse.UE4.Exceptions;
-using System.Collections.Generic;
-using CUE4Parse.UE4.Assets.Objects.Properties;
-using Newtonsoft.Json;
-using CUE4Parse.UE4.Versions;
+using CUE4Parse.GameTypes.AoC.Objects;
 using CUE4Parse.GameTypes.DaysGone.Assets;
 using CUE4Parse.GameTypes.SOD2.Assets;
+using CUE4Parse.UE4.Assets.Objects.Properties;
+using CUE4Parse.UE4.Assets.Readers;
+using CUE4Parse.UE4.Exceptions;
+using CUE4Parse.UE4.Versions;
+using Newtonsoft.Json;
 
 namespace CUE4Parse.UE4.Assets.Objects;
 
@@ -14,10 +14,9 @@ public class UScriptMap
 {
     public Dictionary<FPropertyTagType, FPropertyTagType?> Properties;
 
-    public UScriptMap()
-    {
-        Properties = [];
-    }
+    public UScriptMap() => Properties = [];
+
+    public UScriptMap(Dictionary<FPropertyTagType, FPropertyTagType?> properties) => Properties = properties;
 
     public UScriptMap(FAssetArchive Ar, FPropertyTagData tagData, ReadType readType)
     {
@@ -25,9 +24,9 @@ public class UScriptMap
         {
             (tagData.InnerType, tagData.ValueType) = Ar.Game switch
             {
-                EGame.GAME_DaysGone => DaysGoneProperties.GetMapPropertyTypes(tagData.Name),
-                EGame.GAME_StateOfDecay2 => SOD2Properties.GetMapPropertyTypes(tagData.Name),
-                EGame.GAME_WeHappyFew => tagData.Name switch
+                GAME_DaysGone => DaysGoneProperties.GetMapPropertyTypes(tagData.Name),
+                GAME_StateOfDecay2 => SOD2Properties.GetMapPropertyTypes(tagData.Name),
+                GAME_WeHappyFew => tagData.Name switch
                 {
                     "PointMap" or "JunctionMap" or "RoadMap" => ("IntProperty", "StructProperty"),
                     "States" => ("NameProperty", "StructProperty"),
@@ -55,6 +54,8 @@ public class UScriptMap
             }
         }
 
+        if (Ar.Game is GAME_AshesOfCreation && Ar is FAoCDBCReader) Ar.Position += 4;
+
         var type = readType == ReadType.RAW ? ReadType.RAW : ReadType.MAP;
         var numEntries = Ar.Read<int>();
         Properties = new Dictionary<FPropertyTagType, FPropertyTagType?>(numEntries);
@@ -68,7 +69,7 @@ public class UScriptMap
                 var value = FPropertyTagType.ReadPropertyTagType(Ar, tagData.ValueType, tagData.ValueTypeData, type);
                 Properties[key ?? new StrProperty($"UNK_Entry_{i}")] = value;
             }
-            catch (ParserException e)
+            catch (Exception e)
             {
                  throw new ParserException(Ar, $"Failed to read {(isReadingValue ? "value" : "key")} for index {i} in map", e);
             }

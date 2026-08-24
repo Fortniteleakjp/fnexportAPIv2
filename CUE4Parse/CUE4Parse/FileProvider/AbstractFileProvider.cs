@@ -1,19 +1,15 @@
-using System;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
-using System.IO;
-using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
-using System.Threading;
-using System.Threading.Tasks;
 using CUE4Parse.FileProvider.Objects;
 using CUE4Parse.FileProvider.Vfs;
 using CUE4Parse.MappingsProvider;
 using CUE4Parse.UE4.Assets;
 using CUE4Parse.UE4.Assets.Exports;
 using CUE4Parse.UE4.Assets.Exports.Internationalization;
+using CUE4Parse.UE4.Assets.Objects;
+using CUE4Parse.UE4.IO;
 using CUE4Parse.UE4.IO.Objects;
 using CUE4Parse.UE4.Objects.Core.Misc;
 using CUE4Parse.UE4.Objects.Engine;
@@ -24,7 +20,6 @@ using CUE4Parse.UE4.Versions;
 using CUE4Parse.UE4.VirtualFileSystem;
 using CUE4Parse.Utils;
 using Newtonsoft.Json;
-using Serilog;
 using UE4Config.Parsing;
 
 namespace CUE4Parse.FileProvider
@@ -41,14 +36,15 @@ namespace CUE4Parse.FileProvider
 
     public abstract class AbstractFileProvider : IFileProvider
     {
-        protected static readonly ILogger Log = Serilog.Log.ForContext<IFileProvider>();
-
         public VersionContainer Versions { get; }
         public StringComparer PathComparer { get; }
+        public StringComparison StringComparison { get; }
 
+        public IoStoreOnDemandOptions? OnDemandOptions { get; set; }
         public FileProviderDictionary Files { get; }
         public InternationalizationDictionary Internationalization { get; }
         public IDictionary<string, string> VirtualPaths { get; }
+        public IDictionary<string, string> TextureCachePaths { get; }
         public CustomConfigIni DefaultGame { get; }
         public CustomConfigIni DefaultEngine { get; }
 
@@ -67,70 +63,84 @@ namespace CUE4Parse.FileProvider
         {
             Versions = versions ?? VersionContainer.DEFAULT_VERSION_CONTAINER;
             PathComparer = pathComparer ?? StringComparer.Ordinal;
+            StringComparison = PathComparer.ToComparison();
 
             Files = new FileProviderDictionary();
             Internationalization = new InternationalizationDictionary(PathComparer);
             VirtualPaths = new ConcurrentDictionary<string, string>(PathComparer);
+            TextureCachePaths = new ConcurrentDictionary<string, string>(PathComparer);
             DefaultGame = new CustomConfigIni(nameof(DefaultGame));
             DefaultEngine = new CustomConfigIni(nameof(DefaultEngine));
         }
 
-        private string? _gameDisplayName;
         public string? GameDisplayName
         {
             get
             {
-                if (string.IsNullOrEmpty(_gameDisplayName))
+                if (string.IsNullOrEmpty(field))
                 {
                     var inst = new List<InstructionToken>();
-                    DefaultGame.FindPropertyInstructions("/Script/EngineSettings.GeneralProjectSettings", "ProjectDisplayedTitle", inst);
-                    if (inst.Count > 0)
+                    // account for android projects that may not set the display title
+                    DefaultEngine.FindPropertyInstructions("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "ApplicationDisplayName", inst);
+                    if (inst.Count > 0 && !string.IsNullOrWhiteSpace(inst[0].Value))
                     {
-                        var projectMatch = Regex.Match(inst[0].Value, "^(?:NSLOCTEXT\\(\".*\", \".*\", \"(?'target'.*)\"\\)|(?:INVTEXT\\(\"(?'target'.*)\"\\))|(?'target'.*))$", RegexOptions.Singleline);
-                        if (projectMatch.Groups.TryGetValue("target", out var g))
-                        {
-                            if (g.Value.StartsWith("LOCTABLE(\"/Game/"))
-                            {
-                                var stringTablePath = g.Value.SubstringAfter("LOCTABLE(\"").SubstringBeforeLast("\",");
+                        field = inst[0].Value;
+                    }
 
-                                if (TryLoadPackageObject<UStringTable>(stringTablePath, out var stringTable))
+                    if (string.IsNullOrEmpty(field))
+                    {
+                        DefaultGame.FindPropertyInstructions("/Script/EngineSettings.GeneralProjectSettings", "ProjectDisplayedTitle", inst);
+                        if (inst.Count > 0)
+                        {
+                            var projectMatch = Regex.Match(inst[0].Value, "^(?:NSLOCTEXT\\(\".*\", \".*\", \"(?'target'.*)\"\\)|(?:INVTEXT\\(\"(?'target'.*)\"\\))|(?'target'.*))$", RegexOptions.Singleline);
+                            if (projectMatch.Groups.TryGetValue("target", out var g))
+                            {
+                                if (g.Value.StartsWith("LOCTABLE(\"/Game/"))
                                 {
-                                    var keyName = g.Value.SubstringAfterLast(", \"").SubstringBeforeLast("\")"); // LOCTABLE("/Game/Narrative/LocalisedStrings/UI_Strings.UI_Strings", "23138_ui_pc_game_name_titlebar")
-                                    var stringTableEntry = stringTable.StringTable.KeysToEntries;
-                                    if (stringTableEntry.TryGetValue(keyName, out var value))
+                                    var stringTablePath = g.Value.SubstringAfter("LOCTABLE(\"").SubstringBeforeLast("\",");
+
+                                    if (UStringTable.TryGet(this, stringTablePath, out var stringTable))
                                     {
-                                        _gameDisplayName = value;
+                                        var keyName = g.Value.SubstringAfterLast(", \"").SubstringBeforeLast("\")"); // LOCTABLE("/Game/Narrative/LocalisedStrings/UI_Strings.UI_Strings", "23138_ui_pc_game_name_titlebar")
+                                        var stringTableEntry = stringTable.StringTable.KeysToEntries;
+                                        if (stringTableEntry.TryGetValue(keyName, out var value))
+                                        {
+                                            field = value;
+                                        }
                                     }
                                 }
-                            }
-                            else if (!string.IsNullOrWhiteSpace(g.Value) && g.Value != "{GameName}")
-                            {
-                                _gameDisplayName = g.Value;
-                            }
-                            else
-                            {
-                                inst.Clear();
-                                DefaultGame.FindPropertyInstructions("/Script/EngineSettings.GeneralProjectSettings", "ProjectName", inst);
-                                if (inst.Count > 0) _gameDisplayName = inst[0].Value;
+                                else if (!string.IsNullOrWhiteSpace(g.Value) && g.Value != "{GameName}")
+                                {
+                                    field = g.Value;
+                                }
+                                else
+                                {
+                                    inst.Clear();
+                                    DefaultGame.FindPropertyInstructions("/Script/EngineSettings.GeneralProjectSettings", "ProjectName", inst);
+                                    if (inst.Count > 0) field = inst[0].Value;
+                                }
                             }
                         }
-                    }
-                    else
-                    {
-                        DefaultGame.FindPropertyInstructions("/Script/EngineSettings.GeneralProjectSettings", "ProjectName", inst);
-                        if (inst.Count > 0) _gameDisplayName = inst[0].Value;
+                        else
+                        {
+                            DefaultGame.FindPropertyInstructions("/Script/EngineSettings.GeneralProjectSettings", "ProjectName", inst);
+                            if (inst.Count > 0) field = inst[0].Value;
+                        }
                     }
                 }
-                return _gameDisplayName;
+
+                if (Versions.Game is GAME_Back4Blood)
+                    field = "Back 4 Blood"; // They left is as LDTEXT("TEXT_UI_GameTitle")
+
+                return field;
             }
         }
 
-        private string? _projectName;
         public string ProjectName
         {
             get
             {
-                if (string.IsNullOrEmpty(_projectName))
+                if (string.IsNullOrEmpty(field))
                 {
                     if (Files.Keys.FirstOrDefault(it => it.EndsWith(".uproject", StringComparison.OrdinalIgnoreCase)) is not { } t)
                     {
@@ -139,11 +149,11 @@ namespace CUE4Parse.FileProvider
                                   !it.SubstringBefore('/').EndsWith("Engine", StringComparison.OrdinalIgnoreCase)) ?? string.Empty;
                     }
 
-                    _projectName = t.SubstringBefore('/');
-                    if (PathComparer.Equals(_projectName, "MidnightSuns"))
-                        _projectName = "CodaGame";
+                    field = t.SubstringBefore('/');
+                    if (PathComparer.Equals(field, "MidnightSuns"))
+                        field = "CodaGame";
                 }
-                return _projectName;
+                return field;
             }
         }
 
@@ -155,7 +165,16 @@ namespace CUE4Parse.FileProvider
                 !collection.TryGetValue(fixedPath.SubstringBeforeWithLast('.') + GameFile.UePackageExtensions[1], out file) && // umap
                 !collection.TryGetValue(path, out file)) // in case FixPath broke something
             {
-                file = null;
+                if (Versions.Game >= EGame.GAME_UE4_0)
+                {
+                    file = null;
+                }
+                else
+                {
+                    // If game is UE3 just find file that matches name
+                    var nameOnly = Path.GetFileNameWithoutExtension(fixedPath);
+                    file = collection.Values.FirstOrDefault(x => x.NameWithoutExtension.Equals(nameOnly, StringComparison.OrdinalIgnoreCase));
+                }
             }
 
             return file != null;
@@ -167,18 +186,8 @@ namespace CUE4Parse.FileProvider
                 : throw new KeyNotFoundException($"There is no game file with the path \"{path}\"");
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public bool TryGetGameFile(string path, [MaybeNullWhen(false)] out GameFile file)
-        {
-            try
-            {
-                file = this[path];
-            }
-            catch
-            {
-                file = null;
-            }
-            return file != null;
-        }
+        public bool TryGetGameFile(string path, [MaybeNullWhen(false)] out GameFile file) => 
+            TryGetGameFile(path, Files, out file);
 
         public int LoadLocalization(ELanguage language = ELanguage.English, CancellationToken cancellationToken = default)
             => LoadLocalization(GetLanguageCode(language), cancellationToken);
@@ -314,6 +323,20 @@ namespace CUE4Parse.FileProvider
                     ELanguage.Chinese => "zh-Hans",
                     _ => "en"
                 },
+                "aion2" => language switch
+                {
+                    ELanguage.English => "en-US",
+                    ELanguage.Korean => "ko-KR",
+                    ELanguage.Japanese => "ja-JP",
+                    ELanguage.TraditionalChinese => "zh-TW",
+                    ELanguage.Chinese => "zh-CN",
+                    ELanguage.German => "de-DE",
+                    ELanguage.French => "fr-FR",
+                    ELanguage.Spanish => "es-ES",
+                    ELanguage.PortugueseBrazil => "pt-BR",
+                    ELanguage.Russian => "ru-RU",
+                    _ => "en-US"
+                },
                 _ => language switch // https://www.alchemysoftware.com/livedocs/ezscript/Topics/Catalyst/Language.htm
                 {
                     ELanguage.English => "en",
@@ -349,8 +372,8 @@ namespace CUE4Parse.FileProvider
         public int LoadVirtualPaths() { return LoadVirtualPaths(Versions.Ver); }
         public virtual int LoadVirtualPaths(FPackageFileVersion version, CancellationToken cancellationToken = default)
         {
-            var regex = new Regex($"^{ProjectName}/Plugins/.+.upluginmanifest$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-            var arregex = new Regex($"^{ProjectName}/Plugins/.*AssetRegistry.bin$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+            var regex = new Regex($"^{Regex.Escape(ProjectName)}/Plugins/.+.upluginmanifest$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+            var arregex = new Regex($"^{Regex.Escape(ProjectName)}/Plugins/.*AssetRegistry.bin$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
             VirtualPaths.Clear();
             ConcurrentBag<KeyValuePair<string, GameFile>> matchingPlugins = [];
             Parallel.ForEach(Files, new ParallelOptions { CancellationToken = cancellationToken }, (kvp) =>
@@ -366,51 +389,50 @@ namespace CUE4Parse.FileProvider
                 }
             });
 
-            var useIndividualPlugin = version < EUnrealEngineObjectUE4Version.ADDED_SOFT_OBJECT_PATH || !matchingPlugins.Any(file => file.Key.EndsWith(".upluginmanifest"));
-
             foreach ((string filePath, GameFile gameFile) in matchingPlugins)
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                if (arregex.IsMatch(filePath))
+                switch (gameFile.Extension)
                 {
-                    var virtPath = gameFile.Directory.SubstringAfterLast('/');
-                    var path = gameFile.Directory;
-
-                    VirtualPaths[virtPath] = path;
-                    continue;
-                }
-
-                if (useIndividualPlugin)
-                {
-                    if (!filePath.EndsWith(".uplugin")) continue;
-                    if (!TryCreateReader(gameFile.Path, out var stream)) continue;
-                    using var reader = new StreamReader(stream);
-                    var pluginFile = TryDeserializePluginJson<UPluginDescriptor>(reader.ReadToEnd(), filePath);
-                    if (pluginFile is not { CanContainContent: true }) continue;
-
-                    var virtPath = gameFile.NameWithoutExtension;
-                    var path = gameFile.Directory;
-                    VirtualPaths[virtPath] = path;
-                }
-                else
-                {
-                    if (!regex.IsMatch(filePath)) continue;
-                    if (!TryCreateReader(gameFile.Path, out var stream)) continue;
-                    using var reader = new StreamReader(stream);
-                    var manifest = TryDeserializePluginJson<UPluginManifest>(reader.ReadToEnd(), filePath);
-                    if (manifest?.Contents == null) continue;
-
-                    foreach (var content in manifest.Contents)
+                    case "upluginmanifest":
                     {
-                        cancellationToken.ThrowIfCancellationRequested();
+                        if (!regex.IsMatch(filePath) || !TryCreateReader(gameFile.Path, out var stream))
+                            continue;
+                        using var reader = new StreamReader(stream);
+                        var manifest = TryDeserializePluginJson<UPluginManifest>(reader.ReadToEnd(), filePath);
+                        if (manifest?.Contents == null)
+                            continue;
 
-                        if (!content.Descriptor.CanContainContent) continue;
+                        foreach (var content in manifest.Contents)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
 
-                        var virtPath = content.File.SubstringAfterLast('/').SubstringBeforeLast('.');
-                        var path = content.File.Replace("../../../", string.Empty).SubstringBeforeLast('/');
-                        VirtualPaths[virtPath] = path;
+                            if (!content.Descriptor.CanContainContent)
+                                continue;
+
+                            var virtPath = content.File.SubstringAfterLast('/').SubstringBeforeLast('.');
+                            var path = content.File.Replace("../../../", string.Empty).SubstringBeforeLast('/');
+                            VirtualPaths[virtPath] = path;
+                        }
+                        break;
                     }
+                    case "uplugin":
+                    {
+                        if (VirtualPaths.ContainsKey(gameFile.NameWithoutExtension) || !TryCreateReader(gameFile.Path, out var stream))
+                            continue;
+                        using var reader = new StreamReader(stream);
+                        var pluginFile = TryDeserializePluginJson<UPluginDescriptor>(reader.ReadToEnd(), filePath);
+                        if (pluginFile is not { CanContainContent: true })
+                            continue;
+
+                        VirtualPaths[gameFile.NameWithoutExtension] = gameFile.Directory;
+                        break;
+                    }
+                    default:
+                        VirtualPaths[gameFile.Directory.SubstringAfterLast('/')] = gameFile.Directory;
+                        break;
+
                 }
             }
 
@@ -446,7 +468,7 @@ namespace CUE4Parse.FileProvider
                 }
                 gameAr?.Dispose();
 
-                Internationalization.InitFromIni(DefaultGame);
+                Internationalization.InitFromIni(DefaultGame, this);
             }
             if (TryGetGameFile("/Game/Config/DefaultEngine.ini", out var defaultEngine))
             {
@@ -495,7 +517,7 @@ namespace CUE4Parse.FileProvider
             // This part is only for FSoftObjectPaths and not really needed anymore internally, but it's still in here for user input
             if (lastPart.Contains('.') && lastPart.SubstringBefore('.') == lastPart.SubstringAfter('.'))
                 path = string.Concat(path.SubstringBeforeWithLast('/'), lastPart.SubstringBefore('.'));
-            if (path[^1] != '/' && !lastPart.Contains('.'))
+            if (path[^1] != '/' && !lastPart.Contains('.') && Versions.Game >= EGame.GAME_UE4_0)
                 path += "." + GameFile.UePackageExtensions[0]; // uasset
 
             var ret = path;
@@ -594,8 +616,8 @@ namespace CUE4Parse.FileProvider
             Files.FindPayloads(file, out var uexp, out var ubulks, out var uptnls);
 
             var uasset = file.CreateReader();
-            var lazyUbulk = ubulks.Count > 0 ? new Lazy<FArchive?>(() => ubulks[0].SafeCreateReader()) : null;
-            var lazyUptnl = uptnls.Count > 0 ? new Lazy<FArchive?>(() => uptnls[0].SafeCreateReader()) : null;
+            var lazyUbulk = ubulks.Count > 0 ? new Func<FByteBulkDataHeader?, FArchive?>(header => ubulks[0].SafeCreateReader(header)) : null;
+            var lazyUptnl = uptnls.Count > 0 ? new Func<FByteBulkDataHeader?, FArchive?>(header => uptnls[0].SafeCreateReader(header)) : null;
 
             switch (file)
             {
@@ -616,8 +638,8 @@ namespace CUE4Parse.FileProvider
             Files.FindPayloads(file, out var uexp, out var ubulks, out var uptnls);
 
             var uasset = await file.CreateReaderAsync().ConfigureAwait(false);
-            var lazyUbulk = ubulks.Count > 0 ? new Lazy<FArchive?>(() => ubulks[0].SafeCreateReader()) : null;
-            var lazyUptnl = uptnls.Count > 0 ? new Lazy<FArchive?>(() => uptnls[0].SafeCreateReader()) : null;
+            var lazyUbulk = ubulks.Count > 0 ? new Func<FByteBulkDataHeader?, FArchive?>(header => ubulks[0].SafeCreateReader(header)) : null;
+            var lazyUptnl = uptnls.Count > 0 ? new Func<FByteBulkDataHeader?, FArchive?>(header => uptnls[0].SafeCreateReader(header)) : null;
 
             switch (file)
             {
@@ -766,7 +788,7 @@ namespace CUE4Parse.FileProvider
             ArgumentException.ThrowIfNullOrEmpty("objectName", pathName.Item2);
 
             var package = LoadPackage(pathName.Item1);
-            return package.GetExport<T>(pathName.Item2);
+            return package.GetExport<T>(pathName.Item2, StringComparison);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -787,7 +809,7 @@ namespace CUE4Parse.FileProvider
             ArgumentException.ThrowIfNullOrEmpty("objectName", pathName.Item2);
 
             var package = await LoadPackageAsync(pathName.Item1).ConfigureAwait(false);
-            return package.GetExport<T>(pathName.Item2);
+            return package.GetExport<T>(pathName.Item2, StringComparison);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

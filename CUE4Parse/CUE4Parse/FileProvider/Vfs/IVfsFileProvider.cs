@@ -1,8 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Diagnostics.CodeAnalysis;
-using System.IO;
-using System.Threading.Tasks;
+﻿using System.Diagnostics.CodeAnalysis;
 using CUE4Parse.Encryption.Aes;
 using CUE4Parse.FileProvider.Objects;
 using CUE4Parse.UE4.Assets;
@@ -56,6 +52,13 @@ namespace CUE4Parse.FileProvider.Vfs
         public Task<int> SubmitKeyAsync(FGuid guid, FAesKey key);
         public int SubmitKeys(IEnumerable<KeyValuePair<FGuid, FAesKey>> keys);
         public Task<int> SubmitKeysAsync(IEnumerable<KeyValuePair<FGuid, FAesKey>> keys);
+
+        /// <summary>
+        /// load .ini files and verify the validity of the main encryption key against them
+        /// in cases where archives are not encrypted, but their packages are, that is one way to tell if the key is correct
+        /// if the key is not correct, archives will be removed from the pool of mounted archives no matter how many encrypted packages they have
+        /// </summary>
+        public void PostMount();
 
         public IAesVfsReader GetArchive(string archiveName, StringComparison comparison = StringComparison.Ordinal);
         public bool TryGetArchive(string archiveName, [MaybeNullWhen(false)] out IAesVfsReader archive, StringComparison comparison = StringComparison.Ordinal);

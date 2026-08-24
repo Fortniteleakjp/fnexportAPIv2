@@ -17,6 +17,7 @@ using CUE4Parse.UE4.Localization;
 using CUE4Parse.UE4.Assets.Exports.Sound;
 using CUE4Parse.UE4.Assets.Exports.Wwise;
 using CUE4Parse_Conversion.Sounds;
+using CUE4Parse_Conversion.Options;
 using System.Collections.Concurrent;
 using System.Threading.Tasks;
 using System.Runtime.InteropServices;

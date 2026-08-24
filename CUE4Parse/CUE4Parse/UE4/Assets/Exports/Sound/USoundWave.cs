@@ -1,22 +1,16 @@
 using CUE4Parse.UE4.Assets.Objects;
 using CUE4Parse.UE4.Assets.Readers;
 using CUE4Parse.UE4.Objects.Core.Misc;
+using CUE4Parse.UE4.Objects.Engine;
 using CUE4Parse.UE4.Objects.UObject;
 using CUE4Parse.UE4.Versions;
 using Newtonsoft.Json;
 
 namespace CUE4Parse.UE4.Assets.Exports.Sound;
 
-public enum ESoundWaveFlag : uint
-{
-    CookedFlag					= 1 << 0,
-    HasOwnerLoadingBehaviorFlag	= 1 << 1,
-    LoadingBehaviorShift		= 2,
-    LoadingBehaviorMask			= 0b00000111,
-}
-
 public class USoundWave : USoundBase
 {
+    public FSubtitleCue[] Subtitles { get; set; } = [];
     public bool bStreaming { get; private set; } = true;
     public FFormatContainer? CompressedFormatData { get; private set; }
     public FByteBulkData? RawData { get; private set; }
@@ -27,13 +21,15 @@ public class USoundWave : USoundBase
     public override void Deserialize(FAssetArchive Ar, long validPos)
     {
         base.Deserialize(Ar, validPos);
+
+        Subtitles = GetOrDefault<FSubtitleCue[]>(nameof(Subtitles), []);
         bStreaming = Ar.Versions["SoundWave.UseAudioStreaming"];
         if (TryGetValue(out bool s, nameof(bStreaming))) // will return false if not found
             bStreaming = s;
         else if (TryGetValue(out FName loadingBehavior, "LoadingBehavior"))
         {
             bStreaming = !loadingBehavior.IsNone && loadingBehavior.Text != "ESoundWaveLoadingBehavior::ForceInline";
-            if (Ar.Game == EGame.GAME_Stray && bStreaming)
+            if (Ar.Game == GAME_Stray && bStreaming)
                 bStreaming = loadingBehavior.Text != "ESoundWaveLoadingBehavior::RetainOnLoad";
         }
 
@@ -45,37 +41,57 @@ public class USoundWave : USoundBase
 
         var bCooked = flags.HasFlag(ESoundWaveFlag.CookedFlag);
 
-        if (Ar.Game >= EGame.GAME_UE5_4 && bCooked)
+        if (Ar.Game >= GAME_UE5_4 && bCooked)
         {
             SerializeCuePoints(Ar);
         }
 
-        if (!bStreaming)
+        var saved = Ar.Position;
+        try
         {
-            if (flags.HasFlag(ESoundWaveFlag.CookedFlag))
+            SerializePlatformData(Ar, bCooked);
+        }
+        catch (Exception)
+        {
+            bStreaming = !bStreaming;
+            Ar.Position = saved;
+            CompressedFormatData = null;
+            RawData = null;
+            CompressedDataGuid = default;
+            RunningPlatformData = null;
+            SerializePlatformData(Ar, bCooked);
+        }
+
+        void SerializePlatformData(FAssetArchive Ar, bool bCooked)
+        {
+            if (!bStreaming)
             {
-                CompressedFormatData = new FFormatContainer(Ar);
+                if (bCooked)
+                {
+                    CompressedFormatData = new FFormatContainer(Ar);
+                }
+                else
+                {
+                    RawData = new FByteBulkData(Ar);
+                }
+
+                CompressedDataGuid = Ar.Read<FGuid>();
             }
             else
             {
-                RawData = new FByteBulkData(Ar);
+                CompressedDataGuid = Ar.Read<FGuid>();
+                if (bCooked)
+                    SerializeCookedPlatformData(Ar);
             }
-
-            CompressedDataGuid = Ar.Read<FGuid>();
-        }
-        else
-        {
-            CompressedDataGuid = Ar.Read<FGuid>();
-            if (bCooked) SerializeCookedPlatformData(Ar);
         }
     }
 
-    public virtual void SerializeCuePoints(FAssetArchive Ar)
+    protected virtual void SerializeCuePoints(FAssetArchive Ar)
     {
         PlatformCuePoints = Ar.ReadArray(() => new FStructFallback(Ar, "SoundWaveCuePoint"));
     }
 
-    public virtual void SerializeCookedPlatformData(FAssetArchive Ar)
+    protected virtual void SerializeCookedPlatformData(FAssetArchive Ar)
     {
         RunningPlatformData = new FStreamedAudioPlatformData(Ar);
     }
@@ -107,4 +123,13 @@ public class USoundWave : USoundBase
     {
         base.Deserialize(Ar, validPos);
     }
+}
+
+[Flags]
+public enum ESoundWaveFlag : uint
+{
+    CookedFlag					= 1 << 0,
+    HasOwnerLoadingBehaviorFlag	= 1 << 1,
+    LoadingBehaviorShift		= 2,
+    LoadingBehaviorMask			= 0b00000111,
 }

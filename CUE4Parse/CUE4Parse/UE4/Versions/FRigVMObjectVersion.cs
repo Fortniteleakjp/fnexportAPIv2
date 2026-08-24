@@ -68,9 +68,30 @@ public static class FRigVMObjectVersion
 
         // The VM stores a local snapshot registry to use in cooked environments instead of the shared global registry
         LocalizedRegistry,
-        
+
         // The VM stores a relative seek offset to be able to skip the registry during load
         LocalizedRegistryWithRelativeSeekOffset,
+
+        // Function arguments can now represent an input variable (an external variable passed into a function)
+        FunctionArgumentCanRepresentInputVariable,
+
+        // Object archive is now storing the version container
+        ObjectArchiveVersionContainerSerialization,
+
+        // Debug operand mapping simplified and moved to context only
+        DebugOperandMappingSimplified,
+
+        // Introduction of callables to the rigvm bytecode
+        RigVMCallables,
+
+        // Referencing variables through Guids
+        GuidForVariables,
+
+        // Nativized Functions as Callable Swap-Ins
+        NativizedFunctionAsCallables,
+
+        // Rename-stable GUIDs added to function identifiers, headers, and arguments
+        GuidForFunctions,
 
         // -----<new versions can be added above this line>-------------------------------------------------
         VersionPlusOne,
@@ -87,12 +108,14 @@ public static class FRigVMObjectVersion
 
         return Ar.Game switch
         {
-            < EGame.GAME_UE5_3 => (Type) (-1),
-            < EGame.GAME_UE5_4 => Type.PredicatesAddedToExecuteOps,
-            < EGame.GAME_UE5_5 => Type.VMRemoveTooltipFromFunctionHeader,
-            < EGame.GAME_UE5_6 => Type.FunctionHeaderLayoutStoresCategoryExpansion,
-            < EGame.GAME_UE5_7 => Type.ByteCodeCleanup,
-            < EGame.GAME_UE5_8 => Type.LocalizedRegistry,
+              GAME_Aion2 => Type.VMMemoryStorageDefaultsGeneratedAtVM,
+            < GAME_UE5_3 => (Type) (-1),
+            < GAME_UE5_4 => Type.PredicatesAddedToExecuteOps,
+            < GAME_UE5_5 => Type.VMRemoveTooltipFromFunctionHeader,
+            < GAME_UE5_6 => Type.FunctionHeaderLayoutStoresCategoryExpansion,
+            < GAME_UE5_7 => Type.ByteCodeCleanup,
+            < GAME_UE5_8 => Type.LocalizedRegistry,
+            < GAME_UE6_0 => Type.GuidForVariables,
             _ => Type.LatestVersion
         };
     }

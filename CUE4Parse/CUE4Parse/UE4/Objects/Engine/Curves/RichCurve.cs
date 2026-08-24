@@ -1,8 +1,8 @@
-using System;
 using System.Runtime.InteropServices;
 using CUE4Parse.UE4.Assets.Exports.Animation;
 using CUE4Parse.UE4.Assets.Objects;
 using CUE4Parse.UE4.Assets.Readers;
+using CUE4Parse.UE4.Assets.Utils;
 using CUE4Parse.UE4.Objects.Core.Math;
 using CUE4Parse.Utils;
 using Newtonsoft.Json;
@@ -79,6 +79,7 @@ public enum ERichCurveKeyTimeCompressionFormat : byte
 }
 
 /** One key in a rich, editable float curve */
+[StructFallback]
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
 public struct FRichCurveKey : IUStruct
 {
@@ -122,6 +123,32 @@ public struct FRichCurveKey : IUStruct
         ArriveTangentWeight = 0.0f;
         LeaveTangent = leaveTangent;
         LeaveTangentWeight = 0.0f;
+    }
+
+    public FRichCurveKey(FMutableArchive Ar)
+    {
+        Time = Ar.Read<float>();
+        Value = Ar.Read<float>();
+        ArriveTangent = Ar.Read<float>();
+        ArriveTangentWeight = Ar.Read<float>();
+        LeaveTangent = Ar.Read<float>();
+        LeaveTangentWeight = Ar.Read<float>();
+        InterpMode = Ar.Read<ERichCurveInterpMode>();
+        TangentMode = Ar.Read<ERichCurveTangentMode>();
+        TangentWeightMode = Ar.Read<ERichCurveTangentWeightMode>();
+    }
+
+    public FRichCurveKey(FStructFallback fallback)
+    {
+        InterpMode = fallback.GetOrDefault(nameof(InterpMode), RCIM_Linear);
+        TangentMode = fallback.GetOrDefault(nameof(TangentMode), RCTM_Auto);
+        TangentWeightMode = fallback.GetOrDefault(nameof(TangentWeightMode), RCTWM_WeightedNone);
+        Time = fallback.GetOrDefault<float>(nameof(Time));
+        Value = fallback.GetOrDefault<float>(nameof(Value));
+        ArriveTangent = fallback.GetOrDefault<float>(nameof(ArriveTangent));
+        ArriveTangentWeight = fallback.GetOrDefault<float>(nameof(ArriveTangentWeight));
+        LeaveTangent = fallback.GetOrDefault<float>(nameof(LeaveTangent));
+        LeaveTangentWeight = fallback.GetOrDefault<float>(nameof(LeaveTangentWeight));
     }
 }
 
@@ -168,6 +195,7 @@ public class FCompressedRichCurve : IUStruct
 }
 
 /** A rich, editable float curve */
+[StructFallback]
 public class FRichCurve : FRealCurve
 {
     public FRichCurveKey[] Keys;
@@ -175,6 +203,11 @@ public class FRichCurve : FRealCurve
     public FRichCurve()
     {
         Keys = [];
+    }
+
+    public FRichCurve(FMutableArchive Ar)
+    {
+        Keys = Ar.ReadArray<FRichCurveKey>();
     }
 
     public FRichCurve(FStructFallback data) : base(data)

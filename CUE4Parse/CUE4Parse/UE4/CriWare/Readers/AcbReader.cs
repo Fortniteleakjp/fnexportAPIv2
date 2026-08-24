@@ -1,14 +1,11 @@
-using System;
-using System.Collections.Generic;
-using System.IO;
 using Newtonsoft.Json;
-using Serilog;
 
 namespace CUE4Parse.UE4.CriWare.Readers;
 
 [JsonConverter(typeof(AcbReaderConverter))]
 public sealed class AcbReader : IDisposable
 {
+    
     private readonly Stream _outerStream;
     private readonly long _offset;
     private readonly uint _awbOffset;

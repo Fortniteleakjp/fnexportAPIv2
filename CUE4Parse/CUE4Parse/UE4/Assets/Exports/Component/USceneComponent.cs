@@ -1,4 +1,3 @@
-using System;
 using CUE4Parse.UE4.Assets.Readers;
 using CUE4Parse.UE4.Objects.Core.Math;
 using CUE4Parse.UE4.Objects.UObject;
@@ -23,13 +22,24 @@ public enum ERelativeTransformSpace : int
 
 public class USceneComponent : UActorComponent
 {
+    public FPackageIndex? AttachParent;
     public FBoxSphereBounds? Bounds;
     public bool bIsCooked;
+    
+    public FVector RelativeLocation;
+    public FRotator RelativeRotation;
+    public FVector RelativeScale3D;
 
     public override void Deserialize(FAssetArchive Ar, long validPos)
     {
         base.Deserialize(Ar, validPos);
-        if (Ar.Game == EGame.GAME_WorldofJadeDynasty) Ar.Position += 4;
+        AttachParent = GetOrDefault<FPackageIndex?>(nameof(AttachParent));
+        
+        RelativeLocation = GetOrDefault(nameof(RelativeLocation), FVector.ZeroVector);
+        RelativeRotation = GetOrDefault(nameof(RelativeRotation), FRotator.ZeroRotator);
+        RelativeScale3D = GetOrDefault(nameof(RelativeScale3D), FVector.OneVector);
+
+        if (Ar.Game == GAME_WorldofJadeDynasty) Ar.Position += 4;
         var bComputeBoundsOnceForGame = GetOrDefault<bool>("bComputeBoundsOnceForGame");
         var bComputedBoundsOnceForGame = GetOrDefault<bool>("bComputedBoundsOnceForGame");
         var bComputeBounds = bComputeBoundsOnceForGame || bComputedBoundsOnceForGame;
@@ -67,7 +77,7 @@ public class USceneComponent : UActorComponent
             current = current.Template?.Load<USceneComponent>();
         }
 
-        return new FTransform(FRotator.ZeroRotator, FVector.ZeroVector, FVector.OneVector);
+        return new FTransform(FRotator.ZeroRotator, FVector.ZeroVector, topMostScale ?? FVector.OneVector);
     }
 
     public FTransform GetAbsoluteTransform()
@@ -107,10 +117,7 @@ public class USceneComponent : UActorComponent
         }
     }
 
-    public USceneComponent? GetAttachParent()
-    {
-        return GetOrDefault<FPackageIndex?>("AttachParent")?.Load<USceneComponent>();
-    }
+    public USceneComponent? GetAttachParent() => AttachParent?.Load<USceneComponent>();
 
     public FTransform GetComponentTransform()
     {
@@ -120,6 +127,13 @@ public class USceneComponent : UActorComponent
     public FVector GetRelativeLocation() => GetOrDefault("RelativeLocation", FVector.ZeroVector);
     public FRotator GetRelativeRotation() => GetOrDefault("RelativeRotation", FRotator.ZeroRotator);
     public FVector GetRelativeScale3D() => GetOrDefault("RelativeScale3D", FVector.OneVector);
+
+    public void AddLocalRotation(FRotator deltaRotation)
+    {
+        var curRelRotQuat = GetRelativeRotation().Quaternion();
+        var newRelRotQuat = curRelRotQuat * deltaRotation.Quaternion();
+        PropertyUtil.Set(this, "RelativeRotation", newRelRotQuat.Rotator());
+    }
 
     protected internal override void WriteJson(JsonWriter writer, JsonSerializer serializer)
     {

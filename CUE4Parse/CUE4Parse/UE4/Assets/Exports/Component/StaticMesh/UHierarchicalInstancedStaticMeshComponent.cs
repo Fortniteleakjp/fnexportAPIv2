@@ -15,7 +15,8 @@ public class UHierarchicalInstancedStaticMeshComponent : UInstancedStaticMeshCom
     public override void Deserialize(FAssetArchive Ar, long validPos)
     {
         base.Deserialize(Ar, validPos);
-        if (Ar.Game == EGame.GAME_DuneAwakening && !Ar.ReadBoolean()) return;
+        if (Ar.Position >= validPos) return;
+        if (Ar.Game == GAME_DuneAwakening && !Ar.ReadBoolean()) return;
         ClusterTree = FReleaseObjectVersion.Get(Ar) < FReleaseObjectVersion.Type.HISMCClusterTreeMigration ? Ar.ReadBulkArray(() => new FClusterNode_DEPRECATED(Ar)) : Ar.ReadBulkArray(() => new FClusterNode(Ar));
     }
 

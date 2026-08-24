@@ -1,8 +1,4 @@
-using System;
-using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
-using System.Threading;
-using System.Threading.Tasks;
 using CUE4Parse.FileProvider.Objects;
 using CUE4Parse.FileProvider.Vfs;
 using CUE4Parse.MappingsProvider;
@@ -30,6 +26,8 @@ namespace CUE4Parse.FileProvider
         public InternationalizationDictionary Internationalization { get; }
 
         public IDictionary<string, string> VirtualPaths { get; }
+
+        public IDictionary<string, string> TextureCachePaths { get; }
 
         /// <summary>
         /// the localized resources (strings) from the game
@@ -119,6 +117,9 @@ namespace CUE4Parse.FileProvider
         /// <param name="file">The file if it was found; otherwise the default value</param>
         /// <returns>true if the file could be found; false otherwise</returns>
         public bool TryGetGameFile(string path, [MaybeNullWhen(false)] out GameFile file);
+
+        public int LoadVirtualPaths();
+        public int LoadVirtualPaths(FPackageFileVersion version, CancellationToken cancellationToken = default);
 
         public int LoadLocalization(ELanguage language = ELanguage.English, CancellationToken cancellationToken = default);
         public int LoadLocalization(string culture, CancellationToken cancellationToken = default);

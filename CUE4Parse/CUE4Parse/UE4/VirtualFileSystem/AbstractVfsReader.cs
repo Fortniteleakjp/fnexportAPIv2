@@ -1,19 +1,15 @@
-using System;
-using System.Collections.Generic;
-using System.IO;
 using System.Runtime.CompilerServices;
 using CUE4Parse.FileProvider.Objects;
+using CUE4Parse.UE4.Assets.Objects;
 using CUE4Parse.UE4.Readers;
 using CUE4Parse.UE4.Versions;
 using CUE4Parse.Utils;
 using GenericReader;
-using Serilog;
 
 namespace CUE4Parse.UE4.VirtualFileSystem
 {
     public abstract partial class AbstractVfsReader : IVfsReader
     {
-        protected static readonly ILogger Log = Serilog.Log.ForContext<AbstractVfsReader>();
 
         public string Path { get; }
         public string Name { get; }
@@ -48,23 +44,16 @@ namespace CUE4Parse.UE4.VirtualFileSystem
         }
 
         public abstract void Mount(StringComparer pathComparer);
-        public abstract byte[] Extract(VfsEntry entry);
+        public abstract byte[] Extract(VfsEntry entry, FByteBulkDataHeader? header = null);
 
         protected void ValidateMountPoint(ref string mountPoint)
         {
-            // UE6 stores the mount point as a plain path relative to the staging root
-            // ("FortniteGame/", "FortniteGame/Plugins/GameFeatures/") instead of the classic
-            // "../../../FortniteGame/" form. Without this the check below rejects it, the container
-            // silently mounts to root, and all of its files show up under whatever the container
-            // happens to store them as instead of under the project.
-            if (Game >= EGame.GAME_UE5_9 && IsRootRelativeMountPoint(mountPoint))
-            {
-                mountPoint = mountPoint[^1] == '/' ? mountPoint : mountPoint + '/';
-                VerifyReadOrder();
-                return;
-            }
-
             var badMountPoint = !mountPoint.StartsWith("../../..");
+
+            // Hacky fix but works for now
+            if (badMountPoint && Game >= GAME_UE6_0)
+                return;
+
             mountPoint = mountPoint.SubstringAfter("../../..");
             if (mountPoint == "" || mountPoint[0] != '/' || ( (mountPoint.Length > 1) && (mountPoint[1] == '.') ))
                 badMountPoint = true;
@@ -73,7 +62,7 @@ namespace CUE4Parse.UE4.VirtualFileSystem
             {
                 if (Globals.LogVfsMounts)
                 {
-                    Log.Warning($"\"{Name}\" has strange mount point \"{mountPoint}\", mounting to root");
+                    Log.Warning("\"{Name}\" has strange mount point \"{MountPoint}\", mounting to root", Name, mountPoint);
                 }
 
                 mountPoint = "/";
@@ -83,20 +72,10 @@ namespace CUE4Parse.UE4.VirtualFileSystem
             VerifyReadOrder();
         }
 
-        /// <summary>
-        /// A mount point that is already a clean path relative to the staging root: not empty,
-        /// not absolute and without any directory traversal.
-        /// </summary>
-        private static bool IsRootRelativeMountPoint(string mountPoint)
-            => mountPoint.Length > 0 &&
-               mountPoint[0] != '/' &&
-               !mountPoint.Contains("..") &&
-               !mountPoint.Contains(':');
-
         private void VerifyReadOrder()
         {
             ReadOrder = GetPakOrderFromPakFilePath();
-            if (!Name.EndsWith("_P.pak") && !Name.EndsWith("_P.utoc") && !Name.EndsWith("_P.o.utoc"))
+            if (!Name.EndsWith("_P.pak", StringComparison.OrdinalIgnoreCase) && !Name.EndsWith("_P.utoc", StringComparison.OrdinalIgnoreCase) && !Name.EndsWith("_P.o.utoc", StringComparison.OrdinalIgnoreCase))
                 return;
 
             var chunkVersionNumber = 1u;

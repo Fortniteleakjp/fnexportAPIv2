@@ -43,10 +43,24 @@ namespace FortnitePorting.Controllers
         private static readonly bool ContentCacheUnbounded = ContentCacheBudget == long.MaxValue;
         // How many files content search scans concurrently (defaults to every core).
         private static readonly int ScanParallelism = ResolveParallelism();
-        // How long a content-search response is cached for an identical query.
-        private static readonly TimeSpan ResultCacheTtl = TimeSpan.FromMinutes(15);
+        // How long a content-search response is cached for an identical query. Long by default:
+        // a cached response can only ever belong to the mounted build, because the mounted file
+        // count is part of the cache key and a provider reload clears the whole response cache
+        // through CacheRegistry. Scanning is by far the expensive part, so there is nothing to
+        // gain from expiring a still-valid result.
+        private static readonly TimeSpan ResultCacheTtl = ResolveCacheTtl("SEARCH_CONTENT_CACHE_MINUTES");
         // How long a path-search response is cached for an identical query.
-        private static readonly TimeSpan PathResultCacheTtl = TimeSpan.FromMinutes(15);
+        private static readonly TimeSpan PathResultCacheTtl = ResolveCacheTtl("SEARCH_PATH_CACHE_MINUTES");
+        // Ceiling on how long a single cached response may live even if it keeps being hit, so a
+        // hot query cannot pin its memory forever.
+        private static readonly TimeSpan ResultCacheMaxLifetime = ResolveCacheTtl("SEARCH_CACHE_MAX_MINUTES", DefaultCacheMaxMinutes);
+        // Default sliding lifetime of a cached search response (24 hours).
+        private const int DefaultCacheMinutes = 24 * 60;
+        // Default absolute lifetime of a cached search response (7 days).
+        private const int DefaultCacheMaxMinutes = 7 * 24 * 60;
+        // Lifetime granted to a result that the wall-clock budget cut short, so a retry can produce
+        // the complete answer instead of being served the partial one for the rest of the day.
+        private static readonly TimeSpan PartialResultCacheTtl = TimeSpan.FromMinutes(5);
 
         // Cap regex evaluation per candidate so a single pathological match cannot dominate.
         private static readonly TimeSpan RegexTimeout = TimeSpan.FromMilliseconds(250);
@@ -102,6 +116,37 @@ namespace FortnitePorting.Controllers
                 return mb * 1024L * 1024L;
             }
             return long.MaxValue;
+        }
+
+        // SEARCH_CONTENT_CACHE_MINUTES / SEARCH_PATH_CACHE_MINUTES / SEARCH_CACHE_MAX_MINUTES: how long a
+        // search response stays cached, in minutes. 0 disables caching for that kind of search.
+        private static TimeSpan ResolveCacheTtl(string variable, int defaultMinutes = DefaultCacheMinutes)
+        {
+            var v = Environment.GetEnvironmentVariable(variable)?.Trim();
+            if (!string.IsNullOrEmpty(v) && int.TryParse(v, out var minutes) && minutes >= 0)
+            {
+                return TimeSpan.FromMinutes(minutes);
+            }
+            return TimeSpan.FromMinutes(defaultMinutes);
+        }
+
+        private static TimeSpan Min(TimeSpan a, TimeSpan b) => a < b ? a : b;
+
+        /// <summary>
+        /// Cache options for a search response: a long sliding lifetime so a repeated query keeps
+        /// hitting the cache, bounded by an absolute lifetime so it cannot be pinned indefinitely.
+        /// Returns null when caching is turned off for this kind of search.
+        /// </summary>
+        private static MemoryCacheEntryOptions? BuildCacheOptions(TimeSpan ttl)
+        {
+            if (ttl <= TimeSpan.Zero) return null;
+
+            var options = new MemoryCacheEntryOptions { SlidingExpiration = ttl };
+            if (ResultCacheMaxLifetime > TimeSpan.Zero && ResultCacheMaxLifetime > ttl)
+            {
+                options.AbsoluteExpirationRelativeToNow = ResultCacheMaxLifetime;
+            }
+            return options;
         }
 
         // SEARCH_THREADS: content-scan parallelism (default = logical CPU count).
@@ -253,6 +298,10 @@ namespace FortnitePorting.Controllers
 
             var matches = new List<string>();
             var truncated = false;
+            // Set only when the wall-clock budget stopped the scan. Unlike the match cap, that
+            // outcome depends on machine load rather than the query, so such a result must not be
+            // cached for the long lifetime a complete one gets.
+            var timedOut = false;
             var stopwatch = Stopwatch.StartNew();
             long seen = 0;
 
@@ -263,6 +312,7 @@ namespace FortnitePorting.Controllers
                     if (cancellationToken.IsCancellationRequested || stopwatch.Elapsed > ScanTimeBudget)
                     {
                         truncated = true;
+                        timedOut = true;
                         break;
                     }
                 }
@@ -347,10 +397,8 @@ namespace FortnitePorting.Controllers
             var responseJson = JsonConvert.SerializeObject(response, Formatting.Indented);
             if (!cancellationToken.IsCancellationRequested)
             {
-                _cache.Set(pathCacheKey, responseJson, new MemoryCacheEntryOptions
-                {
-                    SlidingExpiration = PathResultCacheTtl
-                });
+                var pathCacheOptions = BuildCacheOptions(timedOut ? Min(PathResultCacheTtl, PartialResultCacheTtl) : PathResultCacheTtl);
+                if (pathCacheOptions != null) _cache.Set(pathCacheKey, responseJson, pathCacheOptions);
             }
 
             return Content(responseJson, "application/json; charset=utf-8");
@@ -600,7 +648,8 @@ namespace FortnitePorting.Controllers
             // Cache the response unless the scan was cut short by client cancellation (partial result).
             if (!cancellationToken.IsCancellationRequested)
             {
-                _cache.Set(cacheKey, jsonOut, new MemoryCacheEntryOptions { SlidingExpiration = ResultCacheTtl });
+                var contentCacheOptions = BuildCacheOptions(ResultCacheTtl);
+                if (contentCacheOptions != null) _cache.Set(cacheKey, jsonOut, contentCacheOptions);
             }
 
             return Content(jsonOut, "application/json; charset=utf-8");

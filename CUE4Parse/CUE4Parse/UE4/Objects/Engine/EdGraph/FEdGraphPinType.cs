@@ -1,5 +1,3 @@
-using System;
-using System.Linq;
 using CUE4Parse.UE4.Assets.Exports.Component;
 using CUE4Parse.UE4.Assets.Readers;
 using CUE4Parse.UE4.Objects.UObject;
@@ -12,9 +10,9 @@ public class FEdGraphPinType : IUStruct
     public FName PinCategory;
     public FName PinSubCategory;
     public FPackageIndex PinSubCategoryObject;
-    public FEdGraphTerminalType PinValueType;
+    public FEdGraphTerminalType? PinValueType;
     public EPinContainerType ContainerType;
-    public FSimpleMemberReference PinSubCategoryMemberReference;
+    public FSimpleMemberReference? PinSubCategoryMemberReference;
 
     public bool bIsReference;
     public bool bIsConst;
@@ -24,8 +22,11 @@ public class FEdGraphPinType : IUStruct
 
     private static readonly string[] WrappedCategories = ["class", "object", "interface", "softclass", "softobject"];
 
+    public FEdGraphPinType() { }
     public FEdGraphPinType(FAssetArchive Ar)
     {
+        if (Ar.Ver < EUnrealEngineObjectUE4Version.EDGRAPHPINTYPE_SERIALIZATION) return;
+
         if (FFrameworkObjectVersion.Get(Ar) >= FFrameworkObjectVersion.Type.PinsStoreFName)
         {
             PinCategory = Ar.ReadFName();
@@ -50,9 +51,8 @@ public class FEdGraphPinType : IUStruct
             }
         }
 
+        //if(!Ar.IsObjectReferenceCollector() || Ar.IsModifyingWeakAndStrongReferences() || Ar.IsPersistent())
         PinSubCategoryObject = new FPackageIndex(Ar);
-        // if(Ar.IsPersistent())
-        //    Ar << Object;
 
         if (FFrameworkObjectVersion.Get(Ar) >= FFrameworkObjectVersion.Type.EdGraphPinContainerType)
         {

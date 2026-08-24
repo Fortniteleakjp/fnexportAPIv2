@@ -1,4 +1,4 @@
-﻿using CUE4Parse.UE4.Assets.Readers;
+using CUE4Parse.UE4.Assets.Readers;
 using CUE4Parse.UE4.Objects.UObject;
 using CUE4Parse.UE4.Versions;
 using Newtonsoft.Json;
@@ -13,11 +13,23 @@ namespace CUE4Parse.UE4.Objects.Engine
 
         public override void Deserialize(FAssetArchive Ar, long validPos)
         {
-            if (Ar.Game == EGame.GAME_WorldofJadeDynasty) Ar.Position += 8;
+            if (Ar.Game == GAME_WorldofJadeDynasty) Ar.Position += 8;
             base.Deserialize(Ar, validPos);
             PersistentLevel = new FPackageIndex(Ar);
-            ExtraReferencedObjects = Ar.ReadArray(() => new FPackageIndex(Ar));
-            StreamingLevels = Ar.ReadArray(() => new FPackageIndex(Ar));
+            if (Ar.Ver >= EUnrealEngineObjectUE3Version.ADDED_WORLD_EXTRA_REFERENCED_OBJECTS)
+            {
+                ExtraReferencedObjects = Ar.ReadArray(() => new FPackageIndex(Ar));
+            }
+            if (Ar.Game is GAME_AssaultFireFuture && TryGetValue<FPackageIndex>(out var composition, "MiniWorldComposition")) return;
+            if (Ar.Game >= GAME_UE4_0)
+            {
+                StreamingLevels = Ar.ReadArray(() => new FPackageIndex(Ar));
+            }
+
+            if (Ar.Game >= GAME_UE4_0 && Ar.Ver < EUnrealEngineObjectUE4Version.REMOVE_CLIENTDESTROYEDACTORCONTENT)
+            {
+                Ar.ReadArray(() => new FPackageIndex(Ar)); // TempClientDestroyedActorContent
+            }
         }
 
         protected internal override void WriteJson(JsonWriter writer, JsonSerializer serializer)

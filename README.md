@@ -15,7 +15,9 @@ HTTP で公開され、全エンドポイントを Swagger UI から確認・実
 | アセットエクスポート | `.uasset`／`.umap` を JSON、テクスチャを PNG、サウンドを音声として返却 |
 | ローカライズ | `lang=ja` などを指定してローカライズ済み文字列を取得 |
 | アイテム・コスメ検索 | アイテムのプロパティ、コスメ情報、アイコン、OfferCatalog を抽出 |
-| 全文検索 | パス・ファイル名だけでなく、読み込み済みアセットの内容も検索 |
+| 全文検索 | パス・ファイル名だけでなく、読み込み済みアセットの内容も検索（結果は既定 24 時間キャッシュ） |
+| FModel バックアップ | 現在のビルドのファイル一覧を FModel の `.fbkp` 形式で配信 |
+| 自動アップデート | 起動時に GitHub Releases API を確認し、確認プロンプト（y/n）を経て適用・再起動 |
 | AES／マニフェスト監視 | 新しいビルド・復号鍵・`.usmap` をバックグラウンドで自動反映 |
 | API ドキュメント | 日本語・英語対応の Swagger UI と OpenAPI JSON |
 
@@ -30,7 +32,7 @@ HTTP で公開され、全エンドポイントを Swagger UI から確認・実
 
 ## 最短で起動する
 
-1. .NET 9 SDK を用意します。
+1. .NET 10 SDK を用意します。
 2. Oodle と zlib-ng のネイティブライブラリを配置します（詳細は[必要なもの](#必要なもの)を参照）。
 3. 次のコマンドを実行します。
 
@@ -57,10 +59,10 @@ Unreal Engine のインストール（または FModel などのツール）か�
 **方法A — 実行ファイル／ビルド出力の隣に置く**
 ```bash
 # Windows
-copy oo2core_9_win64.dll FortnitePorting/bin/Debug/net9.0/
+copy oo2core_9_win64.dll FortnitePorting/bin/Debug/net10.0/
 
 # Linux
-cp liboo2corelinux64.so.9 FortnitePorting/bin/Debug/net9.0/
+cp liboo2corelinux64.so.9 FortnitePorting/bin/Debug/net10.0/
 ```
 
 **方法B — プロジェクトの `libs/` ディレクトリに置く**
@@ -123,7 +125,7 @@ build.bat
 出力:
 
 ```
-FortnitePorting/bin/Release/net9.0/FortnitePorting.exe
+FortnitePorting/bin/Release/net10.0/FortnitePorting.exe
 ```
 
 > Oodle／zlib-ng／RAD Audio のネイティブライブラリは実行時に取得されるため、exe には
@@ -156,8 +158,16 @@ docker run -p 3849:3849 \
 | `LOAD_ALL_VFS` | `false` | 厳選サブセットではなく全 VFS ファイルをマウント。 |
 | `SEARCH_THREADS` | (CPU数) | 内容検索の並列スキャン数。既定は論理 CPU 数（全コア活用）。 |
 | `CONTENT_CACHE_MB` | `unlimited`（無制限） | 内容検索で読み込んだ解凍バイトをキャッシュ。既定は無制限で、PAK状態が変わるまで保持。`0` で無効化、正の値でMB上限を指定可能。 |
+| `SEARCH_CONTENT_CACHE_MINUTES` | `1440`（24時間） | 内容検索（`/api/v1/search/content`）の同一クエリ結果を保持する分数（スライディング）。`0` でキャッシュ無効。 |
+| `SEARCH_PATH_CACHE_MINUTES` | `1440`（24時間） | パス検索（`/api/v1/search`）の同一クエリ結果を保持する分数（スライディング）。`0` でキャッシュ無効。 |
+| `SEARCH_CACHE_MAX_MINUTES` | `10080`（7日） | 検索結果キャッシュの絶対上限。連続ヒットしても、この時間を超えたエントリは破棄されます。 |
 | `AESFINDER_PATH` | `D:\AesFinder-main\...\AesFinder.exe` | `/aes` で使う外部 AesFinder ツールのパス（`.exe`／`.dll`／それを含むディレクトリ可）。 |
 | `AESFINDER_AUTO` | `true` | バックグラウンドで AesFinder により MainAES を自動抽出・投入（**main 鍵が未適用の時のみ**動作。`false` で無効）。 |
+| `AUTO_UPDATE` | (未設定) | `true` = 確認せず常に更新／`false` = GitHub へ一切アクセスしない／**未設定 = 更新がある時だけ起動時に y/n を尋ねる**。 |
+| `UPDATE_CHECK_ONLY` | `false` | 新しいリリースを通知するだけで、適用しません。 |
+| `UPDATE_RESTART` | `true` | 差し替え後に自動で再起動。`false` の場合は差し替えのみで、起動は手動になります。 |
+| `UPDATE_REPO` | `Fortniteleakjp/fnexportAPIv2` | リリースを取得する `owner/name`（フォーク運用向け）。 |
+| `GITHUB_TOKEN` | – | 任意。GitHub API の匿名レート制限（60回/時）を緩和します。 |
 
 > **マッピング（.usmap）の挙動**: 既定では `.usmap` マッピングを読み込みます。`USMAP_PATH` 指定時かつファイルが存在すればそれを使用し、**それ以外（未指定／指定ファイルが無い）の場合は最新版を自動ダウンロード**します（取得失敗時は既存のローカルファイルにフォールバック）。どうしても入手できない場合のみ、起動を失敗させずにスキップします（マッピング無しでは一部アセットがデシリアライズできません）。`SKIP_MAPPING=true` で明示的に無効化できます。
 
@@ -179,10 +189,12 @@ docker run -p 3849:3849 \
 | アーカイブ情報・AES 情報 | [`/api/v1/archives`](#アーカイブ情報aes--apiv1archives) |
 | コスメ・表示アセットの抽出 | [`/api/v1/pak`](#コスメ抽出--apiv1pak) |
 | 配信中ビルドの確認・最新ビルドへの再読み込み | [`/api/v1/build`](#ビルド状態--apiv1build) |
+| FModel 用バックアップ（`.fbkp`）の配信 | [`/api/v1/backup`](#fmodel-バックアップ--apiv1backup) |
+| 更新状況の確認・最新リリースへの更新 | [`/api/v1/update`](#自動アップデート--apiv1update) |
 
 > **CORS**: すべてのオリジンからの呼び出しを許可しています（任意のオリジン／メソッド／ヘッダ）。
 > 音声診断ヘッダ（`X-Audio-Format` / `X-Audio-Decoded` / `X-Rada-Native-Decoder`）と
-> `Content-Disposition` はブラウザから読めるよう公開されています。
+> `Content-Disposition`、バックアップ診断ヘッダ（`X-Backup-Entries` / `X-Backup-Version`）はブラウザから読めるよう公開されています。
 
 ### アセットエクスポート — `/api/v1/export`
 
@@ -275,7 +287,7 @@ http://localhost:3849/api/v1/search?q=*Athena*Soldier*&mode=wildcard&field=name&
 
 > **補足**: パス検索は全ファイル（約 240 万件）を走査します。`regex` は安全のため、評価ごとのタイムアウト（250 ミリ秒）・全体時間制限・パターン長制限が掛かります。内容検索（`/content`）は **アセットに加え `.ini`/`.bin`/`.json` 等の設定・テキストファイルも対象**で、パス一致 → **近傍アセット（同一プラグイン/フォルダ）** → 設定/テキスト → その他アセット の順で `maxScan` 件まで走査します。検出は文字列確保なしのバイト走査をマルチコアで並列実行するため、**既定で全ファイル（約165万件・約11GB）を約40秒で全件走査**します。これにより `RankedTier` のようにパスにヒントが無く多数のプラグインに散在するケースでも、`?q=RankedTier` だけで全件ヒットします。クイックに確認したいときは `maxScan` に小さい値（例: `maxScan=2000`）を指定すると先頭から部分走査します。対象が分かっていれば `dir`／`pathContains`／`ext` で絞ると高速です。
 >
-> **高速化**: 走査は**全 CPU コアで並列実行**します（`SEARCH_THREADS` で調整可）。さらに**同一クエリの結果は15分間キャッシュ**されるため、2回目以降は即時に返ります（新しいビルド／鍵で読み込みファイル数が変わると自動的に無効化）。解凍済みバイトも既定で無制限にキャッシュするため、別クエリの再走査でも再読み込み・再展開を抑えます。
+> **高速化**: 走査は**全 CPU コアで並列実行**します（`SEARCH_THREADS` で調整可）。さらに**同一クエリの結果は既定で24時間キャッシュ**されるため、2回目以降は即時に返ります（最終ヒットからのスライディング期限。上限は `SEARCH_CACHE_MAX_MINUTES` の7日）。キャッシュキーには読み込み済みファイル数が含まれ、加えて新ビルドでプロバイダーが再構築されるとレスポンスキャッシュ自体が全消去されるため、**古いビルドの結果が返ることはありません**。保持時間は `SEARCH_CONTENT_CACHE_MINUTES`／`SEARCH_PATH_CACHE_MINUTES` で変更でき、`0` で無効化できます。なお全体時間制限で打ち切られた（`truncated` かつ時間切れの）パス検索結果は、再試行で完全な結果を得られるよう **5分だけ**キャッシュされます。解凍済みバイトも既定で無制限にキャッシュするため、別クエリの再走査でも再読み込み・再展開を抑えます。
 
 ### AES鍵取得 — `/aes`
 
@@ -298,6 +310,70 @@ http://localhost:3849/api/v1/search?q=*Athena*Soldier*&mode=wildcard&field=name&
 |---|---|
 | `GET /api/v1/build` | 現在配信中のビルド（`appliedBuild`／`appliedManifestId`）、マニフェストが指すビルド、マウント済み VFS 数、未取得の鍵数、再構築中かどうか（`reloading`）を返します。再構築中も応答します。 |
 | `POST /api/v1/build/reload` | 30秒ポーリングを待たずに、最新マニフェストでプロバイダーを即座に再構築します。実行中は他のエンドポイントが `503` を返します。 |
+
+### FModel バックアップ — `/api/v1/backup`
+
+現在マウント中のビルドのファイル一覧を、**FModel のバックアップ形式（`.fbkp`）**で返します。
+FModel の「Load → All But New／All But Modified」に読み込ませることで、**このビルドと後のビルドの差分だけ**を一覧できます。
+
+| メソッド & パス | 説明 |
+|---|---|
+| `GET /api/v1/backup/fbkp?name={base}&includePayloads={bool}&compress={bool}` | `.fbkp` をダウンロード。既定のファイル名は FModel と同じ `FortniteGame_MM_dd_yyyy.fbkp`。 |
+| `GET /api/v1/backup?name={base}&includePayloads={bool}` | 生成せずに、収録件数・バージョン・想定ファイル名・現在のビルドを返します。 |
+
+```
+curl -OJ http://localhost:3849/api/v1/backup/fbkp
+```
+
+> **形式**: LZ4 フレームの中に、マジック `FBKP`（`0x504B4246`）、バックアップバージョン `2`（`PerfectPath`）、件数（int32）、
+> 続けて 1 件ごとに サイズ（int64）・暗号化フラグ（bool）・パス（7bit 長プレフィックス文字列）を書き出します。
+> [FModel の `BackupManagerViewModel.CreateBackup`](https://github.com/4sval/FModel/blob/63a7cbccd9fbaae9db45240069a49bd6a3a00b73/FModel/ViewModels/BackupManagerViewModel.cs#L23) と同一のバイト列です。
+>
+> **収録範囲**: FModel と同じく `.uexp`／`.ubulk`／`.uptnl` のペイロードは除外します（`includePayloads=true` で含められます）。
+> `compress=false` を指定すると LZ4 で包まずに書き出します（FModel は先頭の LZ4 マジックを見て判別するため、どちらでも読み込めます）。
+> レスポンスヘッダ `X-Backup-Entries`／`X-Backup-Version` に件数とバージョンが入ります。
+
+### 自動アップデート — `/api/v1/update`
+
+**起動時に GitHub Releases API（`https://api.github.com/repos/{owner}/{repo}/releases/latest`）を確認し、
+新しいリリースがあればダウンロード・展開・差し替えを行い、再起動します。**
+この確認は Fortnite ビルドのマウントより前に実行されるため、更新がある場合は重い初期化を無駄に行いません。
+
+**更新があるときだけ、コンソールで適用するかを尋ねます**（`AUTO_UPDATE` 未設定時）:
+
+```
+Auto-update: current 1.1.0, v1.1.14 is available
+Update to v1.1.14 now? [Y/n] (Y after 30s):
+```
+
+- `y` または Enter、および 30 秒無応答 → その場で更新して再起動します。
+- `n` → `AUTO_UPDATE` の設定方法を表示し、**5 秒後に通常の起動処理を開始**します（更新は行いません）。
+- 最新版の場合は何も尋ねず、そのまま起動します。
+- `AUTO_UPDATE=true`／`false` を設定すると以後は尋ねません。サービス実行や Docker のように
+  標準入力が端末でない場合も尋ねず、従来どおり自動で処理します。
+
+| メソッド & パス | 説明 |
+|---|---|
+| `GET /api/v1/update` | 実行中のバージョン、GitHub の最新リリース、更新可能かどうかとその理由を返します。 |
+| `POST /api/v1/update?force={bool}` | 再起動を待たずに、その場で最新リリースへ更新します（差し替えのためプロセスは一度終了します）。 |
+
+```
+curl http://localhost:3849/api/v1/update
+```
+
+> **差し替えの流れ**: 実行中の実行ファイルは自分自身を上書きできないため、リリース資産
+> （`FortnitePorting-win-x64.zip` / `FortnitePorting-linux-x64.tar.gz`）を `.update/staging` に展開し、
+> 本プロセスの終了を待って差し替えるスクリプト（`apply.cmd` / `apply.sh`）を起動してから終了します。
+> 差し替えは**コピー**であり、ミラーではありません。アーカイブに含まれない Oodle／zlib-ng などの
+> ネイティブライブラリ、`libs/`、`mappings/`、`chunk_cache/`、ローカル設定はそのまま残ります。
+>
+> **自動更新されない場合**（`GET /api/v1/update` の `reason` に表示されます）:
+> <br>・**ローカルビルド**: リリースワークフローがバージョンを刻んでいないビルド（`0.0.0-dev`）は、
+> 比較すべきバージョンが無く、開発中の作業ツリーをリリース版で上書きしてしまうため対象外です。
+> <br>・**コンテナ内**: Docker イメージは `dotnet FortnitePorting.dll` を実行する構成で、リリース資産
+> （自己完結ビルド）とは形が異なり、書き込んでも次回起動で失われます。イメージを取得し直してください。
+> <br>・**適用に失敗したバージョンの再試行**: 一度差し替えたのに古いままで起動した場合、無限ループを避けるため
+> 自動での再試行はしません（`POST /api/v1/update?force=true` で解除できます）。
 
 ### デバッグ — `/api/v1/debug`
 

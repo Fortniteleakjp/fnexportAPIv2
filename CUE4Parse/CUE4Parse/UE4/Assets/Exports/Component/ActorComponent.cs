@@ -1,10 +1,7 @@
-using CUE4Parse.UE4.Assets.Exports.Component.Atmosphere;
+using CUE4Parse.UE4.Assets.Exports.BuildData;
 using CUE4Parse.UE4.Assets.Exports.Component.Landscape;
-using CUE4Parse.UE4.Assets.Exports.Component.Lights;
 using CUE4Parse.UE4.Assets.Exports.Component.SkeletalMesh;
 using CUE4Parse.UE4.Assets.Exports.Component.StaticMesh;
-using CUE4Parse.UE4.Assets.Exports.Sound;
-using CUE4Parse.UE4.Assets.Exports.Texture;
 using CUE4Parse.UE4.Assets.Readers;
 using CUE4Parse.UE4.Objects.Core.Misc;
 using CUE4Parse.UE4.Objects.UObject;
@@ -23,8 +20,8 @@ public class UActorComponent : UObject
         if (Ar.Position == validPos) // I think after validpos all read default to dummy data 000000s
             return;
 
-        if (Ar.Game is EGame.GAME_SuicideSquad) Ar.Position += 4;
-        if (Ar.Game == EGame.GAME_WorldofJadeDynasty) Ar.Position += 16;
+        if (Ar.Game is GAME_SuicideSquad) Ar.Position += 4;
+        if (Ar.Game == GAME_WorldofJadeDynasty) Ar.Position += 16;
 
         if (FFortniteReleaseBranchCustomObjectVersion.Get(Ar) >= FFortniteReleaseBranchCustomObjectVersion.Type.ActorComponentUCSModifiedPropertiesSparseStorage)
         {
@@ -46,23 +43,8 @@ public class UActorSequenceComponent : UActorComponent;
 public class UActorTextureStreamingBuildDataComponent : UActorComponent;
 public class UApplicationLifecycleComponent : UActorComponent;
 public class UArchVisCharMovementComponent : UCharacterMovementComponent;
-public class UArrowComponent : UPrimitiveComponent;
 public class UAsyncPhysicsInputComponent : UActorComponent;
-public class UAtmosphericFogComponent : USkyAtmosphereComponent;
 public class UAudioCaptureComponent : USynthComponent;
-
-public class UAudioComponent : USceneComponent
-{
-    public USoundBase? Sound { get; protected set; }
-    
-    public override void Deserialize(FAssetArchive Ar, long validPos)
-    {
-        base.Deserialize(Ar, validPos);
-        
-        Sound = GetOrDefault<USoundBase?>(nameof(Sound));
-    }
-}
-
 public class UAudioCurveSourceComponent : UAudioComponent;
 public class UAxisGizmoHandleGroup : UGizmoHandleGroup;
 public class UBaseDynamicMeshComponent : UMeshComponent;
@@ -76,34 +58,17 @@ public class UBasicLineSetComponentBase : UMeshComponent;
 public class UBasicPointSetComponentBase : UMeshComponent;
 public class UBasicTriangleSetComponentBase : UMeshComponent;
 public class UBehaviorTreeComponent : UBrainComponent;
-
-public class UBillboardComponent : UPrimitiveComponent
-{
-    public UTexture2D? GetSprite()
-    {
-        var current = this;
-        while (current != null)
-        {
-            var sprite = current.GetOrDefault<UTexture2D?>("Sprite");
-            if (sprite != null) return sprite;
-            
-            current = current.Template?.Load<UBillboardComponent>();
-        }
-        
-        return Owner?.Provider?.LoadPackageObject<UTexture2D>("Engine/Content/EditorResources/S_Actor.S_Actor");
-    }
-}
 public class UBlackboardComponent : UActorComponent;
 public class UBoundsCopyComponent : UActorComponent;
 public class UBoxComponent : UShapeComponent;
 public class UBoxFalloff : UFieldNodeFloat;
 public class UBoxReflectionCaptureComponent : UReflectionCaptureComponent;
 public class UBrainComponent : UActorComponent;
-public class UBrushComponent : UPrimitiveComponent;
 public class UCableComponent : UMeshComponent;
 public class UCameraComponent : USceneComponent;
 public class UCameraShakeSourceComponent : USceneComponent;
 public class UCapsuleComponent : UShapeComponent;
+public class UCylinderComponent : UPrimitiveComponent;
 public class UChaosDebugDrawComponent : UActorComponent;
 public class UChaosDestructionListener : USceneComponent;
 public class UChaosEventListenerComponent : UActorComponent;
@@ -132,6 +97,7 @@ public class UDebugSkelMeshComponent : USkeletalMeshComponent;
 public class UDefaultPawnMovement : UFloatingPawnMovement;
 public class UDrawFrustumComponent : UPrimitiveComponent;
 public class UDrawSphereComponent : USphereComponent;
+public class UDrawSoundRadiusComponent : UDrawSphereComponent;
 public class UDynamicMeshComponent : UBaseDynamicMeshComponent;
 public class UEQSRenderingComponent : UDebugDrawComponent;
 public class UEditorAutomationActorComponent : UEditorUtilityActorComponent;
@@ -150,6 +116,25 @@ public class UFieldSystemMetaDataFilter : UFieldSystemMetaData;
 public class UFieldSystemMetaDataIteration : UFieldSystemMetaData;
 public class UFieldSystemMetaDataProcessingResolution : UFieldSystemMetaData;
 public class UFloatingPawnMovement : UPawnMovementComponent;
+
+public class UFluidSurfaceComponent : UPrimitiveComponent
+{
+    public override void Deserialize(FAssetArchive Ar, long validPos)
+    {
+        base.Deserialize(Ar, validPos);
+
+        if (Ar.Ver >= EUnrealEngineObjectUE3Version.ADDED_FLUID_LIGHTMAPS)
+        {
+            FLightMap? lightMap = Ar.Read<ELightMapType>() switch
+            {
+                ELightMapType.LMT_1D => new FLegacyLightMap1D(Ar),
+                ELightMapType.LMT_2D => new FLightMap2D(Ar),
+                _ => null
+            };
+        }
+    }
+}
+
 public class UForceFeedbackComponent : USceneComponent;
 public class UFuncTestRenderingComponent : UPrimitiveComponent;
 public class UGameplayCameraComponent : USceneComponent;
@@ -157,7 +142,6 @@ public class UGameplayCameraSystemComponent : USceneComponent;
 public class UGameplayDebuggerRenderingComponent : UDebugDrawComponent;
 public class UGameplayTasksComponent : UActorComponent;
 public class UGeometryCacheComponent : UMeshComponent;
-public class UGeometryCollectionComponent : UMeshComponent;
 public class UGeometryCollectionDebugDrawComponent : UActorComponent;
 public class UGeometryCollectionISMPoolComponent : USceneComponent;
 public class UGeometryCollectionISMPoolDebugDrawComponent : UDebugDrawComponent;
@@ -186,7 +170,6 @@ public class ULandscapeGizmoRenderComponent : UPrimitiveComponent;
 public class ULandscapeMeshCollisionComponent : ULandscapeHeightfieldCollisionComponent;
 public class ULandscapeMeshProxyComponent : UStaticMeshComponent;
 public class ULandscapeNaniteComponent : UStaticMeshComponent;
-public class ULandscapeSplinesComponent : UPrimitiveComponent;
 public class ULevelInstanceComponent : USceneComponent;
 public class ULightmassPortalComponent : USceneComponent;
 public class ULineBatchComponent : UPrimitiveComponent;
@@ -199,7 +182,6 @@ public class UMaterialSpriteComponent : UMaterialBillboardComponent;
 public class UMediaComponent : UActorComponent;
 public class UMediaPlateComponent : UActorComponent;
 public class UMediaSoundComponent : USynthComponent;
-public class UMeshComponent : UPrimitiveComponent;
 public class UWaterBodyComponent : UPrimitiveComponent;
 public class UWaterMeshComponent : UMeshComponent;
 public class UMeshWireframeComponent : UMeshComponent;
@@ -242,26 +224,25 @@ public class UPaperTerrainComponent : UPrimitiveComponent;
 public class UPaperTerrainSplineComponent : USplineComponent;
 public class UPaperTileMapComponent : UMeshComponent;
 public class UPaperTileMapRenderComponent : UPaperTileMapComponent;
-
 public class UParticleSystemComponent : UFXSystemComponent
 {
     public override void Deserialize(FAssetArchive Ar, long validPos)
     {
-        if(Ar.Game == EGame.GAME_WorldofJadeDynasty) Ar.Position += 16;
+        if (Ar.Game == GAME_WorldofJadeDynasty) Ar.Position += 16;
         base.Deserialize(Ar, validPos);
     }
 }
-
 public class UParticleSystem : UObject
 {
     public override void Deserialize(FAssetArchive Ar, long validPos)
     {
-        if(Ar.Game == EGame.GAME_WorldofJadeDynasty) Ar.Position += 8;
+        if(Ar.Game == GAME_WorldofJadeDynasty) Ar.Position += 8;
         base.Deserialize(Ar, validPos);
     }
 }
 
 public class UPathFollowingComponent : UActorComponent;
+public class UPathRenderingComponent : UPrimitiveComponent;
 public class UPawnActionsComponent : UActorComponent;
 public class UPawnMovementComponent : UNavMovementComponent;
 public class UPawnNoiseEmitterComponent : UActorComponent;
@@ -295,7 +276,6 @@ public class URadialForceComponent : USceneComponent;
 public class URadialIntMask : UFieldNodeInt;
 public class URadialVector : UFieldNodeVector;
 public class URandomVector : UFieldNodeVector;
-public class UReflectionCaptureComponent : USceneComponent;
 public class UReturnResultsTerminal : UFieldNodeBase;
 public class URotatingMovementComponent : UMovementComponent;
 public class URuntimeVirtualTextureComponent : USceneComponent;
@@ -306,8 +286,6 @@ public class USensingComponent : UPawnSensingComponent;
 public class UShapeComponent : UPrimitiveComponent;
 public class USingleAnimSkeletalComponent : USkeletalMeshComponent;
 public class USkeletalMeshReplicatedComponent : USkeletalMeshComponent;
-public class USkinnedMeshComponent : UMeshComponent;
-public class USkyLightComponent : ULightComponentBase;
 public class USmartNavLinkComponent : UNavLinkCustomComponent;
 public class USparseVolumeTextureViewerComponent : UPrimitiveComponent;
 public class USpectatorPawnMovement : UFloatingPawnMovement;
@@ -345,6 +323,7 @@ public class UWaveScalar : UFieldNodeFloat;
 public class UWidgetComponent : UMeshComponent;
 public class UWidgetInteractionComponent : USceneComponent;
 public class UWindDirectionalSourceComponent : USceneComponent;
+public class UWindPointSourceComponent : UWindDirectionalSourceComponent;
 public class UWorldPartitionDestructibleHLODComponent : USceneComponent;
 public class UWorldPartitionDestructibleHLODMeshComponent : UWorldPartitionDestructibleHLODComponent;
 public class UWorldPartitionStreamingSourceComponent : UActorComponent;

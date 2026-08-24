@@ -1,4 +1,3 @@
-using CUE4Parse.UE4.Assets.Readers;
 using CUE4Parse.UE4.Objects.Core.Math;
 using CUE4Parse.UE4.Objects.Engine;
 using CUE4Parse.UE4.Readers;
@@ -13,10 +12,12 @@ public class FSkeletalMeshVertexBuffer
     public int NumTexCoords;
     public FVector MeshExtension;
     public FVector MeshOrigin;
-    public bool bUseFullPrecisionUVs;
+    public bool bUseFullPrecisionUVs = true;
     public bool bExtraBoneInfluences;
     public FGPUVertHalf[] VertsHalf;
     public FGPUVertFloat[] VertsFloat;
+    public FGPUVertHalfPacked[] VertsHalfPacked;
+    public FGPUVertFloatPacked[] VertsFloatPacked;
 
     public FSkeletalMeshVertexBuffer()
     {
@@ -29,7 +30,7 @@ public class FSkeletalMeshVertexBuffer
         var stripDataFlags = new FStripDataFlags(Ar, FPackageFileVersion.CreateUE4Version(EUnrealEngineObjectUE4Version.STATIC_SKELETAL_MESH_SERIALIZATION_FIX));
 
         NumTexCoords = Ar.Read<int>();
-        bUseFullPrecisionUVs = Ar.ReadBoolean();
+        if (Ar.Ver >= EUnrealEngineObjectUE3Version.AddedFullPrecisionUV) bUseFullPrecisionUVs = Ar.ReadBoolean();
 
         if (Ar.Ver >= EUnrealEngineObjectUE4Version.SUPPORT_GPUSKINNING_8_BONE_INFLUENCES &&
             FSkeletalMeshCustomVersion.Get(Ar) < FSkeletalMeshCustomVersion.Type.UseSeparateSkinWeightBuffer)
@@ -50,6 +51,8 @@ public class FSkeletalMeshVertexBuffer
     {
         if (VertsHalf.Length > 0) return VertsHalf.Length;
         if (VertsFloat.Length > 0) return VertsFloat.Length;
+        if (VertsHalfPacked.Length > 0) return VertsHalfPacked.Length;
+        if (VertsFloatPacked.Length > 0) return VertsFloatPacked.Length;
         return 0;
     }
 }
