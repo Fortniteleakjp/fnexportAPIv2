@@ -4,6 +4,7 @@ using System.IO.Compression;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Reflection;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -454,7 +455,11 @@ public static class SelfUpdateService
                 endlocal
                 """;
 
-            File.WriteAllText(scriptPath, script);
+            // cmd.exe uses the system ANSI code page for a batch file without a BOM. That
+            // turns non-ASCII installation paths (for example Japanese directory names) into
+            // mojibake before robocopy/start can use them. UTF-16LE with a BOM is explicitly
+            // recognized by cmd.exe and preserves the paths exactly.
+            File.WriteAllText(scriptPath, script, Encoding.Unicode);
             return scriptPath;
         }
 
@@ -672,4 +677,3 @@ public static class SelfUpdateService
         [JsonPropertyName("browser_download_url")] public string? BrowserDownloadUrl { get; set; }
     }
 }
-
