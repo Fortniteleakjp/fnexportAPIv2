@@ -33,54 +33,70 @@ public sealed class BackupController : ControllerBase
     /// <summary>
     /// Reports what the generated backup would contain, without producing it.
     /// </summary>
-    /// <param name="name">Base name used for the suggested file name (default FortniteGame).</param>
     /// <param name="includePayloads">Include payload files (.uexp/.ubulk/.uptnl); FModel excludes them.</param>
     [HttpGet]
-    public IActionResult GetInfo([FromQuery] string? name = null, [FromQuery] bool includePayloads = false)
+    public IActionResult GetInfo([FromQuery] bool includePayloads = false)
     {
         var entries = CollectEntries(includePayloads);
         return Ok(new
         {
-            fileName = BuildFileName(name),
+            fileName = BuildFileName(),
             magic = "FBKP",
             version = FbkpBackupWriter.Version,
             includePayloads,
             entryCount = entries.Count,
             totalFiles = _provider.Files.Count,
-            build = _manifestService.AppliedBuildVersion ?? _manifestService.GameBuild,
-            downloadUrl = Url.Action(nameof(Download), "Backup", new { name, includePayloads })
+            build = MountedBuild(),
+            downloadUrl = Url.Action(nameof(Download), "Backup", new { includePayloads })
         });
     }
 
     /// <summary>
-    /// Builds and streams the <c>.fbkp</c> backup of the mounted build.
+    /// Builds and returns the <c>.fbkp</c> backup of the mounted build. The file is named after that
+    /// build (<c>FortniteGame_42_00.fbkp</c>), which is what distinguishes one backup from another.
     /// </summary>
-    /// <param name="name">Base name used for the file name (default FortniteGame).</param>
     /// <param name="includePayloads">Include payload files (.uexp/.ubulk/.uptnl); FModel excludes them.</param>
     /// <param name="compress">Write the LZ4 frame FModel produces (default). False writes the plain body,
     /// which FModel also accepts because it sniffs the LZ4 magic before decoding.</param>
     /// <param name="cancellationToken">Request cancellation state.</param>
     [HttpGet("fbkp")]
-    public async Task Download(
-        [FromQuery] string? name = null,
+    public async Task<IActionResult> Download(
         [FromQuery] bool includePayloads = false,
         [FromQuery] bool compress = true,
         CancellationToken cancellationToken = default)
     {
         var entries = CollectEntries(includePayloads);
-        var fileName = BuildFileName(name);
+        var fileName = BuildFileName();
 
         _logger.LogInformation("Serving backup {FileName} with {EntryCount} entries (compress={Compress})",
             fileName, entries.Count, compress);
 
-        Response.ContentType = "application/octet-stream";
-        Response.Headers.ContentDisposition = $"attachment; filename=\"{fileName}\"";
-        // The compressed length is unknown up front, so the body is streamed instead of buffered.
+        // The format is written with a BinaryWriter, and Kestrel rejects synchronous writes to the
+        // response body, so the backup is produced into a temp file and streamed back from there.
+        // A file rather than a MemoryStream keeps a backup of several hundred thousand entries off
+        // the heap, and it gives the response a Content-Length so clients can show progress.
+        var tempPath = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        try
+        {
+            await using (var temp = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None))
+            {
+                FbkpBackupWriter.Write(temp, entries, compress, cancellationToken);
+            }
+        }
+        catch
+        {
+            TryDelete(tempPath);
+            throw;
+        }
+
         Response.Headers["X-Backup-Entries"] = entries.Count.ToString();
         Response.Headers["X-Backup-Version"] = FbkpBackupWriter.Version.ToString();
 
-        FbkpBackupWriter.Write(Response.Body, entries, compress, cancellationToken);
-        await Response.Body.FlushAsync(cancellationToken);
+        // DeleteOnClose: the result disposes the stream once the body has been written, and the file
+        // goes with it whether the transfer succeeded or the client walked away.
+        var stream = new FileStream(tempPath, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024,
+            FileOptions.DeleteOnClose | FileOptions.Asynchronous);
+        return File(stream, "application/octet-stream", fileName);
     }
 
     /// <summary>
@@ -99,17 +115,57 @@ public sealed class BackupController : ControllerBase
     }
 
     /// <summary>
-    /// FModel's own naming scheme: <c>{game}_{MM_dd_yyyy}.fbkp</c>.
+    /// Names the backup after the build it describes: <c>FortniteGame_42_00.fbkp</c>. Falls back to
+    /// FModel's date-based name only when the build version is not known yet.
     /// </summary>
-    private static string BuildFileName(string? name)
+    private string BuildFileName()
     {
-        var baseName = string.IsNullOrWhiteSpace(name) ? "FortniteGame" : name.Trim();
+        var suffix = ShortVersion(MountedBuild());
+        if (string.IsNullOrEmpty(suffix))
+        {
+            suffix = DateTime.Now.ToString("MM'_'dd'_'yyyy");
+        }
+
+        return $"FortniteGame_{suffix}.fbkp";
+    }
+
+    /// <summary>
+    /// The build whose archives are actually mounted. It can lag the manifest while a reload is
+    /// pending, and the backup describes what is mounted, not what is about to be.
+    /// </summary>
+    private string MountedBuild() =>
+        !string.IsNullOrWhiteSpace(_manifestService.AppliedBuildVersion)
+            ? _manifestService.AppliedBuildVersion
+            : _manifestService.GameBuild;
+
+    /// <summary>
+    /// Reduces "++Fortnite+Release-42.00-CL-56878558-Windows" to "42_00", matching how
+    /// ManifestService pulls the release number out of the build string.
+    /// </summary>
+    private static string ShortVersion(string? buildVersion)
+    {
+        if (string.IsNullOrWhiteSpace(buildVersion)) return string.Empty;
+
+        var parts = buildVersion.Split('-');
+        var version = parts.Length > 2 ? parts[1] : buildVersion;
+
+        version = version.Trim().Replace('.', '_');
         foreach (var invalid in Path.GetInvalidFileNameChars())
         {
-            baseName = baseName.Replace(invalid, '_');
+            version = version.Replace(invalid, '_');
         }
-        if (baseName.Length == 0) baseName = "FortniteGame";
+        return version;
+    }
 
-        return $"{baseName}_{DateTime.Now:MM'_'dd'_'yyyy}.fbkp";
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            if (System.IO.File.Exists(path)) System.IO.File.Delete(path);
+        }
+        catch
+        {
+            // A leftover temp file is not worth failing the request over.
+        }
     }
 }

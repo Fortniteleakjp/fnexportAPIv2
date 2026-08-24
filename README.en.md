@@ -271,8 +271,8 @@ relative to this one.
 
 | Method & path | Description |
 |---|---|
-| `GET /api/v1/backup/fbkp?name={base}&includePayloads={bool}&compress={bool}` | Downloads the `.fbkp`. The default file name matches FModel's own: `FortniteGame_MM_dd_yyyy.fbkp`. |
-| `GET /api/v1/backup?name={base}&includePayloads={bool}` | Reports the entry count, version, suggested file name, and current build without generating the file. |
+| `GET /api/v1/backup/fbkp?includePayloads={bool}&compress={bool}` | Downloads the `.fbkp`. The file is named after the **mounted build** (for example `FortniteGame_42_00.fbkp`). |
+| `GET /api/v1/backup?includePayloads={bool}` | Reports the entry count, version, suggested file name, and current build without generating the file. |
 
 ```
 curl -OJ http://localhost:3849/api/v1/backup/fbkp
@@ -286,6 +286,10 @@ curl -OJ http://localhost:3849/api/v1/backup/fbkp
 > **Contents**: like FModel, `.uexp` / `.ubulk` / `.uptnl` payloads are excluded (`includePayloads=true` keeps them).
 > `compress=false` writes the plain body; FModel sniffs the LZ4 magic first, so it loads either form.
 > The entry count and version are also returned in the `X-Backup-Entries` / `X-Backup-Version` headers.
+>
+> **File name**: derived from the mounted build (`++Fortnite+Release-42.00-CL-...`) as
+> `FortniteGame_42_00.fbkp`. It falls back to FModel's date form (`FortniteGame_MM_dd_yyyy.fbkp`)
+> only while the build version is still unknown.
 
 ### Auto-update — `/api/v1/update`
 

@@ -318,8 +318,8 @@ FModel の「Load → All But New／All But Modified」に読み込ませるこ�
 
 | メソッド & パス | 説明 |
 |---|---|
-| `GET /api/v1/backup/fbkp?name={base}&includePayloads={bool}&compress={bool}` | `.fbkp` をダウンロード。既定のファイル名は FModel と同じ `FortniteGame_MM_dd_yyyy.fbkp`。 |
-| `GET /api/v1/backup?name={base}&includePayloads={bool}` | 生成せずに、収録件数・バージョン・想定ファイル名・現在のビルドを返します。 |
+| `GET /api/v1/backup/fbkp?includePayloads={bool}&compress={bool}` | `.fbkp` をダウンロード。ファイル名は**マウント中のビルド**から決まります（例: `FortniteGame_42_00.fbkp`）。 |
+| `GET /api/v1/backup?includePayloads={bool}` | 生成せずに、収録件数・バージョン・想定ファイル名・現在のビルドを返します。 |
 
 ```
 curl -OJ http://localhost:3849/api/v1/backup/fbkp
@@ -332,6 +332,9 @@ curl -OJ http://localhost:3849/api/v1/backup/fbkp
 > **収録範囲**: FModel と同じく `.uexp`／`.ubulk`／`.uptnl` のペイロードは除外します（`includePayloads=true` で含められます）。
 > `compress=false` を指定すると LZ4 で包まずに書き出します（FModel は先頭の LZ4 マジックを見て判別するため、どちらでも読み込めます）。
 > レスポンスヘッダ `X-Backup-Entries`／`X-Backup-Version` に件数とバージョンが入ります。
+>
+> **ファイル名**: マウント中のビルド（`++Fortnite+Release-42.00-CL-...`）から `FortniteGame_42_00.fbkp` を生成します。
+> ビルドが未取得のときのみ、FModel と同じ日付形式（`FortniteGame_MM_dd_yyyy.fbkp`）にフォールバックします。
 
 ### 自動アップデート — `/api/v1/update`
 
