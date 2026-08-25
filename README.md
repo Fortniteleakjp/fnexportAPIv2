@@ -161,6 +161,10 @@ docker run -p 3849:3849 \
 | `SEARCH_CONTENT_CACHE_MINUTES` | `1440`（24時間） | 内容検索（`/api/v1/search/content`）の同一クエリ結果を保持する分数（スライディング）。`0` でキャッシュ無効。 |
 | `SEARCH_PATH_CACHE_MINUTES` | `1440`（24時間） | パス検索（`/api/v1/search`）の同一クエリ結果を保持する分数（スライディング）。`0` でキャッシュ無効。 |
 | `SEARCH_CACHE_MAX_MINUTES` | `10080`（7日） | 検索結果キャッシュの絶対上限。連続ヒットしても、この時間を超えたエントリは破棄されます。 |
+| `HOTFIX_CLOUDSTORAGE_URL` | `https://api.fljpapi.jp/api/v2/cloudstorage` | `hotfix=true` で読み込む cloudstorage 一覧のURL。各ファイルは `{URL}/{uniqueFilename}` から取得します。 |
+| `HOTFIX_CACHE_MINUTES` | `10` | ホットフィックスの一覧を確認し直すまでの分数。 |
+| `HOTFIX_CACHE_DIR` | `<PROJECT_ROOT>/hotfix_cache` | ダウンロードしたホットフィックス設定ファイルの保存先。再起動後も再利用します。 |
+| `HOTFIX_DISK_CACHE` | `true` | `false` でディスクキャッシュを無効化（毎回ダウンロード）。 |
 | `AESFINDER_PATH` | `D:\AesFinder-main\...\AesFinder.exe` | `/aes` で使う外部 AesFinder ツールのパス（`.exe`／`.dll`／それを含むディレクトリ可）。 |
 | `AESFINDER_AUTO` | `true` | バックグラウンドで AesFinder により MainAES を自動抽出・投入（**main 鍵が未適用の時のみ**動作。`false` で無効）。 |
 | `AUTO_UPDATE` | (未設定) | `true` = 確認せず常に更新／`false` = GitHub へ一切アクセスしない／**未設定 = 更新がある時だけ起動時に y/n を尋ねる**。 |
@@ -194,17 +198,94 @@ docker run -p 3849:3849 \
 
 > **CORS**: すべてのオリジンからの呼び出しを許可しています（任意のオリジン／メソッド／ヘッダ）。
 > 音声診断ヘッダ（`X-Audio-Format` / `X-Audio-Decoded` / `X-Rada-Native-Decoder`）と
-> `Content-Disposition`、バックアップ診断ヘッダ（`X-Backup-Entries` / `X-Backup-Version`）はブラウザから読めるよう公開されています。
+> `Content-Disposition`、バックアップ診断ヘッダ（`X-Backup-Entries` / `X-Backup-Version`）、
+> ホットフィックス診断ヘッダ（`X-Hotfix-Status` / `X-Hotfix-Applied`）はブラウザから読めるよう公開されています。
 
 ### アセットエクスポート — `/api/v1/export`
 
 | メソッド & パス | 説明 |
 |---|---|
-| `GET /api/v1/export?path={path}&image={bool}&audio={bool}&lang={code}` | アセットをエクスポート。既定は JSON で、全エクスポートを `jsonOutput` 配列に返します。Unrealの通常プロパティ名は元の大文字・小文字を保持し、ローカライズ文字列のキーのみ FortniteAPI と同じ `namespace`・`key`・`sourceString`・`localizedString` にします。`hash` はその配列の UTF-8 JSON の SHA-256、`entries` は件数、`bytes` は同JSONのバイト数です。`image=true` でテクスチャを PNG、`audio=true` でサウンドを音声、`lang` でローカライズ（例: `ja`）。**`image=true` でも対象がテクスチャでない場合は自動的に JSON を返します。** |
+| `GET /api/v1/export?path={path}&image={bool}&audio={bool}&lang={code}&hotfix={bool}` | アセットをエクスポート。既定は JSON で、全エクスポートを `jsonOutput` 配列に返します。Unrealの通常プロパティ名は元の大文字・小文字を保持し、ローカライズ文字列のキーのみ FortniteAPI と同じ `namespace`・`key`・`sourceString`・`localizedString` にします。`hash` はその配列の UTF-8 JSON の SHA-256、`entries` は件数、`bytes` は同JSONのバイト数です。`image=true` でテクスチャを PNG、`audio=true` でサウンドを音声、`lang` でローカライズ（例: `ja`）、`hotfix=true` で[ホットフィックス適用済みの内容](#ホットフィックス適用--hotfixtrue)を返します。**`image=true` でも対象がテクスチャでない場合は自動的に JSON を返します。** |
 | `GET /api/v1/export/audioinfo?path={path}` | サウンドアセットの形式や WAV 変換可否を、バイナリを返さずに報告。 |
 | `GET /api/v1/export/locres?lang={code}` | 指定言語の結合済みローカライズテーブル。 |
 | `GET /api/v1/export/locres/languages` | 利用可能なローカライズ言語の一覧。 |
 | `GET /api/v1/export/filepath/{pakName}` | 指定 pak／チャンク番号内のファイルパス一覧。 |
+
+#### ホットフィックス適用 — `hotfix=true`
+
+Fortnite は pak に焼き込まれた値をそのまま使うのではなく、cloudstorage の設定ファイルで
+DataTable／CurveTable の中身や表示テキストを上書きしてから実行します。
+`hotfix=true` を付けると、その上書きを適用した JSON（＝実際にゲームが動いている値）を返します。
+既定は `false` で、その場合は従来どおり pak の内容をそのまま返します。
+
+読み取るセクションは 2 つです:
+
+- `[AssetHotfix]` — DataTable／CurveTable／CurveFloat の中身の書き換え（アセット単位）。
+- `[/Script/FortniteGame.FortTextHotfixConfig]` — `+TextReplacements=` による FText の差し替え（namespace と key で一致するテキストすべて）。
+
+対象ファイルは `https://api.fljpapi.jp/api/v2/cloudstorage` の一覧に載っている**すべての**ファイルです
+（`[AssetHotfix]` は `DefaultGame.ini` だけでなく `DefaultBlastberryGame.ini` や `IOS_Game.ini` などにもあり、
+`+TextReplacements=` は `PS5_Game.ini` などプラットフォーム別ファイルにもあります）。
+取得内容は既定で 10 分キャッシュされ、内容が変わるとレスポンスキャッシュも自動的に無効化されます。
+
+##### キャッシュ
+
+ダウンロードしたファイルは `hotfix_cache/` に保存され、**再起動しても再ダウンロードしません**。
+cloudstorage の `uniqueFilename` は再アップロードのたびに変わるため、キャッシュは内容アドレス方式になり、
+古い内容が居座ることはありません（更新されたファイルだけが新しい名前で降ってきます）。
+
+- 一覧（`listing.json`）も保存するので、**cloudstorage に到達できない状態で起動しても**キャッシュだけでホットフィックスを提供できます。
+- 読み込み時にサイズと SHA-256 を照合し、壊れていれば自動的に取り直します。
+- 一覧から消えたファイルは自動削除されます。
+
+| | 所要時間 | ダウンロード |
+|---|---|---|
+| 初回（キャッシュ無し） | 約 5.1 秒 | 62 ファイル |
+| 2回目以降（キャッシュ有り） | 約 0.08 秒 | 0 ファイル |
+
+| 環境変数 | 既定値 | 説明 |
+|---|---|---|
+| `HOTFIX_CLOUDSTORAGE_URL` | `https://api.fljpapi.jp/api/v2/cloudstorage` | 一覧のURL。各ファイルは `{URL}/{uniqueFilename}` から取得します。 |
+| `HOTFIX_CACHE_MINUTES` | `10` | 一覧を確認し直すまでの分数（メモリ上の索引の保持時間）。 |
+| `HOTFIX_CACHE_DIR` | `<PROJECT_ROOT>/hotfix_cache` | ダウンロードしたファイルの保存先。 |
+| `HOTFIX_DISK_CACHE` | `true` | `false` にするとディスクキャッシュを使わず毎回ダウンロードします。 |
+
+対応している書き換えは次のとおりです:
+
+| 行 | 動作 |
+|---|---|
+| `+CurveTable=Path;RowUpdate;Row;KeyTime;Value` | 指定行のカーブの、そのキー時刻の値を書き換え（無ければキーを挿入）。 |
+| `+CurveTable=Path;TableUpdate;"[{...}]"` | カーブテーブルの全行を置き換え。 |
+| `+DataTable=Path;RowUpdate;Row;Property;Value` | 指定行の1プロパティを書き換え。構造体リテラル `(X=1,Y=3)` はメンバー単位でマージします。 |
+| `+DataTable=Path;AddRow;"{...}"` | JSON で指定した行を追加。 |
+| `+DataTable=Path;TableUpdate;"[{...}]"` | データテーブルの全行を置き換え。 |
+| `+CurveFloat=Path;CurveUpdate;"{...}"` | `UCurveFloat` のカーブを置き換え。 |
+| `+TextReplacements=(Category=…, Namespace="", Key="…", NativeString="…", LocalizedStrings=(("ja","…"),…))` | 同じ namespace・key を持つ FText の `SourceString` を `NativeString` に、`LocalizedString` をリクエストの `lang` に対応する訳文に差し替え。 |
+
+pak に存在しない行への `RowUpdate` はゲームと同じく無視し、レスポンスで `rowNotFound` として報告します。
+
+テキスト差し替えはアセット単位ではなく、書き出した JSON 中の FText すべてを namespace と key で照合します。
+`.locres` によるローカライズの**後**に適用するため、ホットフィックスがある文字列は locres より優先されます。
+`lang` に完全一致する訳文が無い場合は、同じ言語の別地域（`pt` → `pt-BR`）、`en`、`NativeString` の順にフォールバックします。
+同じ key が複数ファイルにある場合（プラットフォーム別の文言など）は、ファイル名順で最後のものを採用します。
+
+例（冒頭のカーブを `0.0 → 1.0` に書き換えるホットフィックス）:
+```
+http://localhost:3849/api/v1/export?path=/SpriteBoons_Ch7S4/DataTables/SpriteBoons_Ch7S4GameData&lang=ja&hotfix=true
+```
+
+レスポンスの形は `hotfix` の有無で変わりません。`hash`・`entries`・`bytes`・`jsonOutput` の
+通常のレスポンスのまま、`jsonOutput` の中身だけがホットフィックス適用後の値になります
+（`hash` も適用後の JSON から計算されます）。
+
+適用状況はヘッダで確認できます:
+
+- `X-Hotfix-Status` — `applied`（1件以上書き換えた）／`none`（書き換えなし。該当ホットフィックスが無いか、対象行が pak に存在しない）／`unavailable`（cloudstorage に到達できず）。
+- `X-Hotfix-Applied` — 実際に適用された件数。
+
+cloudstorage に到達できない場合でもエクスポート自体は失敗させず、pak のままの内容を
+`X-Hotfix-Status: unavailable` を付けて返します（この応答はキャッシュしません）。
+`POST /api/v1/export/batch` でもリクエストボディの `hotfix` で同じ指定ができます。
 
 #### 音声出力
 

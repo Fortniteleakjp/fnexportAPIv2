@@ -128,6 +128,10 @@ docker run -p 3849:3849 \
 | `SEARCH_CONTENT_CACHE_MINUTES` | `1440` (24h) | Sliding lifetime, in minutes, of a cached content-search response (`/api/v1/search/content`). `0` disables the cache. |
 | `SEARCH_PATH_CACHE_MINUTES` | `1440` (24h) | Sliding lifetime, in minutes, of a cached path-search response (`/api/v1/search`). `0` disables the cache. |
 | `SEARCH_CACHE_MAX_MINUTES` | `10080` (7d) | Absolute ceiling on a cached search response, so a repeatedly hit query cannot pin its memory indefinitely. |
+| `HOTFIX_CLOUDSTORAGE_URL` | `https://api.fljpapi.jp/api/v2/cloudstorage` | Cloudstorage listing read when `hotfix=true`; each file is fetched from `{URL}/{uniqueFilename}`. |
+| `HOTFIX_CACHE_MINUTES` | `10` | Minutes before the hotfix listing is checked again. |
+| `HOTFIX_CACHE_DIR` | `<PROJECT_ROOT>/hotfix_cache` | Where downloaded hotfix config files are stored; reused across restarts. |
+| `HOTFIX_DISK_CACHE` | `true` | Set to `false` to disable the disk cache and download every time. |
 | `AESFINDER_PATH` | `D:\AesFinder-main\...\AesFinder.exe` | Path to the external AesFinder tool used by `/aes` (a `.exe`, a `.dll`, or a directory containing it). |
 | `AESFINDER_AUTO` | `true` | Background auto-extraction/submission of the MainAES key via AesFinder (**only acts while the main key is missing**; set `false` to disable). |
 | `AUTO_UPDATE` | (unset) | `true` = always update without asking, `false` = never contact GitHub, **unset = ask (y/n) at startup, but only when an update exists**. |
@@ -146,17 +150,97 @@ Base URL: `http://localhost:3849`
 
 > **CORS**: enabled for any origin (any origin/method/header). The audio diagnostic
 > headers (`X-Audio-Format` / `X-Audio-Decoded` / `X-Rada-Native-Decoder`) and
-> `Content-Disposition`, and the backup headers (`X-Backup-Entries` / `X-Backup-Version`) are exposed so browser clients can read them.
+> `Content-Disposition`, the backup headers (`X-Backup-Entries` / `X-Backup-Version`), and the hotfix headers
+> (`X-Hotfix-Status` / `X-Hotfix-Applied`) are exposed so browser clients can read them.
 
 ### Asset export — `/api/v1/export`
 
 | Method & path | Description |
 |---|---|
-| `GET /api/v1/export?path={path}&image={bool}&audio={bool}&lang={code}` | Export an asset. JSON is returned by default, with all package exports in the `jsonOutput` array. Normal Unreal property names preserve their original casing; only localized-text keys follow FortniteAPI's `namespace`, `key`, `sourceString`, and `localizedString` casing. `hash` is the SHA-256 of that array's UTF-8 JSON, `entries` is its count, and `bytes` is its byte length. `image=true` returns PNG for textures; `audio=true` returns audio for sounds; `lang` applies localization (e.g. `ja`). **If `image=true` but the asset is not a texture, JSON is returned automatically.** |
+| `GET /api/v1/export?path={path}&image={bool}&audio={bool}&lang={code}&hotfix={bool}` | Export an asset. JSON is returned by default, with all package exports in the `jsonOutput` array. Normal Unreal property names preserve their original casing; only localized-text keys follow FortniteAPI's `namespace`, `key`, `sourceString`, and `localizedString` casing. `hash` is the SHA-256 of that array's UTF-8 JSON, `entries` is its count, and `bytes` is its byte length. `image=true` returns PNG for textures; `audio=true` returns audio for sounds; `lang` applies localization (e.g. `ja`); `hotfix=true` returns the [hotfixed content](#hotfixed-content--hotfixtrue). **If `image=true` but the asset is not a texture, JSON is returned automatically.** |
 | `GET /api/v1/export/audioinfo?path={path}` | Report a sound asset's format and whether it can be decoded to WAV, without downloading the binary. |
 | `GET /api/v1/export/locres?lang={code}` | Merged localization table for a language. |
 | `GET /api/v1/export/locres/languages` | List available localization languages. |
 | `GET /api/v1/export/filepath/{pakName}` | List file paths inside a given pak / chunk number. |
+
+#### Hotfixed content — `hotfix=true`
+
+Fortnite does not run the values baked into the paks as-is: the cloudstorage config files rewrite
+DataTable and CurveTable contents, and displayed text, first. With `hotfix=true` the export applies
+those edits, so the JSON describes the asset as the game currently runs it. The default is `false`,
+which returns the pak contents unchanged.
+
+Two sections are read:
+
+- `[AssetHotfix]` — DataTable / CurveTable / CurveFloat content edits, addressed per asset.
+- `[/Script/FortniteGame.FortTextHotfixConfig]` — `+TextReplacements=` FText overrides, addressed by namespace and key.
+
+Every file listed by `https://api.fljpapi.jp/api/v2/cloudstorage` is scanned, not just
+`DefaultGame.ini` — `[AssetHotfix]` sections also appear in `DefaultBlastberryGame.ini`,
+`IOS_Game.ini` and others, and `+TextReplacements=` lines also appear in per-platform files such as
+`PS5_Game.ini`. The set is cached for 10 minutes by default, and a change to it invalidates the
+cached export responses automatically.
+
+##### Caching
+
+Downloaded files are kept in `hotfix_cache/` and are **not fetched again after a restart**. A
+cloudstorage `uniqueFilename` changes whenever Epic republishes the file, so the cache is
+content-addressed and can never go stale — only changed files arrive, under a new name.
+
+- The listing (`listing.json`) is stored too, so hotfixes still work **on a cold start while cloudstorage is unreachable**.
+- Each cached file is checked against the listing's size and SHA-256 on read; a damaged one is re-downloaded.
+- Files the listing no longer references are deleted.
+
+| | Time | Downloads |
+|---|---|---|
+| First build (cold cache) | ~5.1 s | 62 files |
+| Later builds (warm cache) | ~0.08 s | none |
+
+| Environment variable | Default | Description |
+|---|---|---|
+| `HOTFIX_CLOUDSTORAGE_URL` | `https://api.fljpapi.jp/api/v2/cloudstorage` | Listing URL; each file is fetched from `{URL}/{uniqueFilename}`. |
+| `HOTFIX_CACHE_MINUTES` | `10` | Minutes before the listing is checked again (in-memory index lifetime). |
+| `HOTFIX_CACHE_DIR` | `<PROJECT_ROOT>/hotfix_cache` | Where the downloaded files are stored. |
+| `HOTFIX_DISK_CACHE` | `true` | Set to `false` to skip the disk cache and download every time. |
+
+Supported directives:
+
+| Line | Effect |
+|---|---|
+| `+CurveTable=Path;RowUpdate;Row;KeyTime;Value` | Sets one curve key of one row, inserting the key when it does not exist. |
+| `+CurveTable=Path;TableUpdate;"[{...}]"` | Replaces every row of the curve table. |
+| `+DataTable=Path;RowUpdate;Row;Property;Value` | Sets one property of one row. Struct literals such as `(X=1,Y=3)` are merged member by member. |
+| `+DataTable=Path;AddRow;"{...}"` | Adds the row supplied as JSON. |
+| `+DataTable=Path;TableUpdate;"[{...}]"` | Replaces every row of the data table. |
+| `+CurveFloat=Path;CurveUpdate;"{...}"` | Replaces the curve of a `UCurveFloat`. |
+| `+TextReplacements=(Category=…, Namespace="", Key="…", NativeString="…", LocalizedStrings=(("ja","…"),…))` | Sets `SourceString` to `NativeString` and `LocalizedString` to the translation for the requested `lang`, on every FText with that namespace and key. |
+
+A `RowUpdate` targeting a row the pak does not contain is ignored, as it is in game, and reported
+as `rowNotFound`.
+
+Text replacements are not bound to one asset: every FText in the exported JSON is matched by
+namespace and key. They are applied *after* `.locres` localization, so a hotfixed string wins over
+the locres value. When `lang` has no exact translation the fallback order is another region of the
+same language (`pt` → `pt-BR`), then `en`, then `NativeString`. When several files publish the same
+key (per-platform wording, for example), the last one in file-name order is used.
+
+Example (a hotfix that rewrites a curve from `0.0` to `1.0`):
+```
+http://localhost:3849/api/v1/export?path=/SpriteBoons_Ch7S4/DataTables/SpriteBoons_Ch7S4GameData&lang=ja&hotfix=true
+```
+
+The response shape is identical with and without `hotfix`: the usual `hash`, `entries`, `bytes`, and
+`jsonOutput`, with only the values inside `jsonOutput` reflecting the hotfixes (`hash` is computed
+from the hotfixed JSON).
+
+Headers report what happened:
+
+- `X-Hotfix-Status` — `applied` (at least one line changed something), `none` (nothing changed: no hotfix targets this asset, or the targeted rows are not in the pak), or `unavailable` (cloudstorage unreachable).
+- `X-Hotfix-Applied` — how many lines actually changed something.
+
+If cloudstorage cannot be reached the export still succeeds: the un-hotfixed asset is returned with
+`X-Hotfix-Status: unavailable`, and that response is not cached. `POST /api/v1/export/batch` accepts
+the same switch as a `hotfix` field in its request body.
 
 #### Audio output
 

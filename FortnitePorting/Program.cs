@@ -80,7 +80,8 @@ builder.Services.AddCors(options =>
                   "X-Usmap-Bytes", "X-Usmap-Names", "X-Usmap-Enums", "X-Usmap-Structs",
                   "X-Usmap-UnknownProps", "X-Usmap-OptionalProps", "X-Usmap-Output", "X-Usmap-Loaded",
                   "X-Usmap-ParsedEnums", "X-Usmap-ParsedStructs",
-                  "X-Backup-Entries", "X-Backup-Version"));
+                  "X-Backup-Entries", "X-Backup-Version",
+                  "X-Hotfix-Status", "X-Hotfix-Applied"));
 });
 
 Console.WriteLine("=================================");

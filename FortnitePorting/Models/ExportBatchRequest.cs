@@ -10,4 +10,7 @@ public sealed class ExportBatchRequest
 
     /// <summary>Localization language code, for example ja. Defaults to en.</summary>
     public string Lang { get; set; } = "en";
+
+    /// <summary>Apply the live cloudstorage hotfixes to every exported asset. Defaults to false.</summary>
+    public bool Hotfix { get; set; }
 }

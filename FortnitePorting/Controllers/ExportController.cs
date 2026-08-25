@@ -27,6 +27,7 @@ using Microsoft.Extensions.Logging;
 using RADADecoder;
 using System.Text.RegularExpressions;
 using FortnitePorting.Models;
+using FortnitePorting.Services;
 
 namespace FortnitePorting.Controllers
 {
@@ -87,16 +88,37 @@ namespace FortnitePorting.Controllers
         /// <param name="image">Return a PNG when the asset is a texture.</param>
         /// <param name="audio">Return audio when the asset is a sound.</param>
         /// <param name="lang">Localization language code (e.g. ja); en applies none.</param>
+        /// <param name="hotfix">Apply the live cloudstorage hotfixes ([AssetHotfix] rows/curves and FText replacements) to the exported JSON.</param>
         [HttpGet]
-        public IActionResult Get([FromQuery] string path, [FromQuery] bool image = false, [FromQuery] bool audio = false, [FromQuery] string lang = "en")
+        public IActionResult Get([FromQuery] string path, [FromQuery] bool image = false, [FromQuery] bool audio = false, [FromQuery] string lang = "en", [FromQuery] bool hotfix = false)
         {
             if (string.IsNullOrEmpty(path))
             {
                 return BadRequest("The file path cannot be empty.");
             }
 
+            // The hotfix set is fetched up front because its content fingerprint is part of the cache key:
+            // a republished hotfix must not be answered from a response cached against the previous one.
+            HotfixIndex? hotfixIndex = null;
+            string? hotfixError = null;
+            if (hotfix)
+            {
+                try
+                {
+                    hotfixIndex = HotfixService.GetIndex();
+                }
+                catch (Exception ex)
+                {
+                    // Cloudstorage being unreachable must not turn into a failed export: the asset is
+                    // still returned, and the response says the hotfix could not be applied.
+                    hotfixError = ex.Message;
+                    _logger.LogWarning(ex, "Could not load the cloudstorage hotfix set from {Url}", HotfixService.ListingUrl);
+                }
+            }
+
             var mountSnapshot = GetMountSnapshot();
-            var cacheKey = $"export::{path}::image={image}::audio={audio}::lang={lang}::mount={mountSnapshot}";
+            var hotfixKeyPart = hotfix ? $"::hotfix={hotfixIndex?.Version ?? "unavailable"}" : string.Empty;
+            var cacheKey = $"export::{path}::image={image}::audio={audio}::lang={lang}::mount={mountSnapshot}{hotfixKeyPart}";
             if (_cache.TryGetValue(cacheKey, out CacheEntry? cachedEntry) && cachedEntry is not null)
             {
                 _logger.LogInformation("Cache hit for key: \"{CacheKey}\"", cacheKey);
@@ -386,6 +408,24 @@ namespace FortnitePorting.Controllers
                     jToken = JToken.FromObject(asset, jsonSerializer);
                 }
 
+                // Rewrite the exported rows/curves with the live [AssetHotfix] values before localization,
+                // so the response describes the asset as the game currently runs it.
+                List<HotfixApplier.HotfixResult>? hotfixResults = null;
+                if (hotfix && hotfixIndex != null)
+                {
+                    var hotfixEntries = hotfixIndex.For(HotfixService.NormalizeAssetPath(processedPath).ToLowerInvariant());
+                    if (hotfixEntries.Count == 0 && asset.Owner?.Name is { Length: > 0 } packageName)
+                    {
+                        // The requested path and the mounted package path can differ (plugin mount points,
+                        // FortniteGame/Content/... input); the package's own name is the authoritative form.
+                        hotfixEntries = hotfixIndex.For(HotfixService.NormalizeAssetPath(packageName).ToLowerInvariant());
+                    }
+
+                    hotfixResults = hotfixEntries.Count > 0
+                        ? HotfixApplier.Apply(jToken, hotfixEntries)
+                        : [];
+                }
+
                 // Apply localization when a language is specified and it is not English
                 if (!string.IsNullOrEmpty(lang) && !lang.Equals("en", StringComparison.OrdinalIgnoreCase))
                 {
@@ -411,6 +451,21 @@ namespace FortnitePorting.Controllers
                     }
                 }
 
+                // Text hotfixes are not tied to an asset: they replace an FText wherever its namespace and
+                // key appear. They run after localization because a hotfix overrides the .locres string,
+                // and before the FText property names are lower-cased.
+                if (hotfix && hotfixIndex != null && hotfixResults != null)
+                {
+                    var textResults = HotfixApplier.ApplyTextReplacements(jToken, hotfixIndex, lang);
+                    hotfixResults.AddRange(textResults);
+                }
+
+                if (hotfixResults is { Count: > 0 })
+                {
+                    _logger.LogInformation("Applied {Applied}/{Total} hotfix entries to \"{Path}\"",
+                        hotfixResults.Count(result => result.Applied), hotfixResults.Count, processedPath);
+                }
+
                 NormalizeFTextPropertyNames(jToken);
 
                 // Preserve every serialized export while adding integrity and size metadata for
@@ -418,6 +473,8 @@ namespace FortnitePorting.Controllers
                 var jsonOutput = jToken is JArray array ? array : new JArray(jToken);
                 var jsonOutputText = jsonOutput.ToString(Formatting.None);
                 var jsonOutputBytes = Encoding.UTF8.GetBytes(jsonOutputText);
+                // The body is the same with and without hotfix=true; only its values differ. Whether the
+                // hotfix set could be applied is reported in headers so the JSON stays untouched.
                 var response = new JObject
                 {
                     ["hash"] = Convert.ToHexString(SHA256.HashData(jsonOutputBytes)).ToLowerInvariant(),
@@ -425,16 +482,37 @@ namespace FortnitePorting.Controllers
                     ["bytes"] = jsonOutputBytes.Length,
                     ["jsonOutput"] = jsonOutput
                 };
+
+                Dictionary<string, string>? hotfixHeaders = null;
+                if (hotfix)
+                {
+                    var appliedCount = hotfixResults?.Count(result => result.Applied) ?? 0;
+                    hotfixHeaders = new Dictionary<string, string>
+                    {
+                        ["X-Hotfix-Status"] = hotfixIndex == null ? "unavailable" : appliedCount > 0 ? "applied" : "none",
+                        ["X-Hotfix-Applied"] = appliedCount.ToString()
+                    };
+                    foreach (var header in hotfixHeaders)
+                    {
+                        Response.Headers[header.Key] = header.Value;
+                    }
+                }
+
                 var json = response.ToString(Formatting.None);
                 var jsonBytes = Encoding.UTF8.GetBytes(json);
                 var jsonContentType = "application/json; charset=utf-8";
 
-                var jsonEntryToCache = new CacheEntry { Content = jsonBytes, ContentType = jsonContentType };
-                _cache.Set(cacheKey, jsonEntryToCache, new MemoryCacheEntryOptions
+                // A response produced while cloudstorage was unreachable is not hotfixed content, so it
+                // is never cached: the next request must try the hotfix set again.
+                if (hotfixError == null)
                 {
-                    AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(30)
-                });
-                _logger.LogInformation("Cached response for key: \"{CacheKey}\"", cacheKey);
+                    var jsonEntryToCache = new CacheEntry { Content = jsonBytes, ContentType = jsonContentType, Headers = hotfixHeaders };
+                    _cache.Set(cacheKey, jsonEntryToCache, new MemoryCacheEntryOptions
+                    {
+                        AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(30)
+                    });
+                    _logger.LogInformation("Cached response for key: \"{CacheKey}\"", cacheKey);
+                }
 
                 return new FileContentResult(jsonBytes, jsonContentType);
             }
@@ -488,7 +566,7 @@ namespace FortnitePorting.Controllers
                 {
                     // Reuse the single-asset implementation so path normalization, localization,
                     // export serialization, and its 30-minute cache remain consistent.
-                    var action = Get(path, image: false, audio: false, lang);
+                    var action = Get(path, image: false, audio: false, lang, request.Hotfix);
                     switch (action)
                     {
                         case FileContentResult file when file.ContentType?.StartsWith("application/json", StringComparison.OrdinalIgnoreCase) == true:
@@ -528,6 +606,7 @@ namespace FortnitePorting.Controllers
             return Ok(new
             {
                 language = lang,
+                hotfix = request.Hotfix,
                 total = results.Count,
                 succeeded,
                 failed = results.Count - succeeded,

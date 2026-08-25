@@ -58,7 +58,7 @@ public sealed class LocalizedOperationFilter : IOperationFilter
 
     private static readonly Dictionary<string, Dictionary<string, (string Ja, string En)>> Parameters = new()
     {
-        ["ExportController.Get"] = P(("path", "アセットの仮想パス。", "Asset virtual path."), ("image", "テクスチャをPNGで返すか。", "Return a texture as PNG."), ("audio", "音声をバイナリで返すか。", "Return a sound payload."), ("lang", "FTextの言語コード。例: ja。", "Localization language code, for example ja.")),
+        ["ExportController.Get"] = P(("path", "アセットの仮想パス。", "Asset virtual path."), ("image", "テクスチャをPNGで返すか。", "Return a texture as PNG."), ("audio", "音声をバイナリで返すか。", "Return a sound payload."), ("lang", "FTextの言語コード。例: ja。", "Localization language code, for example ja."), ("hotfix", "cloudstorageのホットフィックス（[AssetHotfix]のDataTable/CurveTable書き換えとFTextのテキスト差し替え）を適用した内容を返すか。既定はfalse。", "Return the asset with the live cloudstorage hotfixes applied — [AssetHotfix] table/curve edits and FText replacements; default false.")),
         ["ExportController.Batch"] = P(("request", "pathsとlangを含むJSONリクエスト。最大100件。", "JSON request containing paths and lang; maximum 100 paths."), ("cancellationToken", "リクエストのキャンセル状態。", "Request cancellation state.")),
         ["ExportController.GetAudioInfo"] = P(("path", "音声アセットの仮想パス。", "Sound asset virtual path.")),
         ["ExportController.GetLocres"] = P(("lang", "言語コード。例: ja。", "Language code, for example ja.")),
@@ -149,6 +149,12 @@ public sealed class LocalizedOperationFilter : IOperationFilter
                         property.Value.Description = isJa
                             ? "FTextに適用する言語コード。例: ja。"
                             : "Language code applied to FText values, for example ja.";
+                    }
+                    else if (property.Key.Equals("hotfix", StringComparison.OrdinalIgnoreCase))
+                    {
+                        property.Value.Description = isJa
+                            ? "cloudstorageのホットフィックスを適用した内容を返すか。既定はfalse。"
+                            : "Apply the live cloudstorage hotfixes to every result; default false.";
                     }
                 }
             }
