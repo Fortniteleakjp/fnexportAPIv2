@@ -194,6 +194,7 @@ docker run -p 3849:3849 \
 | コスメ・表示アセットの抽出 | [`/api/v1/pak`](#コスメ抽出--apiv1pak) |
 | 配信中ビルドの確認・最新ビルドへの再読み込み | [`/api/v1/build`](#ビルド状態--apiv1build) |
 | FModel 用バックアップ（`.fbkp`）の配信 | [`/api/v1/backup`](#fmodel-バックアップ--apiv1backup) |
+| マッピング（`.usmap`）のダンプ・配信 | [`/api/v1/mappings`](#マッピング--apiv1mappings) |
 | 更新状況の確認・最新リリースへの更新 | [`/api/v1/update`](#自動アップデート--apiv1update) |
 
 > **CORS**: すべてのオリジンからの呼び出しを許可しています（任意のオリジン／メソッド／ヘッダ）。
@@ -416,6 +417,40 @@ curl -OJ http://localhost:3849/api/v1/backup/fbkp
 >
 > **ファイル名**: マウント中のビルド（`++Fortnite+Release-42.00-CL-...`）から `FortniteGame_42_00.fbkp` を生成します。
 > ビルドが未取得のときのみ、FModel と同じ日付形式（`FortniteGame_MM_dd_yyyy.fbkp`）にフォールバックします。
+
+### マッピング — `/api/v1/mappings`
+
+[`UnrealMappingsDumper`](https://github.com/TheNaeem/UnrealMappingsDumper) と同じ仕組みで `.usmap` を作成し、配信します。
+本家はゲームに DLL を注入して `GObjects` を走査し、見つけた `UClass`／`UScriptStruct`／`UEnum` を `.usmap` に書き出しますが、
+この API にゲームプロセスはありません。そこで**同じ型情報を CUE4Parse 経由でマウント中の pak から読み取り**、
+本家と同じシリアライズ（名前テーブル → enum → struct、プロパティ型の再帰記述、`0x30C4` ヘッダ）で書き出します。
+
+| メソッド & パス | 説明 |
+|---|---|
+| `POST /api/v1/mappings/dump?path={frag}&maxPackages={n}&timeoutSeconds={n}&merge={bool}&baseMapping={file}&version={0..4}&compression={none/zstd}&fileName={name}&load={bool}&download={bool}` | マウント中のビルドから `.usmap` をダンプして返します。既定はバイナリ返却で、同時に `mappings/{build}_dumped.usmap` へ保存します。`load=true` でそのままプロバイダーへホットロード、`download=false` で統計 JSON を返します。 |
+| `GET /api/v1/mappings` | 保存済みの `.usmap`（ダンプ／生成／ダウンロード）を新しい順に一覧します。 |
+| `GET /api/v1/mappings/{fileName}` | 保存済みの `.usmap` を配信します。 |
+| `POST /api/v1/mappings/generate?url={url}&path={path}&fileName={name}&load={bool}&verify={bool}&download={bool}` | StormForge 形式のマッピング JSON を `.usmap` に変換します（従来からのエンドポイント）。 |
+
+```
+curl -OJ -X POST "http://localhost:3849/api/v1/mappings/dump?path=FortniteGame/Content/Athena&maxPackages=2000"
+curl "http://localhost:3849/api/v1/mappings"
+curl -OJ "http://localhost:3849/api/v1/mappings/FortniteGame_42_00_dumped.usmap"
+```
+
+> **収録範囲**: cooked pak に入っているのは Blueprint 由来の型（`BlueprintGeneratedClass`／`UserDefinedStruct`／`UserDefinedEnum` など）だけで、
+> ネイティブの `/Script/...` 型は実行ファイル側にあるため pak には存在しません。
+> そのため既定（`merge=true`）では**既存の `.usmap`（`USMAP_PATH`、無ければ `mappings/` の最新）を土台にマージ**し、
+> pak からダンプした型を優先して上書きします。`merge=false` では pak から採れた型だけの `.usmap` になります。
+>
+> **走査量**: `maxPackages`（既定 5000）と `timeoutSeconds`（既定 120）で打ち切ります。打ち切った場合もそこまでの収集結果を書き出し、
+> `limitReached`／`timedOut` で通知します。`path` に `FortniteGame/Content/Athena` のようなパス断片を渡すと対象を絞れます。
+> `maxPackages=0` はビルド全体（約165万ファイル）を開くため非常に低速です。
+>
+> **フォーマット**: `version=0` は UnrealMappingsDumper と同じバージョン 0 の形式、既定の `version=4`（最新）は
+> 16bit 名前長・255個超の enum・明示的な enum 値に対応した形式です。`compression` は `none`（既定）と `zstd`。
+> Oodle／Brotli の圧縮器はこのプロセスに無いため指定できません。
+> 生成後は必ず読み戻して検証し、件数を `X-Usmap-*` ヘッダ（`download=false` なら JSON）で返します。
 
 ### 自動アップデート — `/api/v1/update`
 

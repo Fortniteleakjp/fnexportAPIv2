@@ -49,6 +49,8 @@ public static class UefnAesExtractor
         public string? ExeLocalPath { get; set; }
         public bool Downloaded { get; set; }
         public List<string> Keys { get; set; } = new();
+        /// <summary>How many of <see cref="Keys"/> came from the mov-imm32 scan (they are listed first).</summary>
+        public int ImmediateKeyCount { get; set; }
         public double ScanSeconds { get; set; }
     }
 
@@ -202,10 +204,11 @@ public static class UefnAesExtractor
     }
 
     /// <summary>
-    /// Downloads a binary from the Fortnite_Studio manifest and statically scans it with the built-in
-    /// (key-schedule) <see cref="AesFinder"/>. Note: for current Fortnite the MainAES key is stored as
-    /// <c>mov imm32</c> instruction immediates in the Common DLL, which the external AesFinder tool detects;
-    /// this built-in scan finds only key-schedule-style embeddings.
+    /// Downloads a binary from the Fortnite_Studio manifest and statically scans it for keys with both
+    /// built-in scanners: <see cref="AesFinder"/> for keys stored as a precomputed key schedule, and
+    /// <see cref="AesImmediateScanner"/> for keys stored as <c>mov imm32</c> instruction immediates, which is
+    /// how current Fortnite builds embed the MainAES key in the Common DLL. Every candidate is returned;
+    /// deciding which one is the pak key is <see cref="AesKeyPicker"/>'s job.
     /// </summary>
     public static async Task<Result> ExtractAsync(string rootDir, HttpClient http, Action<string>? log = null,
         string? targetFileName = null, bool forceDownload = false, CancellationToken ct = default)
@@ -225,12 +228,25 @@ public static class UefnAesExtractor
             Downloaded = dl.Downloaded
         };
 
-        log("Scanning for AES-256 key schedules (no execution / no injection)...");
+        log("Scanning for AES-256 keys (no execution / no injection)...");
         var sw = Stopwatch.StartNew();
-        result.Keys = AesFinder.FindKeysInFile(dl.LocalPath);
+
+        // Immediate-pattern candidates come first: that is where current builds keep the pak key, and they
+        // are already ordered so the most key-like block leads.
+        var immediate = AesImmediateScanner.FindInFile(dl.LocalPath);
+        var keys = new List<string>(immediate.Select(c => c.Key));
+        var seen = new HashSet<string>(keys, StringComparer.OrdinalIgnoreCase);
+        foreach (var k in AesFinder.FindKeysInFile(dl.LocalPath))
+        {
+            if (seen.Add(k)) keys.Add(k);
+        }
+
+        result.Keys = keys;
+        result.ImmediateKeyCount = immediate.Count;
         sw.Stop();
         result.ScanSeconds = sw.Elapsed.TotalSeconds;
-        log($"Scan complete in {result.ScanSeconds:F1}s; found {result.Keys.Count} candidate key(s).");
+        log($"Scan complete in {result.ScanSeconds:F1}s; found {result.Keys.Count} candidate key(s) " +
+            $"({immediate.Count} from instruction immediates).");
 
         return result;
     }
