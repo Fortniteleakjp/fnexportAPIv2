@@ -13,19 +13,22 @@ x86/
 .vs/
 .idea/
 *.swp
-/chunk_cache/
-/uefn_cache/
-/hotfix_cache/
+# Runtime output/caches. NOT anchored with a leading slash on purpose: these are created
+# relative to the working directory, which is FortnitePorting/ when the server is started
+# from there, so an anchored pattern would let a second copy slip into the repository.
+chunk_cache/
+uefn_cache/
+hotfix_cache/
 /FortnitePorting/Properties/
-/manifest/
-/mappings/
-/libs/
+manifest/
+mappings/
+libs/
 fortnite_manifest_dummy/
 oo2core_*.dll
 zlib-ng2.dll
 libz-ng.so
 liboo2corelinux64.so*
-/aes.json
+aes.json
 FortnitePorting/appsettings.json
 FortnitePorting/appsettings.Development.json
 FortnitePorting/enc.json

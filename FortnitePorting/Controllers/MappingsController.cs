@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net.Http;
+using System.Threading;
 using System.Threading.Tasks;
 using CUE4Parse.FileProvider;
 using CUE4Parse.MappingsProvider;
@@ -9,12 +11,13 @@ using CUE4Parse.MappingsProvider.Usmap;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 using FortnitePorting.Services;
+using FortnitePorting.Services.MappingsDumper;
 
 namespace FortnitePorting.Controllers
 {
     /// <summary>
-    /// Generates a binary .usmap mapping file from a StormForge-style mappings JSON
-    /// ({ Version, Enums, Structs, Classes }), optionally hot-loading it into the provider.
+    /// Produces and serves .usmap mapping files: dumped from the mounted build with the
+    /// UnrealMappingsDumper algorithm, or converted from a StormForge-style mappings JSON.
     /// </summary>
     [ApiController]
     [Route("api/v1/mappings")]
@@ -22,11 +25,13 @@ namespace FortnitePorting.Controllers
     {
         private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMinutes(5) };
         private readonly IFileProvider _provider;
+        private readonly ManifestService _manifestService;
         private readonly ILogger<MappingsController> _logger;
 
-        public MappingsController(IFileProvider provider, ILogger<MappingsController> logger)
+        public MappingsController(IFileProvider provider, ManifestService manifestService, ILogger<MappingsController> logger)
         {
             _provider = provider;
+            _manifestService = manifestService;
             _logger = logger;
         }
 
@@ -152,6 +157,208 @@ namespace FortnitePorting.Controllers
                 loaded = load,
                 verification
             });
+        }
+
+        /// <summary>
+        /// Dumps a .usmap from the mounted build with the UnrealMappingsDumper algorithm and serves it.
+        /// The dumper walks a running game's GObjects; there is no game process here, so the same
+        /// UClass/UScriptStruct/UEnum objects are read out of the cooked packages through CUE4Parse and
+        /// written with the dumper's own .usmap serialization. Blueprint types come from the paks;
+        /// native /Script types are kept by merging the build's existing mapping underneath (merge=true).
+        /// </summary>
+        /// <param name="path">Only scan packages whose path contains this fragment (e.g. FortniteGame/Content/Athena).</param>
+        /// <param name="maxPackages">Maximum packages to open; 0 scans the whole build (very slow).</param>
+        /// <param name="timeoutSeconds">Scan budget; the dump serializes whatever it collected when it expires.</param>
+        /// <param name="merge">Merge a base .usmap so native /Script types stay present (default true).</param>
+        /// <param name="baseMapping">Base mapping file name in mappings/ or an absolute path; defaults to the newest.</param>
+        /// <param name="version">usmap version to write: 0 is the dumper's own format, 4 (default) is the latest.</param>
+        /// <param name="compression">none (default) or zstd. Oodle/Brotli compressors are unavailable here.</param>
+        /// <param name="fileName">Output file name; defaults to {build}_dumped.usmap.</param>
+        /// <param name="load">Hot-load the dumped mapping into the provider (default false).</param>
+        /// <param name="download">Return the .usmap binary (default) instead of JSON statistics.</param>
+        /// <param name="cancellationToken">Request cancellation state.</param>
+        [HttpPost("dump")]
+        public IActionResult Dump(
+            [FromQuery] string? path = null,
+            [FromQuery] int maxPackages = 5000,
+            [FromQuery] int timeoutSeconds = 120,
+            [FromQuery] bool merge = true,
+            [FromQuery] string? baseMapping = null,
+            [FromQuery] int version = (int) EUsmapVersion.Latest,
+            [FromQuery] string compression = "none",
+            [FromQuery] string? fileName = null,
+            [FromQuery] bool load = false,
+            [FromQuery] bool download = true,
+            CancellationToken cancellationToken = default)
+        {
+            if (version < 0 || version > (int) EUsmapVersion.Latest)
+            {
+                return BadRequest(new { message = $"'version' must be between 0 and {(int) EUsmapVersion.Latest}." });
+            }
+
+            EUsmapCompressionMethod compressionMethod;
+            switch ((compression ?? "none").Trim().ToLowerInvariant())
+            {
+                case "none": compressionMethod = EUsmapCompressionMethod.None; break;
+                case "zstd":
+                case "zstandard": compressionMethod = EUsmapCompressionMethod.ZStandard; break;
+                default:
+                    return BadRequest(new { message = "'compression' must be 'none' or 'zstd'. Oodle and Brotli compressors are not available in this process." });
+            }
+
+            var request = new MappingsDumperService.DumpRequest
+            {
+                PathFilter = path,
+                MaxPackages = Math.Max(0, maxPackages),
+                Timeout = TimeSpan.FromSeconds(Math.Clamp(timeoutSeconds, 1, 3600)),
+                Merge = merge,
+                BaseMapping = baseMapping,
+                Version = (EUsmapVersion) version,
+                Compression = compressionMethod,
+                FileName = fileName,
+                Build = ShortBuild()
+            };
+
+            MappingsDumperService.DumpResult result;
+            try
+            {
+                result = new MappingsDumperService(_provider).Dump(request, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                return StatusCode(499, new { message = "The dump was cancelled." });
+            }
+            catch (FileNotFoundException ex)
+            {
+                return BadRequest(new { message = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "usmap dump failed");
+                return StatusCode(500, new { message = "usmap dump failed.", error = ex.Message });
+            }
+
+            _logger.LogInformation(
+                "Dumped {File}: {Structs} structs / {Enums} enums from {Scanned} packages in {Seconds:F1}s",
+                result.FileName, result.Serializer.Structs, result.Serializer.Enums,
+                result.Collector.PackagesScanned, result.Collector.ElapsedSeconds);
+
+            if (load)
+            {
+                try { _provider.MappingsContainer = new FileUsmapTypeMappingsProvider(result.FilePath); }
+                catch (Exception ex) { _logger.LogWarning(ex, "loading the dumped usmap failed"); }
+            }
+
+            if (download)
+            {
+                var h = Response.Headers;
+                h.Append("X-Usmap-Bytes", result.Usmap.Length.ToString());
+                h.Append("X-Usmap-Names", result.Serializer.Names.ToString());
+                h.Append("X-Usmap-Enums", result.Serializer.Enums.ToString());
+                h.Append("X-Usmap-Structs", result.Serializer.Structs.ToString());
+                h.Append("X-Usmap-Output", result.FilePath);
+                h.Append("X-Usmap-Loaded", load ? "true" : "false");
+                h.Append("X-Usmap-Dumped-Packages", result.Collector.PackagesScanned.ToString());
+                h.Append("X-Usmap-Dumped-Structs", result.Collector.StructsCollected.ToString());
+                h.Append("X-Usmap-Dumped-Enums", result.Collector.EnumsCollected.ToString());
+                h.Append("X-Usmap-Merged-Structs", result.MergedStructs.ToString());
+                h.Append("X-Usmap-Merged-Enums", result.MergedEnums.ToString());
+                return File(result.Usmap, "application/octet-stream", result.FileName);
+            }
+
+            return Ok(new
+            {
+                fileName = result.FileName,
+                output = result.FilePath,
+                downloadUrl = Url.Action(nameof(DownloadMapping), "Mappings", new { fileName = result.FileName }),
+                usmapBytes = result.Usmap.Length,
+                usmapVersion = (int) result.Serializer.Version,
+                compression = result.Serializer.Compression.ToString(),
+                uncompressedBytes = result.Serializer.UncompressedBytes,
+                loaded = load,
+                totals = new
+                {
+                    names = result.Serializer.Names,
+                    enums = result.Serializer.Enums,
+                    structs = result.Serializer.Structs,
+                    properties = result.Serializer.Properties,
+                    unknownProperties = result.Serializer.UnknownProperties
+                },
+                dumped = new
+                {
+                    structs = result.Collector.StructsCollected,
+                    enums = result.Collector.EnumsCollected,
+                    packagesMatched = result.Collector.PackagesMatched,
+                    packagesScanned = result.Collector.PackagesScanned,
+                    packagesFailed = result.Collector.PackagesFailed,
+                    exportsInspected = result.Collector.ExportsInspected,
+                    limitReached = result.Collector.LimitReached,
+                    timedOut = result.Collector.TimedOut,
+                    elapsedSeconds = Math.Round(result.Collector.ElapsedSeconds, 2)
+                },
+                merged = new
+                {
+                    baseMapping = result.BaseMapping,
+                    structs = result.MergedStructs,
+                    enums = result.MergedEnums
+                },
+                verification = new { structs = result.VerifiedStructs, enums = result.VerifiedEnums, error = result.VerifyError }
+            });
+        }
+
+        /// <summary>
+        /// Lists the mapping files this instance holds (dumped, generated, or downloaded), newest first.
+        /// </summary>
+        [HttpGet]
+        public IActionResult ListMappings()
+        {
+            var files = MappingsDumperService.ListMappings().Select(f => new
+            {
+                fileName = f.Name,
+                size = f.Length,
+                modifiedUtc = f.LastWriteTimeUtc,
+                downloadUrl = Url.Action(nameof(DownloadMapping), "Mappings", new { fileName = f.Name })
+            }).ToList();
+
+            return Ok(new { count = files.Count, directory = MappingsDumperService.MappingsDirectory, files });
+        }
+
+        /// <summary>
+        /// Serves one stored mapping file by name.
+        /// </summary>
+        /// <param name="fileName">File name as listed by GET /api/v1/mappings.</param>
+        [HttpGet("{fileName}")]
+        public IActionResult DownloadMapping([FromRoute] string fileName)
+        {
+            var file = MappingsDumperService.ResolveStoredMapping(fileName);
+            if (file == null)
+            {
+                return NotFound(new { message = $"No stored mapping named '{fileName}'." });
+            }
+
+            return PhysicalFile(file.FullName, "application/octet-stream", file.Name);
+        }
+
+        /// <summary>
+        /// Reduces "++Fortnite+Release-42.00-CL-56878558-Windows" to "FortniteGame_42_00", so a dumped
+        /// mapping is named after the build it describes.
+        /// </summary>
+        private string? ShortBuild()
+        {
+            var build = !string.IsNullOrWhiteSpace(_manifestService.AppliedBuildVersion)
+                ? _manifestService.AppliedBuildVersion
+                : _manifestService.GameBuild;
+
+            if (string.IsNullOrWhiteSpace(build)) return null;
+
+            var parts = build.Split('-');
+            var version = (parts.Length > 2 ? parts[1] : build).Trim().Replace('.', '_');
+            foreach (var invalid in Path.GetInvalidFileNameChars())
+            {
+                version = version.Replace(invalid, '_');
+            }
+
+            return string.IsNullOrWhiteSpace(version) ? null : $"FortniteGame_{version}";
         }
 
         private static List<object> SampleTypes(TypeMappings? m)

@@ -375,6 +375,44 @@ curl -OJ http://localhost:3849/api/v1/backup/fbkp
 > `FortniteGame_42_00.fbkp`. It falls back to FModel's date form (`FortniteGame_MM_dd_yyyy.fbkp`)
 > only while the build version is still unknown.
 
+### Mappings — `/api/v1/mappings`
+
+Produces and serves `.usmap` files the way [`UnrealMappingsDumper`](https://github.com/TheNaeem/UnrealMappingsDumper)
+does. The original injects a DLL into the game, walks `GObjects`, and writes every `UClass`,
+`UScriptStruct`, and `UEnum` it finds into a `.usmap`. There is no game process here, so **the same type
+information is read out of the mounted paks through CUE4Parse** and written with the dumper's own
+serialization (name table → enums → structs, recursive property type records, `0x30C4` header).
+
+| Method & path | Description |
+|---|---|
+| `POST /api/v1/mappings/dump?path={frag}&maxPackages={n}&timeoutSeconds={n}&merge={bool}&baseMapping={file}&version={0..4}&compression={none/zstd}&fileName={name}&load={bool}&download={bool}` | Dump a `.usmap` from the mounted build. The binary is returned by default and stored as `mappings/{build}_dumped.usmap`. `load=true` hot-loads it into the provider; `download=false` returns JSON statistics instead. |
+| `GET /api/v1/mappings` | List the stored `.usmap` files (dumped, generated, or downloaded), newest first. |
+| `GET /api/v1/mappings/{fileName}` | Serve one stored `.usmap`. |
+| `POST /api/v1/mappings/generate?url={url}&path={path}&fileName={name}&load={bool}&verify={bool}&download={bool}` | Convert a StormForge-style mappings JSON into a `.usmap` (the pre-existing endpoint). |
+
+```
+curl -OJ -X POST "http://localhost:3849/api/v1/mappings/dump?path=FortniteGame/Content/Athena&maxPackages=2000"
+curl "http://localhost:3849/api/v1/mappings"
+curl -OJ "http://localhost:3849/api/v1/mappings/FortniteGame_42_00_dumped.usmap"
+```
+
+> **Coverage**: cooked paks only carry Blueprint-side types (`BlueprintGeneratedClass`,
+> `UserDefinedStruct`, `UserDefinedEnum`, …). Native `/Script/...` types live in the executable, not in
+> the paks. So by default (`merge=true`) an existing mapping (`USMAP_PATH`, otherwise the newest file in
+> `mappings/`) is **merged underneath**, with the dumped types winning. `merge=false` writes only what
+> the paks yielded.
+>
+> **Scan size**: bounded by `maxPackages` (default 5000) and `timeoutSeconds` (default 120). When either
+> is hit the dump still serializes what it collected and reports `limitReached` / `timedOut`. Narrow the
+> scan with `path` (e.g. `FortniteGame/Content/Athena`); `maxPackages=0` opens the whole build (~1.65M
+> files) and is very slow.
+>
+> **Format**: `version=0` writes the exact version-0 layout UnrealMappingsDumper produces; the default
+> `version=4` (latest) adds 16-bit name lengths, enums with more than 255 members, and explicit enum
+> values. `compression` accepts `none` (default) and `zstd` — Oodle and Brotli compressors are not
+> available in this process. Every dump is parsed back before it is served, and the counts come back in
+> the `X-Usmap-*` headers (or the JSON body with `download=false`).
+
 ### Auto-update — `/api/v1/update`
 
 **At startup the API queries the GitHub releases API**

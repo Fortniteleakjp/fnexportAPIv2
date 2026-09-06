@@ -28,6 +28,8 @@ namespace FortnitePorting.Controllers
         // The exe download can take a while; allow plenty of time for the manifest fetch.
         private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMinutes(10) };
 
+        private static readonly FGuid ZeroGuid = new(0, 0, 0, 0);
+
         private readonly IFileProvider _provider;
         private readonly ILogger<AesController> _logger;
 
@@ -38,14 +40,20 @@ namespace FortnitePorting.Controllers
         }
 
         /// <summary>
-        /// Downloads <c>UnrealEditorFortnite-Common-Win64-Shipping.dll</c> from the Fortnite_Studio manifest
-        /// and runs the external AesFinder tool on it to extract the Fortnite MainAES key, returning it as the
-        /// response. The key is embedded in the Common DLL as <c>mov imm32</c> instruction immediates — no game
-        /// launch or injection. Configure the tool path with the AESFINDER_PATH environment variable.
+        /// Downloads <c>UnrealEditorFortnite-Common-Win64-Shipping.dll</c> from the Fortnite_Studio manifest and
+        /// extracts the Fortnite MainAES key from it. The key is embedded as <c>mov imm32</c> instruction
+        /// immediates — no game launch or injection.
+        ///
+        /// The DLL holds several key-shaped immediate blocks, so every candidate is collected and then tested
+        /// against the encrypted archives that are still waiting for the main key; the one that actually
+        /// decrypts is returned. That is what makes the result trustworthy on a brand-new build, where the
+        /// external tool has no published key to cross-check against and falls back to the highest-entropy
+        /// candidate — which is frequently the wrong one. The external tool is optional (AESFINDER_PATH); when
+        /// present its answer is simply tried first.
         /// </summary>
         /// <param name="force">Re-download the Common DLL even if a cached copy exists (default false).</param>
-        /// <param name="noApi">Pass --no-api to AesFinder (use the highest-entropy candidate, no fortnite-api lookup).</param>
-        /// <param name="submit">Submit the extracted key to the provider (zero GUID) and mount matching paks (default true).</param>
+        /// <param name="noApi">Pass --no-api to the external AesFinder tool (skip its fortnite-api lookup).</param>
+        /// <param name="submit">Submit the verified key to the provider (zero GUID) and mount matching paks (default true).</param>
         [HttpGet("/aes")]
         public async Task<IActionResult> Aes(
             [FromQuery] bool force = false,
@@ -55,14 +63,9 @@ namespace FortnitePorting.Controllers
         {
             var rootDir = Environment.GetEnvironmentVariable("PROJECT_ROOT") ?? Directory.GetCurrentDirectory();
 
+            // The external tool is optional: the built-in immediate scanner finds the same candidates, and the
+            // key is chosen by decrypting a real archive rather than by whatever the tool ranks first.
             var toolPath = ExternalAesFinder.ResolveToolPath();
-            if (toolPath == null)
-            {
-                return StatusCode(500, new
-                {
-                    message = "AesFinder tool not found. Set AESFINDER_PATH to AesFinder.exe (or the directory containing it)."
-                });
-            }
 
             UefnAesExtractor.DownloadResult dl;
             try
@@ -81,31 +84,94 @@ namespace FortnitePorting.Controllers
                 return StatusCode(502, new { message = "Failed to download the Common DLL from the manifest.", error = ex.Message });
             }
 
-            ExternalAesFinder.Result r;
-            try
-            {
-                r = await ExternalAesFinder.RunAsync(toolPath, dl.LocalPath, noApi, ct);
-            }
-            catch (OperationCanceledException)
-            {
-                return StatusCode(499, new { message = "Request cancelled." });
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "AesFinder run failed");
-                return StatusCode(502, new { message = "AesFinder failed to extract the key.", error = ex.Message });
-            }
-
-            // Submit the extracted main key (zero GUID) to the provider and mount any matching paks.
-            bool submitted = false;
-            int mountedNewFiles = 0;
-            string? submitError = null;
-            if (submit && !string.IsNullOrWhiteSpace(r.MainKey) && _provider is AbstractVfsFileProvider vfs)
+            ExternalAesFinder.Result? r = null;
+            string? toolError = null;
+            if (toolPath != null)
             {
                 try
                 {
-                    int before = _provider.Files.Count;
-                    mountedNewFiles = vfs.SubmitKey(new FGuid(0, 0, 0, 0), new FAesKey(r.MainKey));
+                    r = await ExternalAesFinder.RunAsync(toolPath, dl.LocalPath, noApi, ct);
+                }
+                catch (OperationCanceledException)
+                {
+                    return StatusCode(499, new { message = "Request cancelled." });
+                }
+                catch (Exception ex)
+                {
+                    // Not fatal any more: the built-in scanner below covers the same patterns.
+                    toolError = ex.Message;
+                    _logger.LogWarning(ex, "AesFinder run failed; falling back to the built-in scanner");
+                }
+            }
+            else
+            {
+                toolError = "AesFinder tool not found (set AESFINDER_PATH); used the built-in scanner.";
+            }
+
+            // Collect every key-shaped block in the DLL, not just the one the tool ranks first. The tool
+            // falls back to the highest-entropy candidate whenever fortnite-api has not published the key
+            // for a brand-new build yet, and that candidate is regularly not the pak key.
+            List<AesImmediateScanner.Candidate> scanned;
+            try
+            {
+                scanned = AesImmediateScanner.FindInFile(dl.LocalPath);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[AesFinder] Built-in scan of {File} failed", Path.GetFileName(dl.LocalPath));
+                scanned = new List<AesImmediateScanner.Candidate>();
+            }
+
+            // Try the tool's answer first (it may have cross-checked against the live API), then the rest.
+            var candidates = new List<string>();
+            if (!string.IsNullOrWhiteSpace(r?.MainKey)) candidates.Add(r!.MainKey!);
+            candidates.AddRange(scanned.Select(c => c.Key));
+
+            if (candidates.Count == 0)
+            {
+                return StatusCode(502, new
+                {
+                    message = "No AES key candidates were found in the Common DLL.",
+                    error = toolError
+                });
+            }
+
+            // Decide by decrypting a real archive rather than by ranking.
+            var vfs = _provider as AbstractVfsFileProvider;
+            AesKeyPicker.Result pick;
+            if (vfs != null)
+            {
+                pick = AesKeyPicker.Pick(vfs, ZeroGuid, candidates);
+                _logger.LogInformation("[AesFinder] Key selection: {Reason} ({Count} candidate(s) extracted)",
+                    pick.Reason, candidates.Count);
+            }
+            else
+            {
+                pick = new AesKeyPicker.Result { Key = candidates[0], Reason = "Provider is not a VFS provider; cannot verify." };
+            }
+
+            if (pick.Key == null)
+            {
+                return StatusCode(502, new
+                {
+                    message = "Every extracted key candidate was rejected by the encrypted archives.",
+                    reason = pick.Reason,
+                    candidateCount = candidates.Count,
+                    candidates,
+                    toolMainKey = r?.MainKey,
+                    toolError
+                });
+            }
+
+            // Submit the verified main key (zero GUID) to the provider and mount any matching paks.
+            bool submitted = false;
+            int mountedNewFiles = 0;
+            string? submitError = null;
+            if (submit && vfs != null)
+            {
+                try
+                {
+                    mountedNewFiles = vfs.SubmitKey(ZeroGuid, new FAesKey(pick.Key));
                     submitted = true;
                     _logger.LogInformation("[AesFinder] Submitted main key; mounted {Mounted} VFS file(s). Total files: {Total}",
                         mountedNewFiles, _provider.Files.Count);
@@ -119,10 +185,19 @@ namespace FortnitePorting.Controllers
 
             return Ok(new
             {
-                mainKey = r.MainKey,
-                version = r.Version,
-                build = r.Build,
-                fullVersion = r.FullVersion,
+                mainKey = pick.Key,
+                verified = pick.Validated,
+                selection = pick.Reason,
+                candidateCount = candidates.Count,
+                candidatesTried = pick.Tested,
+                rejectedKeys = pick.Rejected,
+                toolMainKey = r?.MainKey,
+                toolKeyWasWrong = r?.MainKey != null && pick.Validated
+                                  && !string.Equals(Normalize(r.MainKey), Normalize(pick.Key), StringComparison.OrdinalIgnoreCase),
+                toolError,
+                version = r?.Version,
+                build = r?.Build,
+                fullVersion = r?.FullVersion,
                 downloadBuild = dl.Build,
                 downloaded = dl.Downloaded,
                 submitted,
@@ -183,6 +258,7 @@ namespace FortnitePorting.Controllers
                 downloaded = extraction.Downloaded,
                 scanSeconds = Math.Round(extraction.ScanSeconds, 2),
                 keyCount = extraction.Keys.Count,
+                immediateKeyCount = extraction.ImmediateKeyCount,
                 keys = extraction.Keys,
                 verification
             });
