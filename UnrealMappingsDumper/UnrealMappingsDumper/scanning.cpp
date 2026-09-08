@@ -207,6 +207,37 @@ namespace
 	// it saw anything array-shaped at all.
 	int32_t GNearMisses = 0;
 
+	// Bytes actually walked, so "found nothing" can be told apart from "never looked".
+	uint64_t GBytesScanned = 0;
+
+	// The scan reads addresses it has only checked at region granularity, and it runs inside the
+	// editor. A page that is unmapped between the check and the read must not crash the host, so the
+	// counter test is entered through a filter. Kept free of C++ objects for __try.
+	int32_t SafeDeriveChunkSize(uintptr_t Candidate, const FArrayFieldOrder& Order)
+	{
+		__try
+		{
+			return DeriveChunkSize(Candidate, Order);
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return 0;
+		}
+	}
+
+	/// <summary>Reads one pointer-sized word, or 0 if the page has gone away.</summary>
+	uintptr_t SafeReadPointer(uintptr_t Address)
+	{
+		__try
+		{
+			return *reinterpret_cast<uintptr_t*>(Address);
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return 0;
+		}
+	}
+
 	// Walks one committed span. Returns the address of the array, or 0.
 	uintptr_t ScanSpan(uintptr_t Start, uintptr_t End)
 	{
@@ -214,12 +245,20 @@ namespace
 			return 0;
 
 		auto Last = End - 0x20;
+		GBytesScanned += End - Start;
 
+		// Whole-process scanning covers gigabytes, so the common case has to be rejected without
+		// entering the counter test at all. Objects is at offset 0 in every layout and is a heap
+		// allocation, so anything that is not a plausible pointer there cannot be the array.
 		for (auto Cursor = Start; Cursor <= Last; Cursor += sizeof(uintptr_t))
 		{
+			auto ChunkTable = SafeReadPointer(Cursor);
+			if (ChunkTable < 0x10000 || (ChunkTable & 7) != 0)
+				continue;
+
 			for (auto& Order : ArrayFieldOrders)
 			{
-				auto ChunkSize = DeriveChunkSize(Cursor, Order);
+				auto ChunkSize = SafeDeriveChunkSize(Cursor, Order);
 				if (!ChunkSize)
 					continue;
 
@@ -262,11 +301,18 @@ uintptr_t GObjectsHeuristicScanObject::TryFind()
 
 		for (WORD Index = 0; Index < Headers->FileHeader.NumberOfSections; Index++, Section++)
 		{
-			if (!(Section->Characteristics & IMAGE_SCN_MEM_READ) || (Section->Characteristics & IMAGE_SCN_MEM_EXECUTE))
+			// Only executable code is skipped. Characteristics are not trusted any further: a
+			// protected build can leave them looking odd while the data is mapped and readable.
+			if (Section->Characteristics & IMAGE_SCN_MEM_EXECUTE)
 				continue;
 
+			auto Before = GNearMisses;
 			auto Start = ModuleBase + Section->VirtualAddress;
 			auto Found = ScanSpan(Start, Start + Section->Misc.VirtualSize);
+
+			UE_LOG("  section %.8s: %u KB, %d array-shaped",
+				Section->Name, Section->Misc.VirtualSize / 1024, GNearMisses - Before);
+
 			if (Found)
 			{
 				UE_LOG("GObjects found in section %.8s (+0x%llX)",
@@ -276,7 +322,8 @@ uintptr_t GObjectsHeuristicScanObject::TryFind()
 		}
 	}
 
-	UE_LOG("GObjects was not in the module's data sections (%d array-shaped candidates); scanning process memory", GNearMisses);
+	UE_LOG("GObjects was not in the module's data sections (%d array-shaped candidates, %llu MB scanned); scanning process memory",
+		GNearMisses, (unsigned long long)(GBytesScanned / (1024 * 1024)));
 
 	// Second pass: the rest of the process. A packed or protected build can move its globals out of
 	// the image, which is exactly the case the first pass cannot cover.
@@ -297,18 +344,25 @@ uintptr_t GObjectsHeuristicScanObject::TryFind()
 
 		constexpr DWORD Writable = PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
 
-		// The array is written to, so only writable committed memory can hold it. Image regions were
-		// covered by the first pass.
+		// The array is written to, so only writable committed memory can hold it. Image regions are
+		// included: if the first pass missed the data because of how the sections describe
+		// themselves, excluding them here would miss it a second time.
 		auto Scannable =
 			Info.State == MEM_COMMIT &&
 			(Info.Protect & Writable) &&
 			!(Info.Protect & (PAGE_GUARD | PAGE_NOACCESS)) &&
-			Info.Type != MEM_IMAGE &&
 			Info.RegionSize <= MaxRegionBytesToScan;
 
 		if (Scannable)
 		{
+			auto BeforeMB = GBytesScanned / (512 * 1024 * 1024);
 			auto Found = ScanSpan(Base, Next);
+
+			if (GBytesScanned / (512 * 1024 * 1024) != BeforeMB)
+			{
+				UE_LOG("  ... %llu MB scanned, %d array-shaped so far",
+					(unsigned long long)(GBytesScanned / (1024 * 1024)), GNearMisses);
+			}
 			if (Found)
 			{
 				UE_LOG("GObjects found outside the module image at 0x%llX", (unsigned long long)Found);
@@ -322,7 +376,8 @@ uintptr_t GObjectsHeuristicScanObject::TryFind()
 		Address = Next;
 	}
 
-	UE_LOG("GObjects: no candidate passed validation (%d were array-shaped)", GNearMisses);
+	UE_LOG("GObjects: no candidate passed validation (%d were array-shaped, %llu MB scanned)",
+		GNearMisses, (unsigned long long)(GBytesScanned / (1024 * 1024)));
 	return 0;
 }
 
