@@ -14,7 +14,7 @@ public sealed class LocalizedDocumentFilter : IDocumentFilter
         ["Debug"] = ("ローカルVFSの診断用ファイル・PAK確認。", "Diagnostics for the local virtual file system and mounted archives."),
         ["Cosmetics"] = ("PAK単位および全マウントPAK横断のコスメ抽出。", "Cosmetic extraction scoped to one PAK or across all mounted PAKs."),
         ["Search"] = ("ファイルパスとアセット・設定内容の検索。", "Search across file paths and asset/config contents."),
-        ["Mappings"] = ("マウント中のビルドから.usmapをダンプ・生成し、保存済みマッピングを配信。", "Dump or generate .usmap mappings from the mounted build and serve the stored files."),
+        ["Mappings"] = ("マウント中のビルド、または起動中のUEFNから.usmapをダンプ・生成し、保存済みマッピングを配信。", "Dump or generate .usmap mappings from the mounted build or a running UEFN, and serve the stored files."),
         ["Aes"] = ("ローカル実行環境でのAESキー抽出・適用。", "AES key extraction and application in the local process."),
         ["Pak"] = ("現在マウントされているPAK/UTOCの一覧と内容。", "Mounted PAK/UTOC inventory and contents."),
         ["Config"] = ("読み込み済みINIファイルの一覧と設定値検索。", "Loaded INI file listing and configuration lookup."),

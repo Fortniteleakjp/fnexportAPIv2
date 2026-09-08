@@ -315,25 +315,35 @@ namespace FortnitePorting.Controllers
         public IActionResult GetUefnStatus()
         {
             var dll = UefnDumperInjector.FindDll();
-            var processes = OperatingSystem.IsWindows()
+            var windows = OperatingSystem.IsWindows();
+            var processes = windows
                 ? UefnDumperInjector.FindTargets().Select(p => new { pid = p.Id, name = p.ProcessName }).ToList<object>()
                 : [];
 
+            // The same selection a dump without 'pid' would make, so the caller can see up front
+            // which process it is about to inject into.
+            var editor = windows ? UefnDumperInjector.FindEditor() : null;
+
             return Ok(new
             {
-                supported = OperatingSystem.IsWindows(),
+                supported = windows,
                 dllFound = dll != null,
                 dllPath = dll,
                 dllFileName = UefnDumperInjector.DllFileName,
                 overrideVariable = UefnDumperInjector.DllPathVariable,
                 processes,
-                ready = OperatingSystem.IsWindows() && dll != null && processes.Count > 0,
-                hint = dll == null
-                    ? "Build the DLL with UnrealMappingsDumper\\build.bat (it lands in libs/), or set " +
-                      $"{UefnDumperInjector.DllPathVariable} to an existing copy."
-                    : processes.Count == 0
-                        ? "Start Unreal Editor for Fortnite and let it finish loading, then POST /api/v1/mappings/dump/uefn."
-                        : "POST /api/v1/mappings/dump/uefn to dump the mapping."
+                target = editor == null ? null : new { pid = editor.Id, name = editor.ProcessName },
+                ready = windows && dll != null && editor != null,
+                hint = !windows
+                    ? "Dumping from UEFN needs Windows. Use POST /api/v1/mappings/dump instead."
+                    : dll == null
+                        ? "Build the DLL with UnrealMappingsDumper\\build.bat (it lands in libs/), or set " +
+                          $"{UefnDumperInjector.DllPathVariable} to an existing copy."
+                        : processes.Count == 0
+                            ? "Start Unreal Editor for Fortnite and let it finish loading, then POST /api/v1/mappings/dump/uefn."
+                            : editor == null
+                                ? "UEFN is running but is not loaded far enough to dump from. Wait for it to finish loading and retry."
+                                : "POST /api/v1/mappings/dump/uefn to dump the mapping."
             });
         }
 
@@ -345,7 +355,7 @@ namespace FortnitePorting.Controllers
         /// covers native /Script types as well and needs no base mapping merged under it. UEFN has to
         /// be running and fully loaded, and the API has to run as the same Windows user.
         /// </remarks>
-        /// <param name="pid">Target UEFN process id; only needed when more than one is running.</param>
+        /// <param name="pid">Target UEFN process id. Leave unset: the editor is identified automatically.</param>
         /// <param name="fileName">Output file name; defaults to {build}_uefn.usmap.</param>
         /// <param name="compression">none (default) or oodle. Oodle runs inside the game, which has the encoder.</param>
         /// <param name="console">Let the dumper open a console window inside UEFN (default false).</param>

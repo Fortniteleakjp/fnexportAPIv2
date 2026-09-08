@@ -37,6 +37,15 @@ public sealed class UefnDumperInjector
     // Unreal process this project already works against (the AES key is read out of its Common DLL).
     private const string ProcessNamePrefix = "UnrealEditorFortnite-Win64-";
 
+    // The shipping build is the one users actually run; other configurations (Debug, DebugGame,
+    // Development) only appear on developer machines and are never preferred over it.
+    private const string ShippingProcessName = "UnrealEditorFortnite-Win64-Shipping";
+
+    // A UEFN that has only just started has not built its reflection data yet, so injecting into it
+    // dumps an incomplete mapping. The editor grows well past this while loading; the crash handler
+    // and other helpers sharing the name never do, which is what makes this a usable tiebreaker.
+    private const long MinimumWorkingSetBytes = 512L * 1024 * 1024;
+
     // How long the injected LoadLibrary call itself may take. The dump runs on its own thread
     // afterwards, so this only covers getting the module loaded.
     private static readonly TimeSpan LoadTimeout = TimeSpan.FromSeconds(30);
@@ -49,7 +58,7 @@ public sealed class UefnDumperInjector
 
     public sealed class DumpRequest
     {
-        /// <summary>Target process id. When unset the single running UEFN process is used.</summary>
+        /// <summary>Target process id. When unset the editor is identified automatically.</summary>
         public int? ProcessId;
 
         /// <summary>Output file name inside mappings/; defaults to {build}_uefn.usmap.</summary>
@@ -117,6 +126,24 @@ public sealed class UefnDumperInjector
             })
             .OrderBy(p => p.Id)
             .ToList();
+
+    /// <summary>
+    /// The UEFN process a dump would inject into right now, or null when none is usable. Never
+    /// throws: the status endpoint reports what it finds rather than failing.
+    /// </summary>
+    public static Process? FindEditor()
+    {
+        try
+        {
+            var targets = FindTargets();
+            return targets.Count == 0 ? null : PickEditor(targets);
+        }
+        catch (InvalidOperationException)
+        {
+            // UEFN is running but not loaded far enough to be injectable yet.
+            return null;
+        }
+    }
 
     /// <summary>
     /// Injects the dumper into UEFN and stores the mapping it writes in the mappings/ directory.
@@ -190,7 +217,10 @@ public sealed class UefnDumperInjector
         return result;
     }
 
-    /// <summary>Picks the process to inject into, by id when one was given.</summary>
+    /// <summary>
+    /// Picks the process to inject into. An explicit id wins; otherwise the editor is identified
+    /// automatically, so the caller never has to look a pid up.
+    /// </summary>
     private static Process ResolveTarget(int? processId)
     {
         var targets = FindTargets();
@@ -203,15 +233,66 @@ public sealed class UefnDumperInjector
                        (targets.Count == 0 ? "(none)" : string.Join(", ", targets.Select(p => $"{p.ProcessName}:{p.Id}"))));
         }
 
-        return targets.Count switch
+        if (targets.Count == 0)
         {
-            0 => throw new InvalidOperationException(
-                "No running UEFN process was found. Start Unreal Editor for Fortnite and let it finish loading, then retry."),
-            1 => targets[0],
-            _ => throw new InvalidOperationException(
-                "More than one UEFN process is running; pass 'pid' to choose one: " +
-                string.Join(", ", targets.Select(p => $"{p.ProcessName}:{p.Id}")))
-        };
+            throw new InvalidOperationException(
+                "No running UEFN process was found. Start Unreal Editor for Fortnite and let it finish loading, then retry.");
+        }
+
+        return PickEditor(targets);
+    }
+
+    /// <summary>
+    /// Chooses the editor out of the UEFN processes that are running. UEFN can have more than one
+    /// process under the same name (the crash reporter and other helpers are launched from the same
+    /// image), so the shipping build is preferred, then the one that actually holds the loaded
+    /// editor: the helpers stay small, while the editor itself is several gigabytes.
+    /// </summary>
+    private static Process PickEditor(List<Process> targets)
+    {
+        var shipping = targets
+            .Where(p => p.ProcessName.Equals(ShippingProcessName, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        var candidates = shipping.Count > 0 ? shipping : targets;
+        if (candidates.Count == 1) return candidates[0];
+
+        // Largest first, so the fully loaded editor wins over anything still starting up.
+        var ranked = candidates
+            .Select(p => (Process: p, WorkingSet: WorkingSet(p)))
+            .OrderByDescending(x => x.WorkingSet)
+            .ToList();
+
+        var best = ranked[0];
+        if (best.WorkingSet < MinimumWorkingSetBytes)
+        {
+            throw new InvalidOperationException(
+                "UEFN is running but does not look loaded yet " +
+                $"({string.Join(", ", ranked.Select(x => $"{x.Process.ProcessName}:{x.Process.Id} {x.WorkingSet / (1024 * 1024)}MB"))}). " +
+                "Wait for the editor to finish loading and retry, or pass 'pid' to inject anyway.");
+        }
+
+        return best.Process;
+    }
+
+    /// <summary>Resident memory of a process, or 0 when it can no longer be inspected.</summary>
+    private static long WorkingSet(Process process)
+    {
+        try
+        {
+            process.Refresh();
+            return process.WorkingSet64;
+        }
+        catch (InvalidOperationException)
+        {
+            // The process exited between enumeration and inspection.
+            return 0;
+        }
+        catch (Win32Exception)
+        {
+            // Running as a different user; it is not injectable either, so rank it last.
+            return 0;
+        }
     }
 
     /// <summary>

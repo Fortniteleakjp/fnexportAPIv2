@@ -452,7 +452,7 @@ UEFN. A `.cfg` next to the DLL tells it where to write, and the DLL reports back
 | `GET /api/v1/mappings` | List the stored `.usmap` files (dumped, generated, or downloaded), newest first. |
 | `GET /api/v1/mappings/{fileName}` | Serve one stored `.usmap`. |
 | `GET /api/v1/mappings/uefn` | Report whether a UEFN dump can run right now: whether the DLL is built and where, which UEFN processes can be injected into, `ready`, and what to do next. |
-| `POST /api/v1/mappings/dump/uefn?pid={n}&compression={none/oodle}&fileName={name}&console={bool}&timeoutSeconds={n}&load={bool}&download={bool}` | Dump a `.usmap` out of a running UEFN by injecting the DLL. The binary is returned by default and stored as `mappings/{build}_uefn.usmap`. `pid` is only needed when more than one UEFN is running. |
+| `POST /api/v1/mappings/dump/uefn?pid={n}&compression={none/oodle}&fileName={name}&console={bool}&timeoutSeconds={n}&load={bool}&download={bool}` | Dump a `.usmap` out of a running UEFN by injecting the DLL. The binary is returned by default and stored as `mappings/{build}_uefn.usmap`. The target process is detected automatically, so `pid` is rarely needed. |
 | `POST /api/v1/mappings/generate?url={url}&path={path}&fileName={name}&load={bool}&verify={bool}&download={bool}` | Convert a StormForge-style mappings JSON into a `.usmap` (the pre-existing endpoint). |
 
 ```
@@ -484,7 +484,10 @@ curl -OJ "http://localhost:3849/api/v1/mappings/FortniteGame_42_00_dumped.usmap"
 > fully loaded. Run the API as the same Windows user as UEFN (elevated if that is not enough). The DLL is
 > looked up through `USMAP_DUMPER_DLL`, then next to the executable, then `libs/` — the same order the
 > Oodle and RAD Audio libraries use. `compression=oodle` works here because the encoder lives inside the
-> game. Check `GET /api/v1/mappings/uefn` first to see whether a dump can run.
+> game. The target process is picked automatically: `UnrealEditorFortnite-Win64-Shipping` is preferred, and when
+> several processes share that name the one with the largest working set wins — that is the loaded editor rather
+> than a helper. A candidate under 512MB is refused with `409` instead of dumping an incomplete mapping. Pass `pid`
+> only to override that. `GET /api/v1/mappings/uefn` reports the choice up front as `target`.
 >
 > **How failures surface**: `424` when the DLL has not been built, `409` when no UEFN (or more than one)
 > is running, `501` off Windows, `504` on timeout, and `502` with the tail of the log when the DLL itself

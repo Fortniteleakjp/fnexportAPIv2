@@ -495,7 +495,7 @@ DLL 側はログ末尾の `HOST_RESULT` 行で結果を返します。
 | `GET /api/v1/mappings` | 保存済みの `.usmap`（ダンプ／生成／ダウンロード）を新しい順に一覧します。 |
 | `GET /api/v1/mappings/{fileName}` | 保存済みの `.usmap` を配信します。 |
 | `GET /api/v1/mappings/uefn` | UEFN ダンプが今すぐ実行できるかを返します（DLL の有無・パス、注入可能な UEFN プロセス一覧、`ready`、次にやるべきこと）。 |
-| `POST /api/v1/mappings/dump/uefn?pid={n}&compression={none/oodle}&fileName={name}&console={bool}&timeoutSeconds={n}&load={bool}&download={bool}` | 起動中の UEFN に DLL を注入して `.usmap` をダンプして返します。既定はバイナリ返却で、同時に `mappings/{build}_uefn.usmap` へ保存します。UEFN が複数起動している場合のみ `pid` が必要です。 |
+| `POST /api/v1/mappings/dump/uefn?pid={n}&compression={none/oodle}&fileName={name}&console={bool}&timeoutSeconds={n}&load={bool}&download={bool}` | 起動中の UEFN に DLL を注入して `.usmap` をダンプして返します。既定はバイナリ返却で、同時に `mappings/{build}_uefn.usmap` へ保存します。対象プロセスは自動で特定されるため `pid` は通常不要です。 |
 | `POST /api/v1/mappings/generate?url={url}&path={path}&fileName={name}&load={bool}&verify={bool}&download={bool}` | StormForge 形式のマッピング JSON を `.usmap` に変換します（従来からのエンドポイント）。 |
 
 ```
@@ -524,7 +524,10 @@ curl -OJ "http://localhost:3849/api/v1/mappings/FortniteGame_42_00_dumped.usmap"
 > API は UEFN と同じ Windows ユーザー（権限が足りなければ管理者）で動かしてください。
 > DLL の探索順は `USMAP_DUMPER_DLL` → 実行ファイルの隣 → `libs/` で、Oodle／RAD Audio と同じです。
 > `compression=oodle` はゲーム内の Oodle エンコーダを使うため、pak ダンプと違い指定できます。
-> 実行できるかどうかは `GET /api/v1/mappings/uefn` で事前に確認できます。
+> 対象プロセスは自動で特定します。`UnrealEditorFortnite-Win64-Shipping` を優先し、同名のプロセスが複数ある場合は
+> 常駐メモリが最大のもの（＝実際に読み込みを終えたエディター本体）を選びます。まだ読み込み途中で 512MB に満たない場合は
+> 不完全なマッピングを吐かないよう `409` で止めます。明示したいときだけ `pid` を渡してください。
+> 実行できるかどうかと自動で選ばれる対象は `GET /api/v1/mappings/uefn` の `target` で事前に確認できます。
 >
 > **失敗の見え方**: DLL 未ビルドは `424`、UEFN 未起動や複数起動は `409`、Windows 以外は `501`、
 > 時間切れは `504`、DLL 側が失敗した場合は `502` とログ末尾を返します。
