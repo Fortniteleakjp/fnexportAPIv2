@@ -151,7 +151,8 @@ Base URL: `http://localhost:3849`
 > **CORS**: enabled for any origin (any origin/method/header). The audio diagnostic
 > headers (`X-Audio-Format` / `X-Audio-Decoded` / `X-Rada-Native-Decoder`) and
 > `Content-Disposition`, the backup headers (`X-Backup-Entries` / `X-Backup-Version`), and the hotfix headers
-> (`X-Hotfix-Status` / `X-Hotfix-Applied`) are exposed so browser clients can read them.
+> (`X-Hotfix-Status` / `X-Hotfix-Applied`) and the icon headers (`X-Icon-Source` / `X-Icon-Name`)
+> are exposed so browser clients can read them.
 
 ### Asset export — `/api/v1/export`
 
@@ -159,6 +160,7 @@ Base URL: `http://localhost:3849`
 |---|---|
 | `GET /api/v1/export?path={path}&image={bool}&audio={bool}&lang={code}&hotfix={bool}` | Export an asset. JSON is returned by default, with all package exports in the `jsonOutput` array. Normal Unreal property names preserve their original casing; only localized-text keys follow FortniteAPI's `namespace`, `key`, `sourceString`, and `localizedString` casing. `hash` is the SHA-256 of that array's UTF-8 JSON, `entries` is its count, and `bytes` is its byte length. `image=true` returns PNG for textures; `audio=true` returns audio for sounds; `lang` applies localization (e.g. `ja`); `hotfix=true` returns the [hotfixed content](#hotfixed-content--hotfixtrue). **If `image=true` but the asset is not a texture, JSON is returned automatically.** |
 | `GET /api/v1/export/audioinfo?path={path}` | Report a sound asset's format and whether it can be decoded to WAV, without downloading the binary. |
+| `GET /api/v1/export/datatable?path={path}&format={csv\|json}&rows={csv}&delimiter={d}&flatten={bool}&bom={bool}&download={bool}&hotfix={bool}` | Export a DataTable / CurveTable [as CSV](#datatable--curvetable-as-csv). |
 | `GET /api/v1/export/locres?lang={code}` | Merged localization table for a language. |
 | `GET /api/v1/export/locres/languages` | List available localization languages. |
 | `GET /api/v1/export/filepath/{pakName}` | List file paths inside a given pak / chunk number. |
@@ -263,6 +265,40 @@ Example:
 http://localhost:3849/api/v1/export?path=FortniteGame/Content/.../MySound.uasset&audio=true
 ```
 
+#### DataTable / CurveTable as CSV
+
+`GET /api/v1/export/datatable?path={path}` returns a `UDataTable` or `UCurveTable` (including
+subclasses such as `UCompositeDataTable`) as CSV, so the table opens directly in Excel or Google
+Sheets instead of having to be reshaped from JSON.
+
+- **DataTable**: one line per row. The first column is `RowName`, followed by the union of every
+  row's properties in first-seen order. Nested structs are expanded into dotted columns such as
+  `Name.SourceString`; pass `flatten=false` to keep each nested value as JSON in a single cell.
+  Arrays always stay as compact JSON.
+- **CurveTable**: one line per **curve key** (long form). The columns are `RowName`, `Time`, and
+  `Value`, then the key's own fields (`InterpMode` and so on), then the curve-level properties under
+  a `Curve.` prefix. A row with no keys still produces one line, so its name is not lost.
+
+| Parameter | Default | Description |
+|---|---|---|
+| `format` | `csv` | `json` returns the same table as structured `columns` + `rows`. |
+| `rows` | (every row) | Comma-separated row names to keep; matched case-insensitively. |
+| `delimiter` | `,` | `comma` / `tab` / `semicolon` / `pipe`, or any single character. |
+| `flatten` | `true` | Expand nested structs into dotted columns. |
+| `bom` | `true` | Write a UTF-8 BOM so Excel reads localized values correctly. |
+| `download` | `true` | Send `Content-Disposition` so the file saves as `{assetName}.csv`. |
+| `hotfix` | `false` | Apply the live cloudstorage `[AssetHotfix]` row/curve edits before exporting. |
+
+An asset that is neither a DataTable nor a CurveTable answers `422` (use `/api/v1/export` for other
+asset types). If rows are exported but the columns come out empty, the `.usmap` mapping for that row
+struct is probably missing.
+
+Examples:
+```
+http://localhost:3849/api/v1/export/datatable?path=FortniteGame/Content/Balance/DataTables/AthenaGameData.uasset
+http://localhost:3849/api/v1/export/datatable?path=.../CurveTable.uasset&delimiter=tab&download=false
+```
+
 ### Item lookup — `/api/v1/items`
 
 Find and inspect assets whose file name starts with one of
@@ -296,7 +332,21 @@ path/name search plus a bounded full-text search inside asset contents (properti
 | `GET /api/v1/search?q={text}&mode={mode}&field={field}&ext={csv}&dir={dir}&dedupe={bool}&caseSensitive={bool}&page={n}&pageSize={n}` | Search the paths/names of all files. Returns matching files (`path`/`name`/`ext`) with a total count (paginated, max 10000/page). |
 | `GET /api/v1/search/content?q={text}&dir={dir}&pathContains={text}&ext={csv}&maxScan={n}&maxResults={n}&snippetsPerFile={n}&caseSensitive={bool}` | Search the string inside file **contents**. Assets (`.uasset`/`.umap`) are parsed and their exports serialized to JSON; config/text/binary files (`.ini`/`.bin`/`.json`, etc.) are decoded from raw bytes. Returns matching files and snippet lines. The default set is assets + text/config; `ext=*` searches every file, `ext=.ini` restricts. **Scans every file (~1.65M, ~11 GB) by default in about 40 s** (allocation-free byte scan, parallel across cores). Scan order: **(1) path contains the query, (2) neighbour assets (same plugin/folder), (3) text/config, (4) other assets**. Pass a smaller `maxScan` for a faster partial scan. |
 
-**`mode`**: `contains` (default) / `prefix` / `suffix` / `exact` / `wildcard` (`*` `?` glob) / `regex` / `tokens` (AND of whitespace-separated words)
+**`mode`**: `contains` (default) / `prefix` / `suffix` / `exact` / `wildcard` (flat `*` `?`) / `glob` (path-aware) / `regex` / `tokens` (AND of whitespace-separated words)
+
+**`wildcard` vs `glob`**: in `wildcard` mode `*` matches anything, including `/`. `glob` is aware of
+the path structure, so a pattern can address one directory level at a time.
+
+| Syntax | Meaning |
+|---|---|
+| `*` | Any run of characters that does not cross `/` |
+| `**` | Any run of characters, crossing `/` (`**/` also matches zero directories) |
+| `?` | Any single character other than `/` |
+| `[abc]` `[a-z]` `[!abc]` | Character class (`!` or `^` negates) |
+| `{a,b}` | Alternation |
+
+Both are anchored (whole-value match) and, like `regex`, are bounded by the evaluation timeout and
+the pattern-length limit.
 **`field`**: `path` (full path, default) / `name` (file name) / `stem` (name without extension)
 
 Examples (search by codename):
@@ -476,7 +526,16 @@ curl http://localhost:3849/api/v1/update
 
 | Method & path | Description |
 |---|---|
+| `GET /api/v1/cosmetics/{id}?lang={code}` | **Get one cosmetic by ID**, without naming a PAK. `id` may be the asset name (`CID_028_Athena_Commando_F`, `Character_HonestWasp`, `EID_Floss`) or just the skin ID (`HonestWasp`). Matching runs exact name, then `Prefix_ID`, then substring; the first tier that matches returns its candidates in `matches` and the chosen one in `result`. |
+| `GET /api/v1/cosmetics/{id}/icon?variant={large\|small\|offercatalog}` | **Get the cosmetic's icon as PNG**. `large` (default) uses `LargeIcon`, `small` uses `Icon`, `offercatalog` uses the OfferCatalog texture. `large` and `small` fall back to the other icon and then to OfferCatalog. The texture actually used is reported in `X-Icon-Source` / `X-Icon-Name`. |
+| `GET /api/v1/cosmetics/search?q={text}&category={prefix}&page={n}&pageSize={n}&lang={code}` | Search cosmetics across every mounted PAK (`category` is a prefix such as `Character` or `Backpack`). |
 | `GET /api/v1/pak/{pakName}/cosmetics?page={n}&pageSize={n}&lang={code}` | For the given PAK/chunk (number accepted), extracts each cosmetic under `FortniteGame/Plugins/GameFeatures/BRCosmetics/Content/Athena/Items/Cosmetics` and each bundle/display asset under `FortniteGame/Plugins/GameFeatures/OfferCatalog/Content/DisplayAssets` (paginated, max 200/page). Cosmetic entries include ItemName/Description keys, icons, tags, and matched OfferCatalog texture paths; display asset entries include serialized exports such as `FortMtxOfferData` bundle data. |
+
+Example (by ID, Japanese):
+```
+http://localhost:3849/api/v1/cosmetics/Character_HonestWasp?lang=ja
+http://localhost:3849/api/v1/cosmetics/HonestWasp/icon
+```
 
 Example (chunk number 30, Japanese):
 ```
@@ -501,6 +560,50 @@ Example response (one item, `lang=ja`):
 Omit `lang` (or use `en`) and `itemName` etc. contain the English source text (SourceString).
 
 When the PAK also contains `FortniteGame/Plugins/GameFeatures/OfferCatalog/Content/Textures`, each cosmetic gets an `offerCatalog` field with the texture path matching its **skin ID** (the asset name after the first `_`, e.g. `Character_HonestWasp` → `HonestWasp`). Textures are matched as `T_Athena{Category}_{ID}` (`Character` → `Soldiers`; other prefixes use the prefix itself), e.g. `Character_HonestWasp` → `T_AthenaSoldiers_HonestWasp`, `Backpack_HonestWasp` → `T_AthenaBackpack_HonestWasp`. `null` when there is no match (or it is ambiguous).
+
+### Localization lookup — `/api/v1/localization`
+
+Looks up single entries in the mounted build's `.locres` tables: **resolve a key into every
+language**, or **find the `namespace`/`key` behind a string you can see in game**. Where
+`/api/v1/export/locres` dumps a whole language, this searches one entry at a time.
+
+| Method & path | Description |
+|---|---|
+| `GET /api/v1/localization/languages` | The language codes this build ships `.locres` files for. |
+| `GET /api/v1/localization/lookup?key={key}&namespace={ns}&langs={csv}` | **Forward lookup.** Resolves the key in every language (the default) and groups the translations by the namespace it was found in. |
+| `GET /api/v1/localization/lookup?text={text}&mode={mode}&lang={code}&withTranslations={bool}&maxResults={n}` | **Reverse lookup.** Returns the `namespace`, `key`, `lang`, and `value` of every entry whose translation matches. |
+
+- Pass either `key` or `text`, never both (both, or neither, answers `400`).
+- Languages come from `lang` (one) or `langs` (comma-separated; `all` / `*` for every language).
+  **The default is every available language.**
+- `mode` (reverse lookup): `contains` (default) / `exact` / `prefix` / `suffix` / `regex`. Add
+  `caseSensitive=true` for a case-sensitive match; `regex` is bounded by a 250 ms per-entry timeout
+  and a pattern-length limit.
+- `withTranslations=true` resolves each reverse-lookup hit into every available language.
+- Results are sorted by `namespace`, `key`, then `lang` before `maxResults` (default 50, max 500) are
+  returned. `truncated: true` means the 10000-match collection cap was reached.
+
+Examples:
+```
+http://localhost:3849/api/v1/localization/lookup?key=62B77828400008FD63C782B57223217D
+http://localhost:3849/api/v1/localization/lookup?text=Metal%20Gear&lang=en&withTranslations=true
+```
+Example response (forward lookup):
+```json
+{
+  "key": "62B77828400008FD63C782B57223217D",
+  "namespace": null,
+  "found": true,
+  "totalMatches": 1,
+  "results": [
+    {
+      "namespace": "",
+      "key": "62B77828400008FD63C782B57223217D",
+      "translations": { "en": "Metal Gear Mk. II", "ja": "メタルギアMk.II" }
+    }
+  ]
+}
+```
 
 ## RAD Audio decoder (`RADADecoder` / `RADADecoder-cs`)
 

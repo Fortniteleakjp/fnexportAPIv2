@@ -13,7 +13,8 @@ HTTP で公開され、全エンドポイントを Swagger UI から確認・実
 | 機能 | 内容 |
 |---|---|
 | アセットエクスポート | `.uasset`／`.umap` を JSON、テクスチャを PNG、サウンドを音声として返却 |
-| ローカライズ | `lang=ja` などを指定してローカライズ済み文字列を取得 |
+| ローカライズ | `lang=ja` などを指定してローカライズ済み文字列を取得。Key からの対訳取得と表示文字列からの逆引きにも対応 |
+| テーブルの CSV 出力 | DataTable／CurveTable を表計算ソフトでそのまま開ける CSV として取得 |
 | アイテム・コスメ検索 | アイテムのプロパティ、コスメ情報、アイコン、OfferCatalog を抽出 |
 | 全文検索 | パス・ファイル名だけでなく、読み込み済みアセットの内容も検索（結果は既定 24 時間キャッシュ） |
 | FModel バックアップ | 現在のビルドのファイル一覧を FModel の `.fbkp` 形式で配信 |
@@ -188,6 +189,7 @@ docker run -p 3849:3849 \
 | アセットの JSON／画像／音声エクスポート | [`/api/v1/export`](#アセットエクスポート--apiv1export) |
 | アイテムの検索・プロパティ抽出 | [`/api/v1/items`](#アイテム検索--apiv1items) |
 | ファイル名・アセット内容の全文検索 | [`/api/v1/search`](#文字列検索--apiv1search) |
+| ローカライズの Key 解決・表示文字列の逆引き | [`/api/v1/localization`](#ローカライズ検索--apiv1localization) |
 | AES 鍵の取得・投入 | [`/aes`](#aes鍵取得-aes) |
 | デバッグ情報・マウント済みファイルの確認 | [`/api/v1/debug`](#デバッグ--apiv1debug) |
 | アーカイブ情報・AES 情報 | [`/api/v1/archives`](#アーカイブ情報aes--apiv1archives) |
@@ -200,7 +202,8 @@ docker run -p 3849:3849 \
 > **CORS**: すべてのオリジンからの呼び出しを許可しています（任意のオリジン／メソッド／ヘッダ）。
 > 音声診断ヘッダ（`X-Audio-Format` / `X-Audio-Decoded` / `X-Rada-Native-Decoder`）と
 > `Content-Disposition`、バックアップ診断ヘッダ（`X-Backup-Entries` / `X-Backup-Version`）、
-> ホットフィックス診断ヘッダ（`X-Hotfix-Status` / `X-Hotfix-Applied`）はブラウザから読めるよう公開されています。
+> ホットフィックス診断ヘッダ（`X-Hotfix-Status` / `X-Hotfix-Applied`）、
+> アイコン診断ヘッダ（`X-Icon-Source` / `X-Icon-Name`）はブラウザから読めるよう公開されています。
 
 ### アセットエクスポート — `/api/v1/export`
 
@@ -208,6 +211,7 @@ docker run -p 3849:3849 \
 |---|---|
 | `GET /api/v1/export?path={path}&image={bool}&audio={bool}&lang={code}&hotfix={bool}` | アセットをエクスポート。既定は JSON で、全エクスポートを `jsonOutput` 配列に返します。Unrealの通常プロパティ名は元の大文字・小文字を保持し、ローカライズ文字列のキーのみ FortniteAPI と同じ `namespace`・`key`・`sourceString`・`localizedString` にします。`hash` はその配列の UTF-8 JSON の SHA-256、`entries` は件数、`bytes` は同JSONのバイト数です。`image=true` でテクスチャを PNG、`audio=true` でサウンドを音声、`lang` でローカライズ（例: `ja`）、`hotfix=true` で[ホットフィックス適用済みの内容](#ホットフィックス適用--hotfixtrue)を返します。**`image=true` でも対象がテクスチャでない場合は自動的に JSON を返します。** |
 | `GET /api/v1/export/audioinfo?path={path}` | サウンドアセットの形式や WAV 変換可否を、バイナリを返さずに報告。 |
+| `GET /api/v1/export/datatable?path={path}&format={csv\|json}&rows={csv}&delimiter={d}&flatten={bool}&bom={bool}&download={bool}&hotfix={bool}` | DataTable／CurveTable を[CSV として取得](#datatablecurvetable-の-csv-出力)。 |
 | `GET /api/v1/export/locres?lang={code}` | 指定言語の結合済みローカライズテーブル。 |
 | `GET /api/v1/export/locres/languages` | 利用可能なローカライズ言語の一覧。 |
 | `GET /api/v1/export/filepath/{pakName}` | 指定 pak／チャンク番号内のファイルパス一覧。 |
@@ -309,6 +313,39 @@ cloudstorage に到達できない場合でもエクスポート自体は失敗�
 http://localhost:3849/api/v1/export?path=FortniteGame/Content/.../MySound.uasset&audio=true
 ```
 
+#### DataTable/CurveTable の CSV 出力
+
+`GET /api/v1/export/datatable?path={path}` は `UDataTable`／`UCurveTable`（`UCompositeDataTable` などの
+派生も含む）を CSV にして返します。JSON を自分で整形せずに、そのまま Excel や Google スプレッドシートで
+開けます。
+
+- **DataTable**: 1 行 = 1 ロウ。先頭列は `RowName`、以降は全ロウのプロパティの和集合（初出順）です。
+  ネストした構造体は `Name.SourceString` のようにドット区切りの列へ展開されます（`flatten=false` で
+  ネスト値をそのまま JSON 文字列として 1 セルに収めます）。配列は常にコンパクトな JSON のままです。
+- **CurveTable**: 1 行 = **カーブのキー 1 個**（縦持ち）。列は `RowName`／`Time`／`Value` に続いて
+  キーの各フィールド（`InterpMode` など）、さらにカーブ自体のプロパティが `Curve.` 接頭辞で並びます。
+  キーが 0 個のロウも 1 行だけ出力されるため、ロウ名が失われません。
+
+| パラメーター | 既定 | 内容 |
+|---|---|---|
+| `format` | `csv` | `json` を指定すると同じ表を `columns` と `rows` の構造化 JSON で返します。 |
+| `rows` | （全ロウ） | 取得するロウ名のカンマ区切り。大文字小文字は区別しません。 |
+| `delimiter` | `,` | `comma`／`tab`／`semicolon`／`pipe`、または任意の 1 文字。 |
+| `flatten` | `true` | ネストした構造体をドット区切りの列に展開します。 |
+| `bom` | `true` | UTF-8 BOM を付与します。Excel で日本語が文字化けしないための既定値です。 |
+| `download` | `true` | `Content-Disposition` を付けて `{アセット名}.csv` として保存させます。 |
+| `hotfix` | `false` | cloudstorage の `[AssetHotfix]` による行・カーブ書き換えを適用してから出力します。 |
+
+対象が DataTable でも CurveTable でもない場合は `422` を返します（通常のアセットは `/api/v1/export` を
+使ってください）。ロウは出力されているのに列が空になる場合は、ロウ構造体に対応する `.usmap` が不足して
+いる可能性があります。
+
+例:
+```
+http://localhost:3849/api/v1/export/datatable?path=FortniteGame/Content/Balance/DataTables/AthenaGameData.uasset
+http://localhost:3849/api/v1/export/datatable?path=.../CurveTable.uasset&delimiter=tab&download=false
+```
+
 ### アイテム検索 — `/api/v1/items`
 
 ファイル名が `WID_`、`AGID_`、`Athena_`、`Figment_Athena_` のいずれかで始まるアセットを
@@ -342,7 +379,20 @@ http://localhost:3849/api/v1/export?path=FortniteGame/Content/.../MySound.uasset
 | `GET /api/v1/search?q={text}&mode={mode}&field={field}&ext={csv}&dir={dir}&dedupe={bool}&caseSensitive={bool}&page={n}&pageSize={n}` | 全ファイルのパス／名を検索。一致ファイルの `path`／`name`／`ext` を総数つきで返す（ページング、最大 10000/頁）。 |
 | `GET /api/v1/search/content?q={text}&dir={dir}&pathContains={text}&ext={csv}&maxScan={n}&maxResults={n}&snippetsPerFile={n}&caseSensitive={bool}` | ファイルの**内容**に含まれる文字列を検索。アセット（`.uasset`/`.umap`）はエクスポートを JSON 化、設定/テキスト/バイナリ（`.ini`/`.bin`/`.json` 等）は生バイトを復号して検索。一致ファイルと該当箇所スニペットを返す。既定の対象は「アセット＋設定/テキスト」、`ext=*` で全ファイル、`ext=.ini` 等で限定。**既定で全ファイル（約165万件・約11GB）を約40秒で走査**（バイト走査＋マルチコア並列）。走査順は **(1) パスにクエリを含む → (2) 近傍アセット → (3) 設定/テキスト → (4) その他アセット**。速度優先時は `maxScan` に小さい値を指定。 |
 
-**`mode`（照合方法）**: `contains`（部分一致・既定）／`prefix`（前方一致）／`suffix`（後方一致）／`exact`（完全一致）／`wildcard`（`*` `?` のグロブ）／`regex`（正規表現）／`tokens`（空白区切りの全語 AND 一致）
+**`mode`（照合方法）**: `contains`（部分一致・既定）／`prefix`（前方一致）／`suffix`（後方一致）／`exact`（完全一致）／`wildcard`（`*` `?` の単純ワイルドカード）／`glob`（パス構造を意識したグロブ）／`regex`（正規表現）／`tokens`（空白区切りの全語 AND 一致）
+
+**`wildcard` と `glob` の違い**: `wildcard` の `*` は `/` も含めて何文字にも一致します。`glob` は
+ディレクトリ構造を意識し、階層を指定して絞り込めます。
+
+| 記法 | 意味 |
+|---|---|
+| `*` | `/` を跨がない任意の文字列 |
+| `**` | `/` を跨ぐ任意の文字列（`**/` は 0 階層にも一致） |
+| `?` | `/` 以外の任意の 1 文字 |
+| `[abc]` `[a-z]` `[!abc]` | 文字クラス（`!` または `^` で否定） |
+| `{a,b}` | いずれかに一致（選択） |
+
+いずれも全体一致（アンカー付き）で、`regex` と同じくタイムアウトとパターン長の制限が掛かります。
 **`field`（照合対象）**: `path`（フルパス・既定）／`name`（ファイル名）／`stem`（拡張子なしの名前）
 
 例（コードネームで検索）:
@@ -350,6 +400,8 @@ http://localhost:3849/api/v1/export?path=FortniteGame/Content/.../MySound.uasset
 http://localhost:3849/api/v1/search?q=HonestWasp
 http://localhost:3849/api/v1/search?q=WID_&mode=prefix&field=name&dedupe=true
 http://localhost:3849/api/v1/search?q=*Athena*Soldier*&mode=wildcard&field=name&ext=.uasset
+http://localhost:3849/api/v1/search?q=FortniteGame/**/Cosmetics/*.uasset&mode=glob
+http://localhost:3849/api/v1/search?q={CID,EID}_*&mode=glob&field=stem
 ```
 レスポンス例（`/api/v1/search`）:
 ```json
@@ -514,7 +566,16 @@ curl http://localhost:3849/api/v1/update
 
 | メソッド & パス | 説明 |
 |---|---|
+| `GET /api/v1/cosmetics/{id}?lang={code}` | **コスメを ID で 1 件取得**。PAK を指定する必要はありません。`id` はアセット名（`CID_028_Athena_Commando_F`、`Character_HonestWasp`、`EID_Floss`）でも、スキンID だけ（`HonestWasp`）でも構いません。照合は「完全一致 → `接頭辞_ID` 一致 → 部分一致」の順で、最初に当たった段階の候補を `matches` に、採用した 1 件を `result` に返します。 |
+| `GET /api/v1/cosmetics/{id}/icon?variant={large\|small\|offercatalog}` | **コスメのアイコンを PNG で取得**。`large`（既定）は `LargeIcon`、`small` は `Icon`、`offercatalog` は OfferCatalog テクスチャです。`large`／`small` は他方 → OfferCatalog の順にフォールバックします。実際に使ったテクスチャは `X-Icon-Source`／`X-Icon-Name` ヘッダでわかります。 |
+| `GET /api/v1/cosmetics/search?q={text}&category={prefix}&page={n}&pageSize={n}&lang={code}` | マウント中の全 PAK からコスメを検索（`category` は `Character`／`Backpack` などの接頭辞）。 |
 | `GET /api/v1/pak/{pakName}/cosmetics?page={n}&pageSize={n}&lang={code}` | 指定 PAK／チャンク（番号可）内の `FortniteGame/Plugins/GameFeatures/BRCosmetics/Content/Athena/Items/Cosmetics` 配下の各コスメと、`FortniteGame/Plugins/GameFeatures/OfferCatalog/Content/DisplayAssets` 配下のバンドル／表示アセットを抽出（ページング、最大 200/頁）。コスメ結果には名称 Key、アイコン、Tags、OfferCatalog テクスチャを含み、表示アセット結果には `FortMtxOfferData` などの export データを含みます。 |
+
+例（ID 直指定、日本語）:
+```
+http://localhost:3849/api/v1/cosmetics/Character_HonestWasp?lang=ja
+http://localhost:3849/api/v1/cosmetics/HonestWasp/icon
+```
 
 例（チャンク番号 30、日本語）:
 ```
@@ -540,6 +601,48 @@ http://localhost:3849/api/v1/pak/30/cosmetics?pageSize=50&lang=ja
 
 対象 PAK 内に `FortniteGame/Plugins/GameFeatures/OfferCatalog/Content/Textures` がある場合、各コスメの**スキンID**（名前の最初の `_` 以降。例 `Character_HonestWasp` → `HonestWasp`）に一致するテクスチャパスを `offerCatalog` キーで併記します。テクスチャは `T_Athena{カテゴリ}_{ID}` の規則で照合します（`Character` → `Soldiers`、その他は接頭辞名）。
 例: `Character_HonestWasp` → `T_AthenaSoldiers_HonestWasp`、`Backpack_HonestWasp` → `T_AthenaBackpack_HonestWasp`。一致が無い／曖昧な場合は `null`。
+
+### ローカライズ検索 — `/api/v1/localization`
+
+マウント中のビルドの `.locres` を対象に、**Key から全言語の対訳を引く**ことと、**ゲーム内で見えている
+文字列から `namespace`／`key` を逆引きする**ことができます。`/api/v1/export/locres` が言語ごとの一括
+ダンプなのに対し、こちらは 1 エントリ単位の検索です。
+
+| メソッド & パス | 説明 |
+|---|---|
+| `GET /api/v1/localization/languages` | このビルドが `.locres` を持つ言語コードの一覧。 |
+| `GET /api/v1/localization/lookup?key={key}&namespace={ns}&langs={csv}` | **順引き**。Key を全言語（既定）で解決し、見つかった `namespace` ごとに対訳をまとめて返します。 |
+| `GET /api/v1/localization/lookup?text={text}&mode={mode}&lang={code}&withTranslations={bool}&maxResults={n}` | **逆引き**。表示文字列に一致するエントリの `namespace`／`key`／`lang`／`value` を返します。 |
+
+- `key` と `text` はどちらか一方のみ指定します（両方または両方省略は `400`）。
+- 言語は `lang`（1つ）または `langs`（カンマ区切り、`all` / `*` で全言語）で指定します。**既定は全言語**です。
+- `mode`（逆引きの一致方法）: `contains`（既定）／`exact`／`prefix`／`suffix`／`regex`。`caseSensitive=true`
+  で大文字小文字を区別します。`regex` にはタイムアウト（250ミリ秒）とパターン長制限が掛かります。
+- `withTranslations=true` を付けると、逆引きの各ヒットを全言語の対訳付きで返します。
+- 結果は `namespace` → `key` → `lang` の順に安定ソートしてから `maxResults`（既定 50、最大 500）件を返します。
+  収集上限（10000 件）に達した場合は `truncated: true` になります。
+
+例:
+```
+http://localhost:3849/api/v1/localization/lookup?key=62B77828400008FD63C782B57223217D
+http://localhost:3849/api/v1/localization/lookup?text=メタルギア&lang=ja&withTranslations=true
+```
+レスポンス例（順引き）:
+```json
+{
+  "key": "62B77828400008FD63C782B57223217D",
+  "namespace": null,
+  "found": true,
+  "totalMatches": 1,
+  "results": [
+    {
+      "namespace": "",
+      "key": "62B77828400008FD63C782B57223217D",
+      "translations": { "en": "Metal Gear Mk. II", "ja": "メタルギアMk.II" }
+    }
+  ]
+}
+```
 
 ## RAD Audio デコーダ（`RADADecoder` / `RADADecoder-cs`）
 

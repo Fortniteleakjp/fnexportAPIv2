@@ -83,7 +83,8 @@ builder.Services.AddCors(options =>
                   "X-Usmap-Dumped-Packages", "X-Usmap-Dumped-Structs", "X-Usmap-Dumped-Enums",
                   "X-Usmap-Merged-Structs", "X-Usmap-Merged-Enums",
                   "X-Backup-Entries", "X-Backup-Version",
-                  "X-Hotfix-Status", "X-Hotfix-Applied"));
+                  "X-Hotfix-Status", "X-Hotfix-Applied",
+                  "X-Icon-Source", "X-Icon-Name"));
 });
 
 Console.WriteLine("=================================");
