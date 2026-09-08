@@ -64,6 +64,16 @@ public:
 
 		ObjObjects::SetInstance(GObjectsAddy);
 
+		// The scans so far ran against the process's main module. In a modular build that is a stub
+		// which holds none of this, so everything after GObjects is looked for in the module that
+		// actually turned out to contain it.
+		auto Module = RetargetScanModule(GObjectsAddy);
+		if (!Module.empty())
+		{
+			UE_LOG("Scanning %s from here on (+0x%llX for GObjects)",
+				Module.c_str(), (unsigned long long)(GObjectsAddy - GetScanModuleBase()));
+		}
+
 		auto FNameStringAddy = Resolve("FNameToString", Version::GetFNameStringPatterns(), HostConfig::FNameToStringRva);
 
 		if (!FNameStringAddy)

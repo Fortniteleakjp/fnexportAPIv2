@@ -9,6 +9,16 @@ struct IScanObject
 // functions, so its header can only be included from scanning.cpp.
 uintptr_t GetScanModuleBase();
 
+// Points every later scan at the module that owns Address.
+//
+// UEFN is a modular build: the executable is a small stub and the engine lives in DLLs, so the
+// process's main module contains none of the globals or functions being looked for. Once GObjects
+// has been located, the module holding it is the one worth searching, and retargeting is what makes
+// the FNameToString scan look somewhere it can actually succeed.
+//
+// Returns the module's file name, or an empty string when the address belongs to no module.
+std::string RetargetScanModule(uintptr_t Address);
+
 struct PatternScanObject : public IScanObject
 {
 	PatternScanObject(

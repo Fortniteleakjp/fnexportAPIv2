@@ -386,6 +386,34 @@ uintptr_t GetScanModuleBase()
 	return Memcury::PE::GetModuleBase();
 }
 
+std::string RetargetScanModule(uintptr_t Address)
+{
+	MEMORY_BASIC_INFORMATION Info{};
+	if (!VirtualQuery(reinterpret_cast<void*>(Address), &Info, sizeof(Info)) || !Info.AllocationBase)
+		return {};
+
+	// A mapped image's allocation base is its module handle.
+	auto Module = reinterpret_cast<HMODULE>(Info.AllocationBase);
+
+	char Path[MAX_PATH]{};
+	if (!GetModuleFileNameA(Module, Path, MAX_PATH))
+		return {};
+
+	std::string FileName = Path;
+	auto Slash = FileName.find_last_of("\\/");
+	if (Slash != std::string::npos)
+		FileName = FileName.substr(Slash + 1);
+
+	// Memcury looks the module up by name on every call, so the string has to outlive this scope.
+	static std::string Target;
+	Target = FileName;
+
+	Memcury::PE::SetCurrentModule(Target.c_str());
+
+	// Only report success when the name actually resolves back to the module the address is in.
+	return Memcury::PE::GetModuleBase() == reinterpret_cast<uintptr_t>(Info.AllocationBase) ? FileName : std::string{};
+}
+
 uintptr_t PatternScanObject::TryFind()
 {
 	auto Addy = Memcury::Scanner::FindPattern(Sig.c_str());
