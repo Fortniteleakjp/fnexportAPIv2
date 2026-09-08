@@ -144,8 +144,10 @@ struct UnrealVersionBase : IUnrealVersion
 			std::make_shared<PatternScanObject>("48 89 05 ? ? ? ? E8 ? ? ? ? ? ? ? 0F 84", 3, true),
 			std::make_shared<PatternScanObject>("48 8B 05 ? ? ? ? 48 8B 0C 07 48 85 C9 74 20", 3, true),
 			std::make_shared<PatternScanObject>("48 8B 05 ? ? ? ? 48 8B 0C", 3, true),
-			std::make_shared<PatternScanObject>("48 03 ? ? ? ? ? ? ? ? ? ? 48 8B 10 48 85 D2 74 07", 3, true)
+			std::make_shared<PatternScanObject>("48 03 ? ? ? ? ? ? ? ? ? ? 48 8B 10 48 85 D2 74 07", 3, true),
 
+			// Last: exact signatures are cheaper, but they are also what breaks on a new engine.
+			std::make_shared<GObjectsHeuristicScanObject>()
 		};
 	}
 };
@@ -175,7 +177,10 @@ struct Version_FortniteLatest : Version_OptimizedFName
 			std::make_shared<PatternScanObject>("48 8B 0D ? ? ? ? 48 8B 04 C1", 3, true),
 			std::make_shared<PatternScanObject>("48 8B 15 ? ? ? ? 48 8B 0C C2", 3, true),
 			std::make_shared<PatternScanObject>("4C 8B 05 ? ? ? ? 4D 8B 0C C8", 3, true),
-			std::make_shared<PatternScanObject>("4C 8B 05 ? ? ? ? 4D 8B 04 C8", 3, true)
+			std::make_shared<PatternScanObject>("4C 8B 05 ? ? ? ? 4D 8B 04 C8", 3, true),
+
+			// UE6 matches none of the above. The shape scan does not depend on codegen at all.
+			std::make_shared<GObjectsHeuristicScanObject>()
 		};
 	}
 };

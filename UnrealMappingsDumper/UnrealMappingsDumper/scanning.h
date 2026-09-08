@@ -44,6 +44,18 @@ struct ManualAddressScanObject : public IScanObject
 	uintptr_t TryFind() override;
 };
 
+// fnexportAPI local patch: finds GObjects by its shape instead of by a byte signature.
+//
+// Every engine bump moves the instructions the upstream patterns match, which is exactly how UE6
+// broke them. The layout of FChunkedFixedUObjectArray has not changed, so the module's data
+// sections are searched for a structure that is internally consistent as one — the chunk count has
+// to agree with the element count, every live chunk pointer has to be readable, and the first
+// object it yields has to have a readable vtable. That holds across engine versions.
+struct GObjectsHeuristicScanObject : public IScanObject
+{
+	uintptr_t TryFind() override;
+};
+
 template <typename StrType = std::wstring>
 struct StringRefScanObject : public IScanObject
 {
