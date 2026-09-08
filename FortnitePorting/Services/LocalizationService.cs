@@ -86,7 +86,8 @@ public static class LocalizationService
                     var locres = new FTextLocalizationResource(reader);
                     foreach (var ns in locres.Entries)
                     {
-                        var nsKey = ns.Key?.ToString() ?? "";
+                        // FTextKey does not override ToString(); Str is the namespace itself.
+                        var nsKey = ns.Key?.Str ?? string.Empty;
                         var nsDict = result.GetOrAdd(nsKey, _ => new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase));
                         foreach (var val in ns.Value)
                         {
