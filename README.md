@@ -472,20 +472,36 @@ curl -OJ http://localhost:3849/api/v1/backup/fbkp
 
 ### マッピング — `/api/v1/mappings`
 
-[`UnrealMappingsDumper`](https://github.com/TheNaeem/UnrealMappingsDumper) と同じ仕組みで `.usmap` を作成し、配信します。
-本家はゲームに DLL を注入して `GObjects` を走査し、見つけた `UClass`／`UScriptStruct`／`UEnum` を `.usmap` に書き出しますが、
-この API にゲームプロセスはありません。そこで**同じ型情報を CUE4Parse 経由でマウント中の pak から読み取り**、
-本家と同じシリアライズ（名前テーブル → enum → struct、プロパティ型の再帰記述、`0x30C4` ヘッダ）で書き出します。
+[`UnrealMappingsDumper`](https://github.com/TheNaeem/UnrealMappingsDumper) を使って `.usmap` を作成し、配信します。
+ダンプ経路は 2 つあり、目的に応じて使い分けます。
+
+| 経路 | エンドポイント | ゲーム起動 | 収録範囲 |
+|---|---|---|---|
+| **pak ダンプ** | `POST /api/v1/mappings/dump` | 不要 | pak 内の Blueprint 由来の型。ネイティブ `/Script` 型は既存 `.usmap` からマージ |
+| **UEFN ダンプ** | `POST /api/v1/mappings/dump/uefn` | 必要（Windows のみ） | エンジンのリフレクション情報そのもの。ネイティブ型込みで完結 |
+
+pak ダンプは、本家がゲームに DLL を注入して `GObjects` を走査するのに対し、この API にゲームプロセスが無いため、
+**同じ型情報を CUE4Parse 経由でマウント中の pak から読み取り**、本家と同じシリアライズ
+（名前テーブル → enum → struct、プロパティ型の再帰記述、`0x30C4` ヘッダ）で書き出します。
+
+UEFN ダンプは本家の DLL そのものを使います。ベンダリングされた [`UnrealMappingsDumper/`](UnrealMappingsDumper/VENDORED.md) を
+`UnrealMappingsDumperuild.bat`（`build.bat` からも自動で呼ばれます）でビルドすると `libs/UnrealMappingsDumper.dll` ができ、
+API がそれを起動中の UEFN へ注入します。DLL の隣に置いた `.cfg` で出力先・圧縮・コンソールを指示し、
+DLL 側はログ末尾の `HOST_RESULT` 行で結果を返します。
 
 | メソッド & パス | 説明 |
 |---|---|
 | `POST /api/v1/mappings/dump?path={frag}&maxPackages={n}&timeoutSeconds={n}&merge={bool}&baseMapping={file}&version={0..4}&compression={none/zstd}&fileName={name}&load={bool}&download={bool}` | マウント中のビルドから `.usmap` をダンプして返します。既定はバイナリ返却で、同時に `mappings/{build}_dumped.usmap` へ保存します。`load=true` でそのままプロバイダーへホットロード、`download=false` で統計 JSON を返します。 |
 | `GET /api/v1/mappings` | 保存済みの `.usmap`（ダンプ／生成／ダウンロード）を新しい順に一覧します。 |
 | `GET /api/v1/mappings/{fileName}` | 保存済みの `.usmap` を配信します。 |
+| `GET /api/v1/mappings/uefn` | UEFN ダンプが今すぐ実行できるかを返します（DLL の有無・パス、注入可能な UEFN プロセス一覧、`ready`、次にやるべきこと）。 |
+| `POST /api/v1/mappings/dump/uefn?pid={n}&compression={none/oodle}&fileName={name}&console={bool}&timeoutSeconds={n}&load={bool}&download={bool}` | 起動中の UEFN に DLL を注入して `.usmap` をダンプして返します。既定はバイナリ返却で、同時に `mappings/{build}_uefn.usmap` へ保存します。UEFN が複数起動している場合のみ `pid` が必要です。 |
 | `POST /api/v1/mappings/generate?url={url}&path={path}&fileName={name}&load={bool}&verify={bool}&download={bool}` | StormForge 形式のマッピング JSON を `.usmap` に変換します（従来からのエンドポイント）。 |
 
 ```
 curl -OJ -X POST "http://localhost:3849/api/v1/mappings/dump?path=FortniteGame/Content/Athena&maxPackages=2000"
+curl "http://localhost:3849/api/v1/mappings/uefn"
+curl -OJ -X POST "http://localhost:3849/api/v1/mappings/dump/uefn"
 curl "http://localhost:3849/api/v1/mappings"
 curl -OJ "http://localhost:3849/api/v1/mappings/FortniteGame_42_00_dumped.usmap"
 ```
@@ -503,6 +519,19 @@ curl -OJ "http://localhost:3849/api/v1/mappings/FortniteGame_42_00_dumped.usmap"
 > 16bit 名前長・255個超の enum・明示的な enum 値に対応した形式です。`compression` は `none`（既定）と `zstd`。
 > Oodle／Brotli の圧縮器はこのプロセスに無いため指定できません。
 > 生成後は必ず読み戻して検証し、件数を `X-Usmap-*` ヘッダ（`download=false` なら JSON）で返します。
+
+> **UEFN ダンプの前提**: Windows 専用で、UEFN（`UnrealEditorFortnite-Win64-*.exe`）が起動しきっている必要があります。
+> API は UEFN と同じ Windows ユーザー（権限が足りなければ管理者）で動かしてください。
+> DLL の探索順は `USMAP_DUMPER_DLL` → 実行ファイルの隣 → `libs/` で、Oodle／RAD Audio と同じです。
+> `compression=oodle` はゲーム内の Oodle エンコーダを使うため、pak ダンプと違い指定できます。
+> 実行できるかどうかは `GET /api/v1/mappings/uefn` で事前に確認できます。
+>
+> **失敗の見え方**: DLL 未ビルドは `424`、UEFN 未起動や複数起動は `409`、Windows 以外は `501`、
+> 時間切れは `504`、DLL 側が失敗した場合は `502` とログ末尾を返します。
+> DLL のログは `.usmap` の隣に `{fileName}.usmap.log` として残ります。
+>
+> **パスの制約**: DLL は ANSI の C ランタイム経由でファイルを開くため、作業ディレクトリは ASCII で表せる必要があります。
+> `mappings/dumper` が非 ASCII の場合は 8.3 形式、それも無理なら一時ディレクトリへフォールバックします。
 
 ### 自動アップデート — `/api/v1/update`
 

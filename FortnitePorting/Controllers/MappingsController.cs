@@ -17,7 +17,8 @@ namespace FortnitePorting.Controllers
 {
     /// <summary>
     /// Produces and serves .usmap mapping files: dumped from the mounted build with the
-    /// UnrealMappingsDumper algorithm, or converted from a StormForge-style mappings JSON.
+    /// UnrealMappingsDumper algorithm, dumped out of a running UEFN with the UnrealMappingsDumper
+    /// DLL itself, or converted from a StormForge-style mappings JSON.
     /// </summary>
     [ApiController]
     [Route("api/v1/mappings")]
@@ -303,6 +304,162 @@ namespace FortnitePorting.Controllers
                     enums = result.MergedEnums
                 },
                 verification = new { structs = result.VerifiedStructs, enums = result.VerifiedEnums, error = result.VerifyError }
+            });
+        }
+
+        /// <summary>
+        /// Reports whether a UEFN dump can run right now: where the dumper DLL is (or how to build
+        /// it) and which UEFN processes are available to inject into.
+        /// </summary>
+        [HttpGet("uefn")]
+        public IActionResult GetUefnStatus()
+        {
+            var dll = UefnDumperInjector.FindDll();
+            var processes = OperatingSystem.IsWindows()
+                ? UefnDumperInjector.FindTargets().Select(p => new { pid = p.Id, name = p.ProcessName }).ToList<object>()
+                : [];
+
+            return Ok(new
+            {
+                supported = OperatingSystem.IsWindows(),
+                dllFound = dll != null,
+                dllPath = dll,
+                dllFileName = UefnDumperInjector.DllFileName,
+                overrideVariable = UefnDumperInjector.DllPathVariable,
+                processes,
+                ready = OperatingSystem.IsWindows() && dll != null && processes.Count > 0,
+                hint = dll == null
+                    ? "Build the DLL with UnrealMappingsDumper\\build.bat (it lands in libs/), or set " +
+                      $"{UefnDumperInjector.DllPathVariable} to an existing copy."
+                    : processes.Count == 0
+                        ? "Start Unreal Editor for Fortnite and let it finish loading, then POST /api/v1/mappings/dump/uefn."
+                        : "POST /api/v1/mappings/dump/uefn to dump the mapping."
+            });
+        }
+
+        /// <summary>
+        /// Dumps a .usmap out of a running UEFN by injecting the UnrealMappingsDumper DLL into it.
+        /// </summary>
+        /// <remarks>
+        /// Unlike the pak-side dump, this one reads the engine's own reflection data, so the mapping
+        /// covers native /Script types as well and needs no base mapping merged under it. UEFN has to
+        /// be running and fully loaded, and the API has to run as the same Windows user.
+        /// </remarks>
+        /// <param name="pid">Target UEFN process id; only needed when more than one is running.</param>
+        /// <param name="fileName">Output file name; defaults to {build}_uefn.usmap.</param>
+        /// <param name="compression">none (default) or oodle. Oodle runs inside the game, which has the encoder.</param>
+        /// <param name="console">Let the dumper open a console window inside UEFN (default false).</param>
+        /// <param name="timeoutSeconds">How long to wait for the dump after the DLL is loaded (default 120).</param>
+        /// <param name="load">Hot-load the dumped mapping into the provider (default false).</param>
+        /// <param name="download">Return the .usmap binary (default) instead of JSON statistics.</param>
+        /// <param name="cancellationToken">Request cancellation state.</param>
+        [HttpPost("dump/uefn")]
+        public IActionResult DumpFromUefn(
+            [FromQuery] int? pid = null,
+            [FromQuery] string compression = "none",
+            [FromQuery] string? fileName = null,
+            [FromQuery] bool console = false,
+            [FromQuery] int timeoutSeconds = 120,
+            [FromQuery] bool load = false,
+            [FromQuery] bool download = true,
+            CancellationToken cancellationToken = default)
+        {
+            bool oodle;
+            switch ((compression ?? "none").Trim().ToLowerInvariant())
+            {
+                case "none": oodle = false; break;
+                case "oodle": oodle = true; break;
+                default:
+                    return BadRequest(new { message = "'compression' must be 'none' or 'oodle' for a UEFN dump." });
+            }
+
+            var request = new UefnDumperInjector.DumpRequest
+            {
+                ProcessId = pid,
+                FileName = fileName,
+                Build = ShortBuild(),
+                Oodle = oodle,
+                Console = console,
+                Timeout = TimeSpan.FromSeconds(Math.Clamp(timeoutSeconds, 5, 3600))
+            };
+
+            UefnDumperInjector.DumpResult result;
+            try
+            {
+                result = new UefnDumperInjector().Dump(request, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                return StatusCode(499, new { message = "The dump was cancelled." });
+            }
+            catch (PlatformNotSupportedException ex)
+            {
+                return StatusCode(StatusCodes.Status501NotImplemented, new { message = ex.Message });
+            }
+            catch (FileNotFoundException ex)
+            {
+                // The DLL has not been built yet; say so rather than reporting a generic failure.
+                return StatusCode(StatusCodes.Status424FailedDependency, new { message = ex.Message });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Conflict(new { message = ex.Message });
+            }
+            catch (TimeoutException ex)
+            {
+                return StatusCode(StatusCodes.Status504GatewayTimeout, new { message = ex.Message });
+            }
+            catch (UefnDumperInjector.DumpFailedException ex)
+            {
+                return StatusCode(StatusCodes.Status502BadGateway, new { message = ex.Message, log = ex.Log });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "UEFN usmap dump failed");
+                return StatusCode(500, new { message = "The UEFN dump failed.", error = ex.Message });
+            }
+
+            _logger.LogInformation(
+                "Dumped {File} from {Process}:{Pid}: {Structs} structs / {Enums} enums in {Seconds:F1}s",
+                result.FileName, result.ProcessName, result.ProcessId,
+                result.VerifiedStructs, result.VerifiedEnums, result.ElapsedSeconds);
+
+            if (load)
+            {
+                try { _provider.MappingsContainer = new FileUsmapTypeMappingsProvider(result.FilePath); }
+                catch (Exception ex) { _logger.LogWarning(ex, "loading the dumped usmap failed"); }
+            }
+
+            if (download)
+            {
+                var h = Response.Headers;
+                h.Append("X-Usmap-Bytes", result.Usmap.Length.ToString());
+                h.Append("X-Usmap-Output", result.FilePath);
+                h.Append("X-Usmap-Loaded", load ? "true" : "false");
+                h.Append("X-Usmap-Source", $"{result.ProcessName}:{result.ProcessId}");
+                if (result.VerifiedStructs is { } structs) h.Append("X-Usmap-Structs", structs.ToString());
+                if (result.VerifiedEnums is { } enums) h.Append("X-Usmap-Enums", enums.ToString());
+                return File(result.Usmap, "application/octet-stream", result.FileName);
+            }
+
+            return Ok(new
+            {
+                fileName = result.FileName,
+                output = result.FilePath,
+                downloadUrl = Url.Action(nameof(DownloadMapping), "Mappings", new { fileName = result.FileName }),
+                usmapBytes = result.Usmap.Length,
+                compression = oodle ? "oodle" : "none",
+                loaded = load,
+                source = new
+                {
+                    processName = result.ProcessName,
+                    pid = result.ProcessId,
+                    dll = result.DllPath,
+                    elapsedSeconds = Math.Round(result.ElapsedSeconds, 2)
+                },
+                verification = new { structs = result.VerifiedStructs, enums = result.VerifiedEnums, error = result.VerifyError },
+                logPath = result.LogPath,
+                log = result.Log
             });
         }
 

@@ -1,0 +1,99 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
+      <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    </Filter>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+      <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
+    </Filter>
+    <Filter Include="Resource Files">
+      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
+      <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
+    </Filter>
+    <Filter Include="Core">
+      <UniqueIdentifier>{fef55cbb-5a7c-4774-909d-158e337e7d0c}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Core\App">
+      <UniqueIdentifier>{c8acead5-69cb-4d0a-a2a0-e245aea07b5d}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Core\Dumper">
+      <UniqueIdentifier>{5f85f07a-df7a-482e-ab76-30433275ed88}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Core\Engine">
+      <UniqueIdentifier>{f78cd74e-242e-4f1b-bb2e-390488c8a504}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Core\Scanning">
+      <UniqueIdentifier>{ef119be4-93c6-4dcf-9fbf-69b2325ffdbb}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Core\Writer">
+      <UniqueIdentifier>{54ca1cbb-cd8a-48be-a1c5-acf7842dd2d0}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Core\Compression">
+      <UniqueIdentifier>{9367394c-a559-414d-b79a-ed61f5ea0638}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="hostConfig.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="framework.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="pch.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="app.h">
+      <Filter>Core\App</Filter>
+    </ClInclude>
+    <ClInclude Include="dumper.h">
+      <Filter>Core\Dumper</Filter>
+    </ClInclude>
+    <ClInclude Include="unrealEnums.h">
+      <Filter>Core\Engine</Filter>
+    </ClInclude>
+    <ClInclude Include="unrealContainers.h">
+      <Filter>Core\Engine</Filter>
+    </ClInclude>
+    <ClInclude Include="unrealFunctions.h">
+      <Filter>Core\Engine</Filter>
+    </ClInclude>
+    <ClInclude Include="scanning.h">
+      <Filter>Core\Scanning</Filter>
+    </ClInclude>
+    <ClInclude Include="writer.h">
+      <Filter>Core\Writer</Filter>
+    </ClInclude>
+    <ClInclude Include="oodle.h">
+      <Filter>Core\Compression</Filter>
+    </ClInclude>
+    <ClInclude Include="unrealTypes.h">
+      <Filter>Core\Engine</Filter>
+    </ClInclude>
+    <ClInclude Include="unrealVersion.h">
+      <Filter>Core\Engine</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="dllmain.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="pch.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="app.cpp">
+      <Filter>Core\App</Filter>
+    </ClCompile>
+    <ClCompile Include="scanning.cpp">
+      <Filter>Core\Scanning</Filter>
+    </ClCompile>
+    <ClCompile Include="dumper.cpp">
+      <Filter>Core\Dumper</Filter>
+    </ClCompile>
+    <ClCompile Include="unrealVersion.cpp">
+      <Filter>Core\Engine</Filter>
+    </ClCompile>
+  </ItemGroup>
+</Project>
