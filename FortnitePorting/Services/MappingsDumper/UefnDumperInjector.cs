@@ -220,6 +220,16 @@ public sealed class UefnDumperInjector
             {
                 result.VerifyError = ex.Message;
             }
+
+            // A mapping with nothing in it parses cleanly, so the parse alone does not mean the dump
+            // worked. Serving it would quietly replace a good mapping with an empty one.
+            if (result.VerifiedStructs == 0 && result.VerifiedEnums == 0)
+            {
+                throw new DumpFailedException(
+                    "The dumper wrote an empty mapping: it found the object array but collected no types, " +
+                    "which means its offsets do not match this build.",
+                    result.Log);
+            }
         }
 
         CleanStaging(staging, stagedDll, output, log);

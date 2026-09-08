@@ -221,10 +221,38 @@ void Dumper::Run(ECompressionMethod CompressionMethod)
 
 	WritePropertyWrapper = WriteProperty;
 
+	// The walk matches objects against these three classes. Resolving them goes through the whole
+	// offset chain (name, outer, path), so when one comes back null the dump silently collects
+	// nothing — which is exactly what an empty .usmap looks like afterwards.
+	auto ClassClass = UClass::StaticClass();
+	auto StructClass = UScriptStruct::StaticClass();
+	auto EnumClass = UEnum::StaticClass();
+
+	UE_LOG("Walking %d objects; Class=%p ScriptStruct=%p Enum=%p",
+		ObjObjects::Num(), (void*)ClassClass, (void*)StructClass, (void*)EnumClass);
+
+	if (!ClassClass || !StructClass || !EnumClass)
+	{
+		// Show what the paths actually look like, so a wrong outer or name offset is visible
+		// instead of having to be inferred.
+		for (int Index = 0; Index < ObjObjects::Num() && Index < 5; Index++)
+		{
+			if (auto Sample = ObjObjects::GetObjectByIndex(Index))
+			{
+				auto Path = Sample->GetPath();
+				UE_LOG("  object %d path: %S", Index, Path.c_str());
+			}
+		}
+
+		throw std::runtime_error(
+			"the core classes could not be resolved by path (/Script/CoreUObject.Class); the object "
+			"name or outer offset does not match this build");
+	}
+
 	ObjObjects::ForEach([&](UObject*& Object)
 		{
-			if (Object->Class() == UClass::StaticClass() ||
-			Object->Class() == UScriptStruct::StaticClass())
+			if (Object->Class() == ClassClass ||
+			Object->Class() == StructClass)
 			{
 				auto Struct = static_cast<UStruct*>(Object);
 
@@ -243,7 +271,7 @@ void Dumper::Run(ECompressionMethod CompressionMethod)
 					Props = static_cast<FProperty*>(Props->GetNext());
 				}
 			}
-			else if (Object->Class() == UEnum::StaticClass())
+			else if (Object->Class() == EnumClass)
 			{
 				auto Enum = static_cast<UEnum*>(Object);
 				Enums.push_back(Enum);
@@ -353,6 +381,16 @@ void Dumper::Run(ECompressionMethod CompressionMethod)
 
 	// fnexportAPI local patch: the output path comes from the host config (upstream wrote
 	// Mappings.usmap into the game's working directory).
+	UE_LOG("Collected %llu structs and %llu enums",
+		(unsigned long long)Structs.size(), (unsigned long long)Enums.size());
+
+	if (Structs.empty() && Enums.empty())
+	{
+		throw std::runtime_error(
+			"the object walk collected nothing; GObjects resolved but the class comparison never "
+			"matched, so the offsets do not describe this build");
+	}
+
 	auto FileOutput = FileWriter(HostConfig::Output.c_str());
 	if (!FileOutput.IsOpen())
 	{

@@ -102,6 +102,13 @@ public:
 			UStruct::ChildPropertiesOffset = UStructImpl::ChildPropertiesOffset;
 		}
 
+		// Every lookup after this point is built on these; a wrong one produces an empty dump
+		// rather than an error, so they are reported.
+		UE_LOG("Offsets: Name +0x%X, Class +0x%X, Outer +0x%X, Super +0x%X, ChildProperties +0x%X, FProperty size 0x%X, optimized FName %s",
+			UObject::NameOffset, UObject::ClassOffset, UObject::OuterOffset,
+			UStruct::SuperOffset, UStruct::ChildPropertiesOffset,
+			FProperty::FPropertySize, FName::IsOptimized ? "yes" : "no");
+
 		return true;
 	}
 };
