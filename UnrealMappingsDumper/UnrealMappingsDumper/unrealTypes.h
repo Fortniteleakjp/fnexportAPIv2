@@ -132,54 +132,102 @@ public:
 	}
 };
 
+// ---------------------------------------------------------------------------
+// fnexportAPI local patch: the object array is read through a described layout instead of a fixed
+// struct.
+//
+// UE6 changed FChunkedFixedUObjectArray and FUObjectItem in ways that silently produce garbage
+// rather than failing loudly:
+//
+//   * the array swapped Num/Max for both elements and chunks, and moved PreAllocatedObjects to the
+//     end (it used to sit right after Objects)
+//   * FUObjectItem gained a 64-bit FlagsAndRefCount at offset 0, pushing the object pointer to +8
+//     where the pointer used to be
+//   * that pointer may be packed: its low bits live in ObjectPtrLow shifted right by 3, and its
+//     high bits in the top half of FlagsAndRefCount (see UE_ENABLE_FUOBJECT_ITEM_PACKING)
+//
+// Rather than pick one, the scan in scanning.cpp tries the known layouts against real memory and
+// records the one that actually resolves objects.
+// ---------------------------------------------------------------------------
+struct FUObjectArrayLayout
+{
+	// Offsets inside FChunkedFixedUObjectArray. Objects is at 0 in every version.
+	int32_t NumElementsOffset;
+	int32_t MaxElementsOffset;
+	int32_t NumChunksOffset;
+	int32_t MaxChunksOffset;
+
+	// FUObjectItem stride, and where the object pointer sits inside it.
+	int32_t ItemStride;
+	int32_t ItemObjectOffset;
+
+	// The pointer is split across FlagsAndRefCount and ObjectPtrLow.
+	bool ItemIsPacked;
+
+	int32_t ChunkSize;
+};
+
+// Pre-UE6 layout, which is also what upstream assumed. Replaced once the scan identifies the array.
+inline FUObjectArrayLayout GObjectArrayLayout = { 0x14, 0x10, 0x1C, 0x18, 24, 0, false, 64 * 1024 };
+
+// EInternalObjectFlags_MinFlagBitIndex; the object's high bits occupy everything below it.
+constexpr int32_t GObjectFlagsMinBitIndex = 14;
+
+// UObjects are 8-byte aligned, so the low three bits are free to drop when packing.
+constexpr int32_t GObjectPtrTrailingZeroes = 3;
+
 class ObjObjects
 {
-	enum
-	{
-		NumElementsPerChunk = 64 * 1024,
-	};
+	static inline uintptr_t Inst;
 
-	static inline ObjObjects* Inst;
+	static FORCEINLINE int32_t ReadInt(int32_t Offset)
+	{
+		return *(int32_t*)(Inst + Offset);
+	}
 
 public:
-
-	struct FUObjectItem
-	{
-		UObject* Object;
-		int32_t Flags;
-		int32_t ClusterRootIndex;
-		int32_t SerialNumber;
-	};
 
 	ObjObjects& operator=(const ObjObjects&) = delete;
 
-private:
+	/// <summary>Resolves one FUObjectItem to the object it holds, honoring the detected packing.</summary>
+	static FORCEINLINE UObject* ReadItemObject(uintptr_t Item)
+	{
+		auto& Layout = GObjectArrayLayout;
 
-	FUObjectItem** Objects;
-	FUObjectItem* PreAllocatedObjects;
-	int32_t MaxElements;
-	int32_t NumElements;
-	int32_t MaxChunks;
-	int32_t NumChunks;
+		if (!Layout.ItemIsPacked)
+			return *(UObject**)(Item + Layout.ItemObjectOffset);
 
-public:
+		// Low 32 bits of the pointer, minus the alignment bits that are always zero.
+		auto Low = (uintptr_t) * (uint32_t*)(Item + Layout.ItemObjectOffset);
+
+		// High bits ride along in the flags word, above the flag bits themselves.
+		auto FlagsAndRefCount = *(int64_t*)Item;
+		auto PtrMask = (uintptr_t)(~(0xFFFFFFFFu << GObjectFlagsMinBitIndex));
+		auto High = ((uintptr_t)(FlagsAndRefCount >> 32) & PtrMask) << (32 + GObjectPtrTrailingZeroes);
+
+		return (UObject*)(High | (Low << GObjectPtrTrailingZeroes));
+	}
 
 	static UObject* GetObjectByIndex(int Index)
 	{
-		int ChunkIndex = Index / NumElementsPerChunk;
-		int WithinChunkIndex = Index % NumElementsPerChunk;
+		if (!Inst || Index < 0)
+			return nullptr;
+
+		auto& Layout = GObjectArrayLayout;
+
+		int ChunkIndex = Index / Layout.ChunkSize;
+		int WithinChunkIndex = Index % Layout.ChunkSize;
 
 		if (
-			Index < Inst->NumElements &&
-			Index >= 0 &&
-			ChunkIndex < Inst->NumChunks &&
-			Index < Inst->MaxElements
+			Index < ReadInt(Layout.NumElementsOffset) &&
+			Index < ReadInt(Layout.MaxElementsOffset) &&
+			ChunkIndex < ReadInt(Layout.NumChunksOffset)
 			)
 		{
-			auto Chunk = Inst->Objects[ChunkIndex];
+			auto Chunk = ((uintptr_t*)Inst)[0] ? ((uintptr_t*)*(uintptr_t*)Inst)[ChunkIndex] : 0;
 
 			if (Chunk)
-				return (Chunk + WithinChunkIndex)->Object;
+				return ReadItemObject(Chunk + (uintptr_t)Layout.ItemStride * WithinChunkIndex);
 		}
 
 		return nullptr;
@@ -187,13 +235,13 @@ public:
 
 	static FORCEINLINE int Num()
 	{
-		return Inst->NumElements;
+		return Inst ? ReadInt(GObjectArrayLayout.NumElementsOffset) : 0;
 	}
 
 	static void SetInstance(uintptr_t Val)
 	{
 		if (Val)
-			Inst = (ObjObjects*)Val;
+			Inst = Val;
 	}
 
 	template <class T = UObject>

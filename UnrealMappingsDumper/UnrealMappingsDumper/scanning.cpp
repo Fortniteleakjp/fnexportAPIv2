@@ -1,32 +1,68 @@
 #include "pch.h"
 
+#include "app.h"
 #include "scanning.h"
+#include "unrealTypes.h"
 #include "../Dependencies/Memcury/memcury.h"
 
 // ---------------------------------------------------------------------------
 // fnexportAPI local patch: GObjects located by shape rather than by signature.
+//
+// UE6 matches none of the byte patterns, and adding more of them only postpones the next break, so
+// the array is recognised by its own invariants instead. The layout is not assumed either: UE6
+// swapped Num/Max in FChunkedFixedUObjectArray, moved PreAllocatedObjects to the end, and pushed
+// the object pointer inside FUObjectItem from +0 to +8 (possibly packed). Each known layout is
+// tried against real memory, and the one that actually resolves objects is recorded for the dump.
 // ---------------------------------------------------------------------------
 namespace
 {
-	// FChunkedFixedUObjectArray allocates its objects in fixed 64K chunks.
-	constexpr int32_t ObjectsPerChunk = 64 * 1024;
-
-	// A loaded editor holds far more than this; the bound only rejects noise that happens to look
+	// A loaded editor holds far more than this; the bounds only reject noise that happens to look
 	// self-consistent.
 	constexpr int32_t MinPlausibleObjects = 1000;
 	constexpr int32_t MaxPlausibleObjects = 100 * 1000 * 1000;
 
-	// Mirrors ObjObjects' own fields. Kept local so the scan does not depend on that class being
-	// constructible, and so the two definitions can be compared side by side.
-	struct FChunkedFixedUObjectArray
+	// Chunk sizes the engine could plausibly have been built with. 64K is what every version has
+	// used, but the value is derived rather than assumed so a changed one is found, not missed.
+	constexpr int32_t MinChunkSize = 1024;
+	constexpr int32_t MaxChunkSize = 1024 * 1024;
+
+	// Regions far larger than the array are not worth walking end to end.
+	constexpr size_t MaxRegionBytesToScan = 256ull * 1024 * 1024;
+
+	// The two field orders FChunkedFixedUObjectArray has shipped with. Objects is at 0 in both.
+	struct FArrayFieldOrder
 	{
-		uintptr_t* Objects;
-		uintptr_t PreAllocatedObjects;
-		int32_t MaxElements;
+		const char* Name;
 		int32_t NumElements;
-		int32_t MaxChunks;
+		int32_t MaxElements;
 		int32_t NumChunks;
+		int32_t MaxChunks;
 	};
+
+	// UE6 first: that is what this dumper is being asked about, and testing it first means the
+	// legacy order never gets a chance to match a UE6 array by coincidence.
+	constexpr FArrayFieldOrder ArrayFieldOrders[] =
+	{
+		{ "UE6",    0x08, 0x0C, 0x10, 0x14 },
+		{ "legacy", 0x14, 0x10, 0x1C, 0x18 },
+	};
+
+	// How the object pointer is stored inside FUObjectItem. The stride is 24 in every version.
+	struct FItemLayout
+	{
+		const char* Name;
+		int32_t ObjectOffset;
+		bool Packed;
+	};
+
+	constexpr FItemLayout ItemLayouts[] =
+	{
+		{ "UE6",           0x08, false },
+		{ "UE6 packed",    0x08, true  },
+		{ "legacy",        0x00, false },
+	};
+
+	constexpr int32_t ItemStride = 24;
 
 	bool IsReadable(uintptr_t Address, size_t Size)
 	{
@@ -53,136 +89,240 @@ namespace
 		return Address + Size <= RegionEnd;
 	}
 
-	// The cheap half of the test: the counters have to describe a consistent chunked array. This
-	// runs on every 8-byte offset, so it must not touch memory outside the candidate itself.
-	bool CountersAreConsistent(const FChunkedFixedUObjectArray& Candidate)
+	FORCEINLINE int32_t ReadInt(uintptr_t Base, int32_t Offset)
 	{
-		if (Candidate.NumElements < MinPlausibleObjects || Candidate.NumElements > MaxPlausibleObjects)
-			return false;
-
-		if (Candidate.MaxElements < Candidate.NumElements || Candidate.NumChunks <= 0)
-			return false;
-
-		if (Candidate.MaxChunks < Candidate.NumChunks)
-			return false;
-
-		// The capacity is exactly the chunk capacity, which is what makes this shape recognisable.
-		if (static_cast<int64_t>(Candidate.MaxChunks) * ObjectsPerChunk != Candidate.MaxElements)
-			return false;
-
-		// Chunks are allocated as elements need them, so enough of them must already exist.
-		auto RequiredChunks = (Candidate.NumElements + ObjectsPerChunk - 1) / ObjectsPerChunk;
-		if (Candidate.NumChunks < RequiredChunks)
-			return false;
-
-		// Both pointers are heap allocations, so they are at least pointer-aligned.
-		return Candidate.Objects != nullptr && (reinterpret_cast<uintptr_t>(Candidate.Objects) & 7) == 0;
+		return *reinterpret_cast<int32_t*>(Base + Offset);
 	}
 
-	// The expensive half: follow the pointers and check that they really lead to objects.
-	bool PointsAtRealObjects(const FChunkedFixedUObjectArray& Candidate)
+	// The cheap half of the test: the counters have to describe a consistent chunked array under
+	// this field order, and they have to agree on one chunk size. Runs on every 8-byte offset, so it
+	// touches no memory beyond the candidate. Returns the chunk size, or 0 when this is not one.
+	int32_t DeriveChunkSize(uintptr_t Candidate, const FArrayFieldOrder& Order)
 	{
-		auto ChunkTable = reinterpret_cast<uintptr_t>(Candidate.Objects);
-		if (!IsReadable(ChunkTable, sizeof(uintptr_t) * static_cast<size_t>(Candidate.NumChunks)))
+		auto NumElements = ReadInt(Candidate, Order.NumElements);
+		auto MaxElements = ReadInt(Candidate, Order.MaxElements);
+		auto NumChunks = ReadInt(Candidate, Order.NumChunks);
+		auto MaxChunks = ReadInt(Candidate, Order.MaxChunks);
+
+		if (NumElements < MinPlausibleObjects || NumElements > MaxPlausibleObjects)
+			return 0;
+
+		if (MaxElements < NumElements || NumChunks <= 0 || MaxChunks < NumChunks)
+			return 0;
+
+		// Capacity is exactly the chunk capacity: MaxElements = MaxChunks * chunk size.
+		if (MaxElements % MaxChunks != 0)
+			return 0;
+
+		auto ChunkSize = MaxElements / MaxChunks;
+		if (ChunkSize < MinChunkSize || ChunkSize > MaxChunkSize)
+			return 0;
+
+		// The engine sizes chunks as a power of two.
+		if ((ChunkSize & (ChunkSize - 1)) != 0)
+			return 0;
+
+		// Chunks are allocated as elements need them, so enough of them must already exist.
+		if (NumChunks < (NumElements + ChunkSize - 1) / ChunkSize)
+			return 0;
+
+		// The chunk table is a heap allocation, so it is at least pointer-aligned.
+		auto ChunkTable = *reinterpret_cast<uintptr_t*>(Candidate);
+		return (ChunkTable && (ChunkTable & 7) == 0) ? ChunkSize : 0;
+	}
+
+	// Reads an object pointer out of one item under the given layout, without trusting it.
+	uintptr_t ReadItemObject(uintptr_t Item, const FItemLayout& Layout)
+	{
+		if (!Layout.Packed)
+			return *reinterpret_cast<uintptr_t*>(Item + Layout.ObjectOffset);
+
+		auto Low = static_cast<uintptr_t>(*reinterpret_cast<uint32_t*>(Item + Layout.ObjectOffset));
+		auto FlagsAndRefCount = *reinterpret_cast<int64_t*>(Item);
+		auto PtrMask = static_cast<uintptr_t>(~(0xFFFFFFFFu << GObjectFlagsMinBitIndex));
+		auto High = (static_cast<uintptr_t>(FlagsAndRefCount >> 32) & PtrMask) << (32 + GObjectPtrTrailingZeroes);
+
+		return High | (Low << GObjectPtrTrailingZeroes);
+	}
+
+	// The expensive half: follow the pointers and check that they lead to real objects. On success
+	// the item layout that worked is reported through OutItemLayout.
+	bool PointsAtRealObjects(uintptr_t Candidate, const FArrayFieldOrder& Order, const FItemLayout*& OutItemLayout)
+	{
+		auto ChunkTable = *reinterpret_cast<uintptr_t*>(Candidate);
+		auto NumChunks = ReadInt(Candidate, Order.NumChunks);
+		auto NumElements = ReadInt(Candidate, Order.NumElements);
+
+		if (!IsReadable(ChunkTable, sizeof(uintptr_t) * static_cast<size_t>(NumChunks)))
 			return false;
 
 		// Every chunk the element count claims to reach has to be allocated and readable.
-		for (int32_t Chunk = 0; Chunk < Candidate.NumChunks; Chunk++)
+		auto Chunks = reinterpret_cast<uintptr_t*>(ChunkTable);
+		for (int32_t Chunk = 0; Chunk < NumChunks; Chunk++)
 		{
-			auto ChunkAddress = Candidate.Objects[Chunk];
-			if (!IsReadable(ChunkAddress, sizeof(uintptr_t)))
+			if (!IsReadable(Chunks[Chunk], sizeof(uintptr_t)))
 				return false;
 		}
 
-		if (Candidate.PreAllocatedObjects && !IsReadable(Candidate.PreAllocatedObjects, sizeof(uintptr_t)))
+		// Slots can be empty, so the first chunk is walked until live objects turn up. Several are
+		// required to agree before a layout is accepted: one lucky readable value is not proof.
+		auto SlotsToTry = NumElements < 512 ? NumElements : 512;
+		if (!IsReadable(Chunks[0], static_cast<size_t>(ItemStride) * SlotsToTry))
 			return false;
 
-		// An FUObjectItem is a UObject pointer plus three int32 fields. Slots can be empty, so the
-		// first chunk is walked until a live object turns up; one with a readable vtable settles it.
-		auto FirstChunk = Candidate.Objects[0];
-		constexpr int32_t ItemSize = sizeof(uintptr_t) + sizeof(int32_t) * 3;
-		auto SlotsToTry = Candidate.NumElements < 256 ? Candidate.NumElements : 256;
+		constexpr int32_t RequiredHits = 8;
 
-		if (!IsReadable(FirstChunk, static_cast<size_t>(ItemSize) * SlotsToTry))
-			return false;
-
-		for (int32_t Slot = 0; Slot < SlotsToTry; Slot++)
+		for (auto& Layout : ItemLayouts)
 		{
-			auto Object = *reinterpret_cast<uintptr_t*>(FirstChunk + static_cast<size_t>(ItemSize) * Slot);
-			if (!Object)
-				continue;
+			int32_t Hits = 0;
 
-			if (!IsReadable(Object, sizeof(uintptr_t)))
-				return false;
+			for (int32_t Slot = 0; Slot < SlotsToTry && Hits < RequiredHits; Slot++)
+			{
+				auto Object = ReadItemObject(Chunks[0] + static_cast<size_t>(ItemStride) * Slot, Layout);
 
-			// The vtable pointer of a real UObject points into loaded code.
-			auto VTable = *reinterpret_cast<uintptr_t*>(Object);
-			return IsReadable(VTable, sizeof(uintptr_t));
+				if (!Object || (Object & 7) != 0)
+					continue;
+
+				if (!IsReadable(Object, sizeof(uintptr_t)))
+					break;
+
+				// The vtable pointer of a real UObject points into loaded code.
+				if (!IsReadable(*reinterpret_cast<uintptr_t*>(Object), sizeof(uintptr_t)))
+					break;
+
+				Hits++;
+			}
+
+			if (Hits >= RequiredHits)
+			{
+				OutItemLayout = &Layout;
+				return true;
+			}
 		}
 
 		return false;
+	}
+
+	// How many candidates got past the counter test, so a run that finds nothing still says whether
+	// it saw anything array-shaped at all.
+	int32_t GNearMisses = 0;
+
+	// Walks one committed span. Returns the address of the array, or 0.
+	uintptr_t ScanSpan(uintptr_t Start, uintptr_t End)
+	{
+		if (End <= Start || End - Start < 0x20)
+			return 0;
+
+		auto Last = End - 0x20;
+
+		for (auto Cursor = Start; Cursor <= Last; Cursor += sizeof(uintptr_t))
+		{
+			for (auto& Order : ArrayFieldOrders)
+			{
+				auto ChunkSize = DeriveChunkSize(Cursor, Order);
+				if (!ChunkSize)
+					continue;
+
+				GNearMisses++;
+
+				const FItemLayout* ItemLayout = nullptr;
+				if (!PointsAtRealObjects(Cursor, Order, ItemLayout))
+					continue;
+
+				GObjectArrayLayout =
+				{
+					Order.NumElements, Order.MaxElements, Order.NumChunks, Order.MaxChunks,
+					ItemStride, ItemLayout->ObjectOffset, ItemLayout->Packed, ChunkSize
+				};
+
+				UE_LOG("GObjects: %s array layout, %s item layout, %d objects across %d/%d chunks of %d",
+					Order.Name, ItemLayout->Name,
+					ReadInt(Cursor, Order.NumElements), ReadInt(Cursor, Order.NumChunks),
+					ReadInt(Cursor, Order.MaxChunks), ChunkSize);
+
+				return Cursor;
+			}
+		}
+
+		return 0;
 	}
 }
 
 uintptr_t GObjectsHeuristicScanObject::TryFind()
 {
+	GNearMisses = 0;
+
 	auto ModuleBase = Memcury::PE::GetModuleBase();
-	if (!ModuleBase)
-		return 0;
 
-	auto Headers = Memcury::PE::GetNTHeaders();
-	auto SectionCount = Headers->FileHeader.NumberOfSections;
-	auto Section = IMAGE_FIRST_SECTION(Headers);
-
-	for (WORD Index = 0; Index < SectionCount; Index++, Section++)
+	// First pass: the module's own data, where a global lives in an ordinary build.
+	if (ModuleBase)
 	{
-		// GObjects is a global, so only the initialised and zero-filled data lives are worth walking.
-		if (!(Section->Characteristics & IMAGE_SCN_MEM_READ) || (Section->Characteristics & IMAGE_SCN_MEM_EXECUTE))
-			continue;
+		auto Headers = Memcury::PE::GetNTHeaders();
+		auto Section = IMAGE_FIRST_SECTION(Headers);
 
-		auto Start = ModuleBase + Section->VirtualAddress;
-		auto Size = Section->Misc.VirtualSize;
-		if (Size < sizeof(FChunkedFixedUObjectArray))
-			continue;
-
-		auto End = Start + Size - sizeof(FChunkedFixedUObjectArray);
-
-		// Committed-region bounds are cached: a VirtualQuery for every 8-byte step would make this
-		// scan far slower than the signature it replaces.
-		uintptr_t RegionEnd = 0;
-
-		for (auto Cursor = Start; Cursor <= End; Cursor += sizeof(uintptr_t))
+		for (WORD Index = 0; Index < Headers->FileHeader.NumberOfSections; Index++, Section++)
 		{
-			if (Cursor + sizeof(FChunkedFixedUObjectArray) > RegionEnd)
+			if (!(Section->Characteristics & IMAGE_SCN_MEM_READ) || (Section->Characteristics & IMAGE_SCN_MEM_EXECUTE))
+				continue;
+
+			auto Start = ModuleBase + Section->VirtualAddress;
+			auto Found = ScanSpan(Start, Start + Section->Misc.VirtualSize);
+			if (Found)
 			{
-				MEMORY_BASIC_INFORMATION Info{};
-				if (!VirtualQuery(reinterpret_cast<void*>(Cursor), &Info, sizeof(Info)))
-					break;
-
-				auto Base = reinterpret_cast<uintptr_t>(Info.BaseAddress);
-
-				if (Info.State != MEM_COMMIT || (Info.Protect & (PAGE_GUARD | PAGE_NOACCESS)))
-				{
-					// Skip the whole uncommitted region rather than stepping through it.
-					Cursor = Base + Info.RegionSize;
-					RegionEnd = 0;
-					if (Cursor < Start) break;
-					Cursor -= sizeof(uintptr_t);
-					continue;
-				}
-
-				RegionEnd = Base + Info.RegionSize;
-			}
-
-			auto& Candidate = *reinterpret_cast<FChunkedFixedUObjectArray*>(Cursor);
-
-			if (CountersAreConsistent(Candidate) && PointsAtRealObjects(Candidate))
-			{
-				return Cursor;
+				UE_LOG("GObjects found in section %.8s (+0x%llX)",
+					Section->Name, (unsigned long long)(Found - ModuleBase));
+				return Found;
 			}
 		}
 	}
 
+	UE_LOG("GObjects was not in the module's data sections (%d array-shaped candidates); scanning process memory", GNearMisses);
+
+	// Second pass: the rest of the process. A packed or protected build can move its globals out of
+	// the image, which is exactly the case the first pass cannot cover.
+	SYSTEM_INFO SystemInfo{};
+	GetSystemInfo(&SystemInfo);
+
+	auto Address = reinterpret_cast<uintptr_t>(SystemInfo.lpMinimumApplicationAddress);
+	auto Ceiling = reinterpret_cast<uintptr_t>(SystemInfo.lpMaximumApplicationAddress);
+
+	while (Address < Ceiling)
+	{
+		MEMORY_BASIC_INFORMATION Info{};
+		if (!VirtualQuery(reinterpret_cast<void*>(Address), &Info, sizeof(Info)))
+			break;
+
+		auto Base = reinterpret_cast<uintptr_t>(Info.BaseAddress);
+		auto Next = Base + Info.RegionSize;
+
+		constexpr DWORD Writable = PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+
+		// The array is written to, so only writable committed memory can hold it. Image regions were
+		// covered by the first pass.
+		auto Scannable =
+			Info.State == MEM_COMMIT &&
+			(Info.Protect & Writable) &&
+			!(Info.Protect & (PAGE_GUARD | PAGE_NOACCESS)) &&
+			Info.Type != MEM_IMAGE &&
+			Info.RegionSize <= MaxRegionBytesToScan;
+
+		if (Scannable)
+		{
+			auto Found = ScanSpan(Base, Next);
+			if (Found)
+			{
+				UE_LOG("GObjects found outside the module image at 0x%llX", (unsigned long long)Found);
+				return Found;
+			}
+		}
+
+		if (Next <= Address)
+			break;
+
+		Address = Next;
+	}
+
+	UE_LOG("GObjects: no candidate passed validation (%d were array-shaped)", GNearMisses);
 	return 0;
 }
 

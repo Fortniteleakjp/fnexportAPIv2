@@ -29,6 +29,7 @@
 | `UnrealMappingsDumper/framework.h` | 上記の例外送出のため `<stdexcept>` を追加。 |
 | `UnrealMappingsDumper/app.cpp` | `UnrealEditorFortnite-Win64-*`（UEFN）を Fortnite プロファイルへ振り分け。上流は `FortniteClient` しか判定しておらず、UEFN が汎用パス（誤った GObjects パターンと、`UE_FNAME_OUTLINE_NUMBER=1` を前提としない FName レイアウト）へ落ちていました。 |
 | `UnrealMappingsDumper/unrealVersion.h` | 設定で指定されたアドレスを走査より優先し、どの候補が当たったかをモジュール相対アドレスで記録。Fortnite プロファイルの GObjects 候補も追加。 |
+| `UnrealMappingsDumper/unrealTypes.h` | `ObjObjects` を固定 struct ではなく検出したレイアウト経由で読むよう変更。UE6 は `FChunkedFixedUObjectArray` の Num/Max を入れ替え、`PreAllocatedObjects` を末尾へ移動し、`FUObjectItem` の先頭に 64bit の `FlagsAndRefCount` を足してオブジェクトポインタを +8 へ押し出しています（さらに packed の場合あり）。いずれも例外ではなく無言で壊れるため、実メモリで検証して確定させます。 |
 | `UnrealMappingsDumper/scanning.{h,cpp}` | 設定で渡されたモジュール相対アドレスを解決する `ManualAddressScanObject` と、`GetScanModuleBase()` を追加（Memcury のヘッダは非 inline 関数を含むため 1 つの翻訳単位からしか include できません）。 |
 | `UnrealMappingsDumper/*.vcxproj{,.filters}` | `hostConfig.h` をプロジェクトに追加。 |
 | `build.bat` | 新規。MSBuild を解決して x64 Release をビルドし、`libs/UnrealMappingsDumper.dll` へ配置します。 |
