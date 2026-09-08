@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -18,7 +19,7 @@ namespace FortnitePorting.Controllers
 {
     /// <summary>
     /// Full-text search endpoints over all files: fast path/name search (substring, prefix,
-    /// suffix, exact, wildcard, regex, tokens) and a bounded content search inside parsed
+    /// suffix, exact, wildcard, glob, regex, tokens) and a bounded content search inside parsed
     /// asset properties.
     /// </summary>
     [ApiController]
@@ -216,7 +217,8 @@ namespace FortnitePorting.Controllers
         /// Searches the paths/names of all loaded files for a word, string, or codename.
         /// </summary>
         /// <param name="q">The word, string, or codename to search for (required).</param>
-        /// <param name="mode">Match mode: contains (default) / prefix / suffix / exact / wildcard / regex / tokens.</param>
+        /// <param name="mode">Match mode: contains (default) / prefix / suffix / exact / wildcard / glob / regex / tokens.
+        /// glob is path-aware: * and ? stop at '/', ** crosses directories, [abc] is a character class, {a,b} an alternation.</param>
         /// <param name="field">Match target: path (default) / name / stem (without extension).</param>
         /// <param name="caseSensitive">Match case-sensitively (default false).</param>
         /// <param name="ext">Filter by extension (comma-separated, e.g. .uasset,.umap; empty matches all).</param>
@@ -255,9 +257,9 @@ namespace FortnitePorting.Controllers
 
             // Trim once and use this value for both matching and the echoed response (kept consistent).
             var needle = q.Trim();
-            if ((mode == "regex" || mode == "wildcard") && needle.Length > MaxPatternLength)
+            if ((mode == "regex" || mode == "wildcard" || mode == "glob") && needle.Length > MaxPatternLength)
             {
-                return BadRequest(new { message = $"The pattern is too long (max {MaxPatternLength} characters for regex/wildcard)." });
+                return BadRequest(new { message = $"The pattern is too long (max {MaxPatternLength} characters for regex/wildcard/glob)." });
             }
 
             Func<string, bool> matcher;
@@ -688,10 +690,25 @@ namespace FortnitePorting.Controllers
                 }
                 case "wildcard":
                 {
-                    // Glob: * matches any run of characters, ? matches a single character. Anchored.
+                    // Flat wildcard: * matches any run of characters (including '/'), ? a single one. Anchored.
                     var pattern = "^" + Regex.Escape(q).Replace("\\*", ".*").Replace("\\?", ".") + "$";
                     var rx = new Regex(pattern, regexOptions, RegexTimeout);
                     return v => SafeIsMatch(rx, v);
+                }
+                case "glob":
+                {
+                    // Path-aware glob, so a pattern can address one directory level at a time.
+                    var globPattern = GlobToRegex(q);
+                    Regex globRegex;
+                    try
+                    {
+                        globRegex = new Regex(globPattern, regexOptions, RegexTimeout);
+                    }
+                    catch (Exception ex)
+                    {
+                        throw new ArgumentException($"Invalid glob pattern: {ex.Message}");
+                    }
+                    return v => SafeIsMatch(globRegex, v);
                 }
                 case "regex":
                 {
@@ -707,7 +724,7 @@ namespace FortnitePorting.Controllers
                     return v => SafeIsMatch(rx, v);
                 }
                 default:
-                    throw new ArgumentException("The 'mode' parameter must be one of: contains, prefix, suffix, exact, wildcard, regex, tokens.");
+                    throw new ArgumentException("The 'mode' parameter must be one of: contains, prefix, suffix, exact, wildcard, glob, regex, tokens.");
             }
         }
 
@@ -721,6 +738,131 @@ namespace FortnitePorting.Controllers
             {
                 return false;
             }
+        }
+
+        /// <summary>
+        /// Translates a path-aware glob into an anchored regular expression: <c>*</c> and <c>?</c> stop at
+        /// '/', <c>**</c> crosses directory separators (<c>**/</c> also matches zero directories),
+        /// <c>[abc]</c> / <c>[a-z]</c> / <c>[!abc]</c> are character classes and <c>{a,b}</c> is an
+        /// alternation. Every other character matches literally.
+        /// </summary>
+        private static string GlobToRegex(string glob)
+        {
+            var sb = new StringBuilder(glob.Length * 2 + 2).Append('^');
+            var braceDepth = 0;
+
+            for (var i = 0; i < glob.Length; i++)
+            {
+                var c = glob[i];
+                switch (c)
+                {
+                    case '*':
+                        if (i + 1 < glob.Length && glob[i + 1] == '*')
+                        {
+                            i++;
+                            // Collapse a longer run so '***' behaves like '**'.
+                            while (i + 1 < glob.Length && glob[i + 1] == '*') i++;
+                            if (i + 1 < glob.Length && glob[i + 1] == '/')
+                            {
+                                // '**/' spans any number of directories, including none at all.
+                                i++;
+                                sb.Append("(?:.*/)?");
+                            }
+                            else
+                            {
+                                sb.Append(".*");
+                            }
+                        }
+                        else
+                        {
+                            sb.Append("[^/]*");
+                        }
+                        break;
+                    case '?':
+                        sb.Append("[^/]");
+                        break;
+                    case '[':
+                    {
+                        var end = FindGlobClassEnd(glob, i);
+                        if (end < 0)
+                        {
+                            // An unterminated '[' matches literally rather than failing the request.
+                            sb.Append("\\[");
+                            break;
+                        }
+                        sb.Append(TranslateGlobClass(glob.Substring(i + 1, end - i - 1)));
+                        i = end;
+                        break;
+                    }
+                    case '{':
+                        braceDepth++;
+                        sb.Append("(?:");
+                        break;
+                    case '}':
+                        if (braceDepth > 0)
+                        {
+                            braceDepth--;
+                            sb.Append(')');
+                        }
+                        else
+                        {
+                            sb.Append("\\}");
+                        }
+                        break;
+                    case ',':
+                        // A comma separates alternatives only inside braces; elsewhere it is literal.
+                        sb.Append(braceDepth > 0 ? '|' : ',');
+                        break;
+                    default:
+                        sb.Append(Regex.Escape(c.ToString()));
+                        break;
+                }
+            }
+
+            if (braceDepth != 0)
+            {
+                throw new ArgumentException("The glob pattern has an unbalanced '{'.");
+            }
+
+            return sb.Append('$').ToString();
+        }
+
+        /// <summary>
+        /// Returns the index of the ']' closing the character class opened at <paramref name="start"/>,
+        /// or -1 when that class is never closed.
+        /// </summary>
+        private static int FindGlobClassEnd(string glob, int start)
+        {
+            var i = start + 1;
+            if (i < glob.Length && (glob[i] == '!' || glob[i] == '^')) i++;
+            // A ']' directly after the opening bracket is a member of the class, not its end.
+            if (i < glob.Length && glob[i] == ']') i++;
+            return i >= glob.Length ? -1 : glob.IndexOf(']', i);
+        }
+
+        /// <summary>
+        /// Converts the body of a glob character class into a regex class. '-' keeps its range meaning;
+        /// the characters that could close or reopen the class are escaped so a pattern cannot break out
+        /// of it.
+        /// </summary>
+        private static string TranslateGlobClass(string body)
+        {
+            var negate = body.Length > 0 && (body[0] == '!' || body[0] == '^');
+            var members = negate ? body.Substring(1) : body;
+            if (members.Length == 0)
+            {
+                // '[]' / '[!]' hold no members, so the brackets themselves are the pattern.
+                return Regex.Escape("[" + body + "]");
+            }
+
+            var sb = new StringBuilder(members.Length + 4).Append('[');
+            if (negate) sb.Append('^');
+            foreach (var c in members)
+            {
+                if (c is '\\' or ']' or '[' or '^') sb.Append('\\');
+                sb.Append(c);
+            }
+            return sb.Append(']').ToString();
         }
 
         private static List<string> ParseExtensions(string? ext)

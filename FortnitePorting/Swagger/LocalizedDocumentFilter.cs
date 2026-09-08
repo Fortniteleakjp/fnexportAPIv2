@@ -21,6 +21,7 @@ public sealed class LocalizedDocumentFilter : IDocumentFilter
         ["Build"] = ("配信中のFortniteビルドの確認と最新ビルドへの再読み込み。", "Current Fortnite build status and reload onto the newest build."),
         ["Assets"] = ("アセット間のハード参照・ソフト参照の解析。", "Hard and soft reference inspection between assets."),
         ["Backup"] = ("現在のビルドのファイル一覧をFModelの.fbkp形式で配信。", "Serves the mounted build's file list as an FModel .fbkp backup."),
+        ["Localization"] = ("locresのKey解決と表示文字列からの逆引き。", "Key resolution and reverse lookup over the .locres tables."),
         ["Update"] = ("GitHubリリースとの比較と、最新版への自動更新。", "Comparison against GitHub releases and self-update to the newest one.")
     };
 

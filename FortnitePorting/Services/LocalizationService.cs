@@ -106,6 +106,27 @@ public static class LocalizationService
     }
 
     /// <summary>
+    /// Lists the language codes that the mounted build ships .locres files for. The code is the
+    /// directory the .locres sits in (Localization/Game/ja/Game.locres -> ja).
+    /// </summary>
+    public static List<string> GetAvailableLanguages(IFileProvider provider)
+    {
+        return provider.Files.Keys
+            .Where(k => k.EndsWith(".locres", StringComparison.OrdinalIgnoreCase))
+            .Select(k =>
+            {
+                var parts = k.Replace('\\', '/').Split('/');
+                return parts.Length >= 2 ? parts[^2] : null;
+            })
+            .OfType<string>()
+            // Guard against a stray file sitting outside a language directory.
+            .Where(l => l.Length < 10 && !l.Contains('.'))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(l => l, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    /// <summary>
     /// Resolves an FText (namespace, key) to its localized string. Tries the namespace first,
     /// then searches across all namespaces; tolerant of case and surrounding whitespace.
     /// </summary>
