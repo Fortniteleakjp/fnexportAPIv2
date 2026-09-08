@@ -12,6 +12,8 @@
 //   output=D:\repo\mappings\dump.usmap   absolute path of the .usmap to write
 //   compression=none|oodle               usmap compression (default: none)
 //   console=true|false                   allocate a console in the game (default: true)
+//   gobjects=1a2b3c4                     module-relative address of GObjects, when the scan fails
+//   fnametostring=1a2b3c4                module-relative address of FNameToString, likewise
 //
 // Everything UE_LOG prints is mirrored to "<output>.log" so the host can report why
 // a dump failed instead of only timing out. The run always ends with one terminal line
@@ -29,6 +31,25 @@ namespace HostConfig
 	inline ECompressionMethod Compression = ECompressionMethod::None;
 	inline bool Console = true;
 	inline std::string LogPath;
+
+	// Signature scans break on every engine bump, so the host can pin the two addresses the dumper
+	// cannot start without. Zero means "scan for it", which is the normal path.
+	inline uintptr_t GObjectsRva = 0;
+	inline uintptr_t FNameToStringRva = 0;
+
+	// Parses a hex address, with or without a 0x prefix. Returns 0 when the value is not usable,
+	// which falls back to scanning rather than pointing the dumper at nothing.
+	inline uintptr_t ParseRva(const std::string& In)
+	{
+		try
+		{
+			return static_cast<uintptr_t>(std::stoull(In, nullptr, 16));
+		}
+		catch (const std::exception&)
+		{
+			return 0;
+		}
+	}
 
 	inline std::string Trim(const std::string& In)
 	{
@@ -97,6 +118,14 @@ namespace HostConfig
 			else if (Key == "console")
 			{
 				Console = (Value != "false" && Value != "0");
+			}
+			else if (Key == "gobjects")
+			{
+				GObjectsRva = ParseRva(Value);
+			}
+			else if (Key == "fnametostring")
+			{
+				FNameToStringRva = ParseRva(Value);
 			}
 		}
 

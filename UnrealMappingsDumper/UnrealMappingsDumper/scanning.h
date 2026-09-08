@@ -5,6 +5,10 @@ struct IScanObject
 	virtual uintptr_t TryFind() = 0;
 };
 
+// Base of the module being scanned. Wrapped here because Memcury defines non-inline free
+// functions, so its header can only be included from scanning.cpp.
+uintptr_t GetScanModuleBase();
+
 struct PatternScanObject : public IScanObject
 {
 	PatternScanObject(
@@ -24,6 +28,18 @@ struct PatternScanObject : public IScanObject
 	bool bRelative;
 	int RelativeAddressOffset;
 	int ResultOffset;
+
+	uintptr_t TryFind() override;
+};
+
+// fnexportAPI local patch: resolves an address the host pinned in the config instead of scanning
+// for it. Signature scans break on every engine bump; this is the escape hatch the upstream error
+// message ("Try overriding it") always assumed but never provided.
+struct ManualAddressScanObject : public IScanObject
+{
+	explicit ManualAddressScanObject(uintptr_t rva) : Rva(rva) {}
+
+	uintptr_t Rva;
 
 	uintptr_t TryFind() override;
 };

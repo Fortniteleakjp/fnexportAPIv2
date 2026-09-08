@@ -362,6 +362,8 @@ namespace FortnitePorting.Controllers
         /// <param name="timeoutSeconds">How long to wait for the dump after the DLL is loaded (default 120).</param>
         /// <param name="load">Hot-load the dumped mapping into the provider (default false).</param>
         /// <param name="download">Return the .usmap binary (default) instead of JSON statistics.</param>
+        /// <param name="gobjects">Hex module-relative address of GObjects, when the dumper's signature scan fails on this build.</param>
+        /// <param name="fnameToString">Hex module-relative address of FNameToString; same fallback as gobjects.</param>
         /// <param name="cancellationToken">Request cancellation state.</param>
         [HttpPost("dump/uefn")]
         public IActionResult DumpFromUefn(
@@ -372,8 +374,20 @@ namespace FortnitePorting.Controllers
             [FromQuery] int timeoutSeconds = 120,
             [FromQuery] bool load = false,
             [FromQuery] bool download = true,
+            [FromQuery] string? gobjects = null,
+            [FromQuery] string? fnameToString = null,
             CancellationToken cancellationToken = default)
         {
+            if (!TryParseRva(gobjects, out var gObjectsRva))
+            {
+                return BadRequest(new { message = "'gobjects' must be a hex module-relative address, for example 1a2b3c4 or 0x1a2b3c4." });
+            }
+
+            if (!TryParseRva(fnameToString, out var fNameToStringRva))
+            {
+                return BadRequest(new { message = "'fnameToString' must be a hex module-relative address, for example 1a2b3c4 or 0x1a2b3c4." });
+            }
+
             bool oodle;
             switch ((compression ?? "none").Trim().ToLowerInvariant())
             {
@@ -390,7 +404,9 @@ namespace FortnitePorting.Controllers
                 Build = ShortBuild(),
                 Oodle = oodle,
                 Console = console,
-                Timeout = TimeSpan.FromSeconds(Math.Clamp(timeoutSeconds, 5, 3600))
+                Timeout = TimeSpan.FromSeconds(Math.Clamp(timeoutSeconds, 5, 3600)),
+                GObjectsRva = gObjectsRva,
+                FNameToStringRva = fNameToStringRva
             };
 
             UefnDumperInjector.DumpResult result;
@@ -526,6 +542,21 @@ namespace FortnitePorting.Controllers
             }
 
             return string.IsNullOrWhiteSpace(version) ? null : $"FortniteGame_{version}";
+        }
+
+        /// <summary>
+        /// Parses an optional hex module-relative address. An absent value is accepted as zero, which
+        /// leaves the dumper scanning for the address itself.
+        /// </summary>
+        private static bool TryParseRva(string? value, out ulong rva)
+        {
+            rva = 0;
+            if (string.IsNullOrWhiteSpace(value)) return true;
+
+            var text = value.Trim();
+            if (text.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) text = text[2..];
+
+            return ulong.TryParse(text, System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out rva);
         }
 
         private static List<object> SampleTypes(TypeMappings? m)

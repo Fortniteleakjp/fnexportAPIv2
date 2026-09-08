@@ -78,6 +78,15 @@ public sealed class UefnDumperInjector
 
         /// <summary>Parse the written file back and report what it contains.</summary>
         public bool Verify = true;
+
+        /// <summary>
+        /// Module-relative address of GObjects, used when the dumper's signature scan cannot find it
+        /// on this build. Zero keeps the scan.
+        /// </summary>
+        public ulong GObjectsRva;
+
+        /// <summary>Module-relative address of FNameToString; same fallback as <see cref="GObjectsRva"/>.</summary>
+        public ulong FNameToStringRva;
     }
 
     public sealed class DumpResult
@@ -173,7 +182,7 @@ public sealed class UefnDumperInjector
         var log = output + ".log";
 
         File.Copy(dll, stagedDll, overwrite: true);
-        WriteConfig(stagedDll, output, request.Oodle, request.Console);
+        WriteConfig(stagedDll, output, request);
 
         var stopwatch = Stopwatch.StartNew();
         Inject(target, stagedDll);
@@ -299,15 +308,25 @@ public sealed class UefnDumperInjector
     /// Writes the key=value file the DLL reads from next to itself. Paths stay ASCII because the
     /// dumper opens them through the ANSI CRT.
     /// </summary>
-    private static void WriteConfig(string stagedDll, string output, bool oodle, bool console)
+    private static void WriteConfig(string stagedDll, string output, DumpRequest request)
     {
         var config = new StringBuilder()
             .Append("output=").Append(output).Append('\n')
-            .Append("compression=").Append(oodle ? "oodle" : "none").Append('\n')
-            .Append("console=").Append(console ? "true" : "false").Append('\n')
-            .ToString();
+            .Append("compression=").Append(request.Oodle ? "oodle" : "none").Append('\n')
+            .Append("console=").Append(request.Console ? "true" : "false").Append('\n');
 
-        File.WriteAllText(Path.ChangeExtension(stagedDll, ".cfg"), config, new UTF8Encoding(false));
+        // Only written when pinned; a key the dumper is not given falls back to its signature scan.
+        if (request.GObjectsRva != 0)
+        {
+            config.Append("gobjects=").Append(request.GObjectsRva.ToString("x")).Append('\n');
+        }
+
+        if (request.FNameToStringRva != 0)
+        {
+            config.Append("fnametostring=").Append(request.FNameToStringRva.ToString("x")).Append('\n');
+        }
+
+        File.WriteAllText(Path.ChangeExtension(stagedDll, ".cfg"), config.ToString(), new UTF8Encoding(false));
     }
 
     /// <summary>

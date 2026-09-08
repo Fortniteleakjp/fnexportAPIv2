@@ -49,12 +49,23 @@ static bool InitEngine(GameInstance& Game)
 {
 	// if an engine version has a different type or offset, set it here
 
-	if (Game.GamePath.filename() == "FortniteClient-Win64-Shipping.exe"
-		and Game.Version >= 5.0)
+	auto FileName = Game.GamePath.filename().string();
+
+	// fnexportAPI local patch: UEFN (UnrealEditorFortnite-Win64-Shipping.exe) is the same engine and
+	// build family as the game client, so it needs the same profile. Upstream only matched
+	// FortniteClient, which silently sent the editor down the generic path: the wrong GObjects
+	// patterns AND the wrong FName layout, since Fortnite builds with UE_FNAME_OUTLINE_NUMBER=1.
+	auto IsFortnite =
+		FileName.starts_with("FortniteClient-Win64-") ||
+		FileName.starts_with("UnrealEditorFortnite-Win64-");
+
+	if (IsFortnite and Game.Version >= 5.0)
 	{
+		UE_LOG("Using the Fortnite profile (outline-number FName, Fortnite GObjects patterns)");
 		return IUnrealVersion::InitTypes<Version_FortniteLatest>();
 	}
 
+	UE_LOG("Using the generic Unreal profile");
 	return IUnrealVersion::InitTypes<UnrealVersionBase>();
 }
 

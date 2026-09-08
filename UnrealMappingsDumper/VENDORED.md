@@ -27,6 +27,9 @@
 | `UnrealMappingsDumper/dumper.cpp` | 出力先を `HostConfig::Output` に変更。開けなければ例外を投げ、`HOST_RESULT failed` に理由が載るようにします。 |
 | `UnrealMappingsDumper/writer.h` | `FileWriter::m_File` を `nullptr` 初期化し、デストラクタで NULL チェック。`IsOpen()` を追加。書き込めないパスでゲームを巻き込んで落とさないためです。 |
 | `UnrealMappingsDumper/framework.h` | 上記の例外送出のため `<stdexcept>` を追加。 |
+| `UnrealMappingsDumper/app.cpp` | `UnrealEditorFortnite-Win64-*`（UEFN）を Fortnite プロファイルへ振り分け。上流は `FortniteClient` しか判定しておらず、UEFN が汎用パス（誤った GObjects パターンと、`UE_FNAME_OUTLINE_NUMBER=1` を前提としない FName レイアウト）へ落ちていました。 |
+| `UnrealMappingsDumper/unrealVersion.h` | 設定で指定されたアドレスを走査より優先し、どの候補が当たったかをモジュール相対アドレスで記録。Fortnite プロファイルの GObjects 候補も追加。 |
+| `UnrealMappingsDumper/scanning.{h,cpp}` | 設定で渡されたモジュール相対アドレスを解決する `ManualAddressScanObject` と、`GetScanModuleBase()` を追加（Memcury のヘッダは非 inline 関数を含むため 1 つの翻訳単位からしか include できません）。 |
 | `UnrealMappingsDumper/*.vcxproj{,.filters}` | `hostConfig.h` をプロジェクトに追加。 |
 | `build.bat` | 新規。MSBuild を解決して x64 Release をビルドし、`libs/UnrealMappingsDumper.dll` へ配置します。 |
 

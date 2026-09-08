@@ -3,6 +3,11 @@
 #include "scanning.h"
 #include "../Dependencies/Memcury/memcury.h"
 
+uintptr_t GetScanModuleBase()
+{
+	return Memcury::PE::GetModuleBase();
+}
+
 uintptr_t PatternScanObject::TryFind()
 {
 	auto Addy = Memcury::Scanner::FindPattern(Sig.c_str());
@@ -18,6 +23,15 @@ uintptr_t PatternScanObject::TryFind()
 	Addy.AbsoluteOffset(ResultOffset);
 
 	return Addy.Get();
+}
+
+uintptr_t ManualAddressScanObject::TryFind()
+{
+	if (!Rva)
+		return 0;
+
+	// The host supplies a module-relative address, so it survives ASLR across runs.
+	return Memcury::PE::GetModuleBase() + Rva;
 }
 
 template <typename T>

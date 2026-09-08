@@ -1,6 +1,7 @@
 #pragma once
 
 #include "app.h"
+#include "hostConfig.h"
 #include "unrealTypes.h"
 #include "scanning.h"
 
@@ -14,42 +15,60 @@ struct IUnrealVersion
 private:
 	static bool TryDynamicOffsets();
 
+	// Tries the pinned address first, then each candidate in order, and reports what was used.
+	static uintptr_t Resolve(
+		const char* Name,
+		const std::vector<std::shared_ptr<IScanObject>>& Candidates,
+		uintptr_t PinnedRva)
+	{
+		if (PinnedRva)
+		{
+			auto Pinned = ManualAddressScanObject(PinnedRva).TryFind();
+			if (Pinned)
+			{
+				UE_LOG("Using the pinned address for %s (+0x%llX)", Name, (unsigned long long)PinnedRva);
+				return Pinned;
+			}
+		}
+
+		auto ModuleBase = GetScanModuleBase();
+
+		for (size_t Index = 0; Index < Candidates.size(); Index++)
+		{
+			auto Found = Candidates[Index]->TryFind();
+			if (!Found)
+				continue;
+
+			UE_LOG("Found %s with candidate %zu (+0x%llX)", Name, Index + 1, (unsigned long long)(Found - ModuleBase));
+			return Found;
+		}
+
+		return 0;
+	}
+
 public:
 
 	template <typename Version>
 	static bool InitTypes()
 	{
-		uintptr_t GObjectsAddy = 0;
-
-		for (auto Scan : Version::GetGObjectsPatterns())
-		{
-			GObjectsAddy = Scan->TryFind();
-
-			if (GObjectsAddy)
-				break;
-		}
+		// fnexportAPI local patch: an address pinned in the host config wins over the scans, and
+		// whichever candidate matched is logged as a module-relative address so a working one can be
+		// pinned for the next run. Upstream only said "try overriding it" without a way to do so.
+		auto GObjectsAddy = Resolve("GObjects", Version::GetGObjectsPatterns(), HostConfig::GObjectsRva);
 
 		if (!GObjectsAddy)
 		{
-			UE_LOG("Could not find the address for GObjects. Try overriding it or adding the correct sig for it.");
+			UE_LOG("Could not find the address for GObjects. Pin it with 'gobjects=<rva>' in the dumper config, or add the correct sig for it.");
 			return false;
 		}
 
 		ObjObjects::SetInstance(GObjectsAddy);
 
-		uintptr_t FNameStringAddy = 0;
-
-		for (auto Scan : Version::GetFNameStringPatterns())
-		{
-			FNameStringAddy = Scan->TryFind();
-
-			if (FNameStringAddy)
-				break;
-		}
+		auto FNameStringAddy = Resolve("FNameToString", Version::GetFNameStringPatterns(), HostConfig::FNameToStringRva);
 
 		if (!FNameStringAddy)
 		{
-			UE_LOG("Could not find the address for FNameToString. Try overriding it or adding the correct sig for it.");
+			UE_LOG("Could not find the address for FNameToString. Pin it with 'fnametostring=<rva>' in the dumper config, or add the correct sig for it.");
 			return false;
 		}
 
@@ -144,9 +163,19 @@ struct Version_FortniteLatest : Version_OptimizedFName
 {
 	static std::vector<std::shared_ptr<IScanObject>> GetGObjectsPatterns()
 	{
+		// GObjects is read as `mov <reg>, [rip+disp]` followed by an indexed load out of the chunk
+		// table. Only the register allocation changes between builds, so the same access shape is
+		// listed for the encodings the compiler actually picks. Which one hit is logged as an RVA,
+		// and a build none of them match can be pinned with 'gobjects=' in the dumper config.
 		return
 		{
-			std::make_shared<PatternScanObject>("48 8B 05 ? ? ? ? 48 8B 0C C8", 3, true)
+			std::make_shared<PatternScanObject>("48 8B 05 ? ? ? ? 48 8B 0C C8", 3, true),
+			std::make_shared<PatternScanObject>("48 8B 05 ? ? ? ? 48 8B 0C D0", 3, true),
+			std::make_shared<PatternScanObject>("48 8B 05 ? ? ? ? 48 8B 14 C8", 3, true),
+			std::make_shared<PatternScanObject>("48 8B 0D ? ? ? ? 48 8B 04 C1", 3, true),
+			std::make_shared<PatternScanObject>("48 8B 15 ? ? ? ? 48 8B 0C C2", 3, true),
+			std::make_shared<PatternScanObject>("4C 8B 05 ? ? ? ? 4D 8B 0C C8", 3, true),
+			std::make_shared<PatternScanObject>("4C 8B 05 ? ? ? ? 4D 8B 04 C8", 3, true)
 		};
 	}
 };
