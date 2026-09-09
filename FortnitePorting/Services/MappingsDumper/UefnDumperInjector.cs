@@ -88,6 +88,13 @@ public sealed class UefnDumperInjector
 
         /// <summary>Module-relative address of FNameToString; same fallback as <see cref="GObjectsRva"/>.</summary>
         public ulong FNameToStringRva;
+
+        /// <summary>
+        /// Let the dumper call the addresses its signature scan turns up, to find out whether one of
+        /// them is FNameToString. That function cannot be recognised any other way, and calling the
+        /// wrong one can crash the editor, so this is off unless asked for.
+        /// </summary>
+        public bool ProbeSignatures;
     }
 
     public sealed class DumpResult
@@ -383,6 +390,11 @@ public sealed class UefnDumperInjector
         if (request.FNameToStringRva != 0)
         {
             config.Append("fnametostring=").Append(request.FNameToStringRva.ToString("x")).Append('\n');
+        }
+
+        if (request.ProbeSignatures)
+        {
+            config.Append("probesignatures=true").Append('\n');
         }
 
         File.WriteAllText(Path.ChangeExtension(stagedDll, ".cfg"), config.ToString(), new UTF8Encoding(false));

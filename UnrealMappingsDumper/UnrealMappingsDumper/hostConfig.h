@@ -14,6 +14,7 @@
 //   console=true|false                   allocate a console in the game (default: true)
 //   gobjects=1a2b3c4                     module-relative address of GObjects, when the scan fails
 //   fnametostring=1a2b3c4                module-relative address of FNameToString, likewise
+//   probesignatures=true|false           call scan hits to see if they are FNameToString (default: false)
 //
 // Everything UE_LOG prints is mirrored to "<output>.log" so the host can report why
 // a dump failed instead of only timing out. The run always ends with one terminal line
@@ -36,6 +37,13 @@ namespace HostConfig
 	// cannot start without. Zero means "scan for it", which is the normal path.
 	inline uintptr_t GObjectsRva = 0;
 	inline uintptr_t FNameToStringRva = 0;
+
+	// Whether a signature hit may be called to find out whether it is FNameToString.
+	//
+	// There is no way to recognise that function without running it, and running the wrong one
+	// inside the editor can take the editor down — which it did. So it is off unless asked for:
+	// a supplied address is still checked, but an address nobody vouched for is not executed.
+	inline bool ProbeSignatures = false;
 
 	// Parses a hex address, with or without a 0x prefix. Returns 0 when the value is not usable,
 	// which falls back to scanning rather than pointing the dumper at nothing.
@@ -126,6 +134,10 @@ namespace HostConfig
 			else if (Key == "fnametostring")
 			{
 				FNameToStringRva = ParseRva(Value);
+			}
+			else if (Key == "probesignatures")
+			{
+				ProbeSignatures = (Value != "false" && Value != "0");
 			}
 		}
 

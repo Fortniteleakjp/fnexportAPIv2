@@ -82,22 +82,25 @@ public:
 				Module.c_str(), (unsigned long long)(GObjectsAddy - GetScanModuleBase()));
 		}
 
-		// Unlike GObjects, a wrong FNameToString cannot be spotted from its own address: the scan
+		using UObjectImpl = Version::Offsets::UObject;
+		using UStructImpl = Version::Offsets::UStruct;
+
+		// Set before anything reads a name. Checking a candidate FNameToString means reading real
+		// object names, and reading a name needs to know where the name is — with NameOffset still
+		// zero the check read each object's vtable pointer as if it were an FName, so even the
+		// correct function could not pass it.
+		UObject::NameOffset = UObjectImpl::NameOffset;
+		FName::IsOptimized = Version::HasOptimizedFName;
+		FProperty::FPropertySize = Version::FPropertySize;
+
+		// Unlike GObjects, a wrong FNameToString cannot be spotted from its own address: a scan
 		// happily matches an unrelated function and every name then comes back empty, which shows
-		// up much later as "could not grab dynamic offsets". Each candidate is installed and asked
-		// to resolve real names before it is accepted.
+		// up much later as "could not grab dynamic offsets". The address is checked by using it.
 		if (!ResolveFNameToString(Version::GetFNameStringPatterns(), HostConfig::FNameToStringRva))
 		{
 			UE_LOG("Could not find a working address for FNameToString. Pin it with 'fnametostring=<rva>' in the dumper config, or add the correct sig for it.");
 			return false;
 		}
-
-		using UObjectImpl = Version::Offsets::UObject;
-		using UStructImpl = Version::Offsets::UStruct;
-
-		UObject::NameOffset = UObjectImpl::NameOffset;
-		FName::IsOptimized = Version::HasOptimizedFName;
-		FProperty::FPropertySize = Version::FPropertySize;
 
 		if (!TryDynamicOffsets())
 		{

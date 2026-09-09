@@ -85,6 +85,15 @@ bool IUnrealVersion::ResolveFNameToString(
 			(unsigned long long)PinnedRva);
 	}
 
+	if (!HostConfig::ProbeSignatures)
+	{
+		UE_LOG("No address was supplied for FNameToString, and signature hits are not called unless "
+			"'probesignatures=true' is set: the only way to identify that function is to run it, and "
+			"running the wrong one can take the editor down.");
+		FNameToString = nullptr;
+		return false;
+	}
+
 	for (size_t Index = 0; Index < Candidates.size(); Index++)
 	{
 		auto Found = Candidates[Index]->TryFind();

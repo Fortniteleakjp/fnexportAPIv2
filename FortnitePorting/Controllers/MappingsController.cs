@@ -364,6 +364,7 @@ namespace FortnitePorting.Controllers
         /// <param name="download">Return the .usmap binary (default) instead of JSON statistics.</param>
         /// <param name="gobjects">Hex module-relative address of GObjects, when the dumper's signature scan fails on this build.</param>
         /// <param name="fnameToString">Hex module-relative address of FNameToString; same fallback as gobjects.</param>
+        /// <param name="probeSignatures">Let the dumper call signature hits to identify FNameToString. Off by default: a wrong call can crash UEFN.</param>
         /// <param name="cancellationToken">Request cancellation state.</param>
         [HttpPost("dump/uefn")]
         public IActionResult DumpFromUefn(
@@ -376,6 +377,7 @@ namespace FortnitePorting.Controllers
             [FromQuery] bool download = true,
             [FromQuery] string? gobjects = null,
             [FromQuery] string? fnameToString = null,
+            [FromQuery] bool probeSignatures = false,
             CancellationToken cancellationToken = default)
         {
             if (!TryParseRva(gobjects, out var gObjectsRva))
@@ -406,7 +408,8 @@ namespace FortnitePorting.Controllers
                 Console = console,
                 Timeout = TimeSpan.FromSeconds(Math.Clamp(timeoutSeconds, 5, 3600)),
                 GObjectsRva = gObjectsRva,
-                FNameToStringRva = fNameToStringRva
+                FNameToStringRva = fNameToStringRva,
+                ProbeSignatures = probeSignatures
             };
 
             UefnDumperInjector.DumpResult result;
