@@ -61,6 +61,17 @@ public:
 	template <typename Version>
 	static bool InitTypes()
 	{
+		// fnexportAPI local patch: each step here walks the object array in some form, and which one
+		// dominates is not obvious from reading them, so they are timed.
+		auto PhaseStart = std::chrono::steady_clock::now();
+		auto Phase = [&](const char* Name)
+		{
+			auto Now = std::chrono::steady_clock::now();
+			UE_LOG("  [%s] %.0f ms", Name,
+				std::chrono::duration<double, std::milli>(Now - PhaseStart).count());
+			PhaseStart = Now;
+		};
+
 		// fnexportAPI local patch: an address pinned in the host config wins over the scans, and
 		// whichever candidate matched is logged as a module-relative address so a working one can be
 		// pinned for the next run. Upstream only said "try overriding it" without a way to do so.
@@ -97,6 +108,8 @@ public:
 			return false;
 		}
 
+		Phase("GObjects");
+
 		ObjObjects::SetInstance(GObjectsAddy);
 
 		// The scans so far ran against the process's main module. In a modular build that is a stub
@@ -129,6 +142,8 @@ public:
 			return false;
 		}
 
+		Phase("FNameToString");
+
 		if (!TryDynamicOffsets())
 		{
 			UE_LOG("Could not grab dynamic offsets. Just gonna use the hardcoded ones.");
@@ -140,6 +155,8 @@ public:
 			UStruct::ChildPropertiesOffset = UStructImpl::ChildPropertiesOffset;
 		}
 
+		Phase("dynamic offsets");
+
 		// The array dimension and the field class id sit at offsets that move with FName's width and
 		// with members UE6 added, and reading either from the wrong place is silent: the dump comes
 		// out full of unknown types and nonsense property indices.
@@ -149,6 +166,8 @@ public:
 				FProperty::ArrayDimOffset, FFieldClass::IdOffset);
 		}
 
+		Phase("field offsets");
+
 		// Needs the class offset, so it runs after the dynamic offsets above. A wrong size here
 		// does not stop the dump, it corrupts the type of every struct and enum property in it.
 		if (!TryDerivePropertySize())
@@ -157,12 +176,16 @@ public:
 				FProperty::FPropertySize);
 		}
 
+		Phase("FProperty size");
+
 		// Enum members moved into their own structure on UE6, and where it sits depends on the
 		// build, so it is located rather than assumed. Structs still dump without it.
 		if (!TryDeriveEnumNamesOffset())
 		{
 			UE_LOG("Could not locate the enum member data; enums will be skipped.");
 		}
+
+		Phase("enum member data");
 
 		// Every lookup after this point is built on these; a wrong one produces an empty dump
 		// rather than an error, so they are reported.

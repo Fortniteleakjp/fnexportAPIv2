@@ -311,14 +311,17 @@ bool IUnrealVersion::TryDerivePropertySize()
 	constexpr int Step = 8;
 	constexpr int Slots = (LastOffset - FirstOffset) / Step + 1;
 
-	// Enough properties that the right offset wins clearly, without walking the whole array.
+	// Sampling stops as soon as one offset is far enough ahead to be the answer; the bound is only
+	// there for the case where nothing ever pulls clear.
 	constexpr int PropertiesToSample = 20000;
 	constexpr int MaxPropertiesPerStruct = 4096;
+	constexpr int VotesToSettle = 300;
 
 	int Votes[Slots] = {};
 	int Sampled = 0;
+	bool Settled = false;
 
-	for (int Index = 0; Index < ObjObjects::Num() && Sampled < PropertiesToSample; Index++)
+	for (int Index = 0; Index < ObjObjects::Num() && Sampled < PropertiesToSample && !Settled; Index++)
 	{
 		auto Object = ObjObjects::GetObjectByIndex(Index);
 		if (!Object)
@@ -343,6 +346,21 @@ bool IUnrealVersion::TryDerivePropertySize()
 
 			Sampled++;
 			Property = static_cast<FProperty*>(Property->GetNext());
+
+			// One offset holding a script struct hundreds of times over, with nothing else close,
+			// is the size. Carrying on only makes the margin wider.
+			int Leader = 0, Runner = 0;
+			for (int Slot = 0; Slot < Slots; Slot++)
+			{
+				if (Votes[Slot] > Votes[Leader]) { Runner = Leader; Leader = Slot; }
+				else if (Slot != Leader && Votes[Slot] > Votes[Runner]) { Runner = Slot; }
+			}
+
+			if (Votes[Leader] >= VotesToSettle && Votes[Leader] >= Votes[Runner] * 4)
+			{
+				Settled = true;
+				break;
+			}
 		}
 	}
 
@@ -487,10 +505,29 @@ bool IUnrealVersion::TryDynamicOffsets()
 {
 	try
 	{
-		auto UClassPtr = ObjObjects::FindObjectByName<UClass>(L"Class");
-		auto UObjectPtr = ObjObjects::FindObjectByName<UClass>(L"Object");
-		auto ActorPtr = ObjObjects::FindObjectByName<UClass>(L"Actor");
-		auto EnginePtr = ObjObjects::FindObjectByName(L"/Script/Engine");
+		// fnexportAPI local patch: found in a single pass. Four separate lookups meant four walks of
+		// the whole object array, each reading the name of every object in it.
+		UClass* UClassPtr = nullptr;
+		UClass* UObjectPtr = nullptr;
+		UClass* ActorPtr = nullptr;
+		UObject* EnginePtr = nullptr;
+
+		for (int Index = 0; Index < ObjObjects::Num(); Index++)
+		{
+			auto Object = ObjObjects::GetObjectByIndex(Index);
+			if (!Object)
+				continue;
+
+			auto Name = Object->GetName();
+
+			if (!UClassPtr && Name == L"Class") UClassPtr = (UClass*)Object;
+			else if (!UObjectPtr && Name == L"Object") UObjectPtr = (UClass*)Object;
+			else if (!ActorPtr && Name == L"Actor") ActorPtr = (UClass*)Object;
+			else if (!EnginePtr && Name == L"/Script/Engine") EnginePtr = Object;
+
+			if (UClassPtr && UObjectPtr && ActorPtr && EnginePtr)
+				break;
+		}
 
 		if (!UClassPtr or !UObjectPtr or !ActorPtr or !EnginePtr)
 			return false;

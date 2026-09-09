@@ -64,14 +64,49 @@ namespace
 
 	constexpr int32_t ItemStride = 24;
 
+	// fnexportAPI local patch: VirtualQuery is a system call, and the offset derivations ask about
+	// the same handful of regions hundreds of thousands of times — measuring FProperty alone spent
+	// nine and a half seconds in it. Each answer covers a whole region, so answers are kept.
+	//
+	// A direct-mapped table is enough: probes cluster tightly, and a stale entry only matters if a
+	// region is freed mid-derivation, which the filters around every read already survive.
+	struct FRegionAnswer
+	{
+		uintptr_t Start = 0;
+		uintptr_t End = 0;
+		bool Readable = false;
+	};
+
+	constexpr int RegionCacheSize = 512;
+	FRegionAnswer GRegionCache[RegionCacheSize];
+
 	bool IsReadable(uintptr_t Address, size_t Size)
 	{
 		if (!Address)
 			return false;
 
+		auto& Cached = GRegionCache[(Address >> 16) & (RegionCacheSize - 1)];
+		if (Address >= Cached.Start && Address < Cached.End)
+		{
+			return Cached.Readable && Address + Size <= Cached.End;
+		}
+
 		MEMORY_BASIC_INFORMATION Info{};
 		if (!VirtualQuery(reinterpret_cast<void*>(Address), &Info, sizeof(Info)))
 			return false;
+
+		{
+			constexpr DWORD Usable =
+				PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY |
+				PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+
+			Cached.Start = reinterpret_cast<uintptr_t>(Info.BaseAddress);
+			Cached.End = Cached.Start + Info.RegionSize;
+			Cached.Readable =
+				Info.State == MEM_COMMIT &&
+				(Info.Protect & Usable) != 0 &&
+				(Info.Protect & (PAGE_GUARD | PAGE_NOACCESS)) == 0;
+		}
 
 		if (Info.State != MEM_COMMIT)
 			return false;
