@@ -35,6 +35,11 @@ public sealed class UefnDumperInjector
     /// <summary>Overrides where the DLL is loaded from; otherwise the usual native-library search runs.</summary>
     public const string DllPathVariable = "USMAP_DUMPER_DLL";
 
+    // The Oodle library this project already ships for reading paks. The dumper needs one only when
+    // compression is asked for, and the editor has usually loaded its own by then; this is the
+    // fallback. Upstream downloaded one from a link that has long since died.
+    private const string OodleFileName = "oo2core_9_win64.dll";
+
     // UEFN ships as UnrealEditorFortnite-Win64-Shipping.exe. Only the editor is targeted: it is the
     // Unreal process this project already works against (the AES key is read out of its Common DLL).
     private const string ProcessNamePrefix = "UnrealEditorFortnite-Win64-";
@@ -447,6 +452,13 @@ public sealed class UefnDumperInjector
         if (request.ProbeSignatures)
         {
             config.Append("probesignatures=true").Append('\n');
+        }
+
+        // Only relevant when compression is asked for, and only as a fallback: the editor has
+        // normally loaded Oodle itself long before the dumper needs it.
+        if (request.Oodle && LibraryDownloader.FindLibrary(OodleFileName) is { } oodle)
+        {
+            config.Append("oodle=").Append(oodle).Append('\n');
         }
 
         File.WriteAllText(Path.ChangeExtension(stagedDll, ".cfg"), config.ToString(), new UTF8Encoding(false));

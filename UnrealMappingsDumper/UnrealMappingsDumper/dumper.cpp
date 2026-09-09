@@ -375,7 +375,8 @@ void Dumper::Run(ECompressionMethod CompressionMethod)
 						if (++Count > MaxPropertiesPerStruct)
 							throw std::runtime_error("property chain did not terminate");
 
-						NameMap.insert_or_assign(Props->GetFName(), 0);
+						if (!Props->IsEditorOnly())
+							NameMap.insert_or_assign(Props->GetFName(), 0);
 						Props = static_cast<FProperty*>(Props->GetNext());
 
 						if (Props == First)
@@ -493,6 +494,14 @@ void Dumper::Run(ECompressionMethod CompressionMethod)
 
 		while (Props)
 		{
+			// Editor-only properties are not in the cooked packages this mapping describes, so they
+			// take no index here either.
+			if (Props->IsEditorOnly())
+			{
+				Props = static_cast<FProperty*>(Props->GetNext());
+				continue;
+			}
+
 			FPropertyData Data(Props, PropCount);
 
 			Properties.push_back(Data);

@@ -16,6 +16,7 @@
 //   gobjects=1a2b3c4                     module-relative address of GObjects, when the scan fails
 //   fnametostring=1a2b3c4                module-relative address of FNameToString, likewise
 //   probesignatures=true|false           call scan hits to see if they are FNameToString (default: false)
+//   oodle=D:\repo\libs\oo2core_9_win64.dll   Oodle library to compress with, if not already loaded
 //
 // Everything UE_LOG prints is mirrored to "<output>.log" so the host can report why
 // a dump failed instead of only timing out. The run always ends with one terminal line
@@ -53,6 +54,10 @@ namespace HostConfig
 	// inside the editor can take the editor down — which it did. So it is off unless asked for:
 	// a supplied address is still checked, but an address nobody vouched for is not executed.
 	inline bool ProbeSignatures = false;
+
+	// Oodle library the host ships, used when compression is asked for and the game has not already
+	// loaded one itself.
+	inline std::string OodlePath;
 
 	// Parses a hex address, with or without a 0x prefix. Returns 0 when the value is not usable,
 	// which falls back to scanning rather than pointing the dumper at nothing.
@@ -151,6 +156,10 @@ namespace HostConfig
 			else if (Key == "probesignatures")
 			{
 				ProbeSignatures = (Value != "false" && Value != "0");
+			}
+			else if (Key == "oodle")
+			{
+				OodlePath = Value;
 			}
 		}
 

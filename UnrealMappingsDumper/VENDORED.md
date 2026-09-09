@@ -37,6 +37,8 @@
 | `UnrealMappingsDumper/unrealTypes.h`（FFieldClass / FProperty） | 型判定に使う `EClassCastFlags` は、UE6 が `Name` と `Id` の間に `EClassFlags` を挟んだため位置が変わり、`ArrayDim` も `FField` の幅とともに移動していました。どちらも読み違えても例外は出ず、全プロパティが「不明な型」、プロパティ番号が無意味な値になるだけです。実行時に実測して決めます（実機では `ArrayDim +0x38`、`Id +0x18`、`FProperty` サイズ `0x88`）。 |
 | `UnrealMappingsDumper/unrealTypes.h`（FArrayProperty / FSetProperty） | UE6 の `FArrayProperty` は要素型の前に `EArrayPropertyFlags` を置くため、`Inner` が 1 ワード後ろです。`FSetProperty` は先頭のままなので経路を分けています。 |
 | `UnrealMappingsDumper/dumper.cpp`（参照先の検証） | `GetStruct()` / `GetEnum()` / `GetInner()` の参照先は常に辿れるとは限りません（MaterialExpression 系など）。辿れないものは「名前なし」「不明な型」として記録します。読み手はどちらも解釈できるため、レコードを壊さずに済みます。 |
+| `UnrealMappingsDumper/dumper.cpp`（エディタ専用プロパティ） | ダンプ元はエディタですが、マッピングが説明するのはゲーム向けに cooked されたパッケージです。エディタ専用プロパティはそこに存在しないため、数に入れると struct 内と派生先すべてのプロパティ番号がずれます（`FortItemDefinition` だけで 38 件）。`CPF_EditorOnly` を除外します。 |
+| `UnrealMappingsDumper/oodle.h` | 上流はカレントディレクトリの `Oodle.dll` を探し、無ければ Discord の添付リンクからダウンロードしていました。他人のエディタに注入した状態で行う処理ではなく、リンクも失効しているため、読み込み失敗 → `GetProcAddress(NULL, ...)` → null 呼び出しでエディタごと落ちます。既に読み込まれている Oodle を使い、無ければホストが渡したパスを使う形にし、ダウンロードは削除しました。`OodleLZ_Compress` の引数も 8 個ではなく実際の 10 個に修正しています（不足分が未初期化スタックとして読まれていました）。 |
 | `UnrealMappingsDumper/dumper.cpp`（出力形式） | usmap をバージョン 0 ではなく 3（LargeEnums）で出力。バージョン 0 は enum メンバー数が 1 バイトのため、256 個以上を持つ enum でストリームが破綻します。versioning フラグは UE 準拠の 4 バイト bool。 |
 | `UnrealMappingsDumper/dumper.cpp`（堅牢化） | 走査を段階ごとに保護し、読めないオブジェクトは理由付きで除外。プロパティ連鎖と enum 件数に上限を設け、誤ったオフセットでの無限ループとバッファ外読み出しを防止。 |
 | `UnrealMappingsDumper/scanning.{h,cpp}` | 設定で渡されたモジュール相対アドレスを解決する `ManualAddressScanObject` と、`GetScanModuleBase()` を追加（Memcury のヘッダは非 inline 関数を含むため 1 つの翻訳単位からしか include できません）。 |

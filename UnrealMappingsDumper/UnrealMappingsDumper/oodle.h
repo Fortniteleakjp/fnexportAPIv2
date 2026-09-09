@@ -1,10 +1,21 @@
 #pragma once
 
-#include <urlmon.h>
-#pragma comment(lib,"urlmon.lib")
+#include "hostConfig.h"
 
-constexpr const char* OodlePath = "Oodle.dll";
-constexpr const char* OodleDownload = "https://cdn.discordapp.com/attachments/817251677086285848/992648087371792404/oo2core_9_win64.dll";
+// fnexportAPI local patch: upstream looked for "Oodle.dll" in the working directory and, failing
+// that, downloaded one from a Discord attachment link. Injected into someone's editor that is not
+// something to do — and the link is long dead, so the load failed, GetProcAddress was called on a
+// null module, and compressing the mapping crashed the editor on a null function pointer.
+//
+// The game is an Unreal application, so it has usually loaded Oodle already; that copy is used when
+// it is there. Otherwise the host names the one it ships alongside the dumper. Nothing is fetched,
+// and a missing library is reported instead of being called.
+constexpr const char* OodleModuleNames[] =
+{
+	"oo2core_9_win64.dll",
+	"oo2core_8_win64.dll",
+	"oo2core_5_win64.dll",
+};
 
 enum class OodleFormat
 {
@@ -33,15 +44,24 @@ enum class OodleCompressionLevel : uint32_t
 	Optimal5
 };
 
-typedef uint64_t(*_OodleCompressFunc)(
-	OodleFormat format,
-	void* buffer,
-	int64_t bufferSize,
-	void* outputBuffer,
-	OodleCompressionLevel level,
-	uint64_t a6,
-	uint64_t a7,
-	uint64_t a8);
+// fnexportAPI local patch: OodleLZ_Compress takes ten arguments, not eight.
+//
+// After the compressor, buffer, length, output and level come pOptions, dictionaryBase and lrm —
+// which upstream passed as zero — and then scratchMem and scratchSize, which it left off entirely.
+// The callee still reads them, so it picked up whatever happened to be on the stack and tried to
+// use it as a scratch buffer. Passing null for both is the documented way to say "allocate your
+// own", and is the difference between a compressed mapping and a crashed editor.
+typedef int64_t(*_OodleCompressFunc)(
+	OodleFormat Compressor,
+	const void* RawBuffer,
+	int64_t RawLength,
+	void* CompressedBuffer,
+	OodleCompressionLevel Level,
+	const void* Options,
+	const void* DictionaryBase,
+	const void* Lrm,
+	void* ScratchMemory,
+	int64_t ScratchSize);
 
 inline _OodleCompressFunc OodleLZ_Compress;
 
@@ -49,14 +69,23 @@ class Oodle
 {
 	Oodle()
 	{
-		if (!std::filesystem::exists(OodlePath))
+		HMODULE Handle = nullptr;
+
+		// Already in the process, which is the usual case inside a game.
+		for (auto Name : OodleModuleNames)
 		{
-			URLDownloadToFileA(NULL, OodleDownload, OodlePath, 0, NULL);
+			Handle = GetModuleHandleA(Name);
+			if (Handle) break;
 		}
 
-		auto OodleHandle = LoadLibraryA(OodlePath);
-		auto OodleCompressAddy = GetProcAddress(OodleHandle, "OodleLZ_Compress");
-		OodleLZ_Compress = (_OodleCompressFunc)OodleCompressAddy;
+		if (!Handle && !HostConfig::OodlePath.empty())
+		{
+			Handle = LoadLibraryA(HostConfig::OodlePath.c_str());
+		}
+
+		OodleLZ_Compress = Handle
+			? (_OodleCompressFunc)GetProcAddress(Handle, "OodleLZ_Compress")
+			: nullptr;
 	}
 
 	static void EnsureInitialized()
@@ -80,6 +109,13 @@ public:
 	{
 		EnsureInitialized();
 
+		if (!OodleLZ_Compress)
+		{
+			throw std::runtime_error(
+				"Oodle is not available in this process and no usable library was supplied, so the "
+				"mapping cannot be compressed; ask for compression=none instead");
+		}
+
 		auto compressedBuf = std::make_unique<uint8_t[]>(GetCompressionBound(bufSize));
 
 		auto compressedSize = OodleLZ_Compress(
@@ -88,7 +124,18 @@ public:
 			bufSize,
 			compressedBuf.get(),
 			level,
-			0, 0, 0);
+			nullptr,   // default options
+			nullptr,   // no dictionary
+			nullptr,   // no long-range matcher
+			nullptr,   // let it allocate its own scratch
+			0);
+
+		// Oodle reports failure as a zero-length result; writing that would produce a file whose
+		// header promises data it does not contain.
+		if (compressedSize <= 0 || compressedSize > (int64_t)GetCompressionBound((uint32_t)bufSize))
+		{
+			throw std::runtime_error("Oodle refused to compress the mapping");
+		}
 
 		return std::vector<uint8_t>(compressedBuf.get(), compressedBuf.get() + compressedSize);
 	}
