@@ -25,17 +25,20 @@ public static class Dumper7Offsets
 
     private const string DefaultDirectory = @"C:\Dumper-7";
 
-    private const string OffsetName = "OFFSET_TOSTRING";
-
     /// <summary>
     /// The FNameToString address Dumper-7 recorded for this build, or 0 when there is none.
     /// </summary>
     /// <param name="build">Build name as the API derives it, e.g. FortniteGame_42_10.</param>
-    public static ulong FindFNameToString(string? build)
+    public static ulong FindFNameToString(string? build) => Find(build, "OFFSET_TOSTRING");
+
+    /// <summary>The GObjects address Dumper-7 recorded, which saves searching for it.</summary>
+    public static ulong FindGObjects(string? build) => Find(build, "OFFSET_GOBJECTS");
+
+    private static ulong Find(string? build, string offsetName)
     {
         foreach (var file in FindOffsetFiles(build))
         {
-            var value = ReadOffset(file);
+            var value = ReadOffset(file, offsetName);
             if (value != 0) return value;
         }
 
@@ -92,7 +95,7 @@ public static class Dumper7Offsets
     /// <summary>
     /// Pulls OFFSET_TOSTRING out of the file, whose data is an array of [name, value] pairs.
     /// </summary>
-    private static ulong ReadOffset(string path)
+    private static ulong ReadOffset(string path, string offsetName)
     {
         try
         {
@@ -109,7 +112,7 @@ public static class Dumper7Offsets
                 if (pair.ValueKind != JsonValueKind.Array || pair.GetArrayLength() < 2) continue;
 
                 if (pair[0].ValueKind != JsonValueKind.String ||
-                    !string.Equals(pair[0].GetString(), OffsetName, StringComparison.Ordinal))
+                    !string.Equals(pair[0].GetString(), offsetName, StringComparison.Ordinal))
                 {
                     continue;
                 }

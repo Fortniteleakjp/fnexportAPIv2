@@ -62,6 +62,21 @@ public:
 		// fnexportAPI local patch: an address pinned in the host config wins over the scans, and
 		// whichever candidate matched is logged as a module-relative address so a working one can be
 		// pinned for the next run. Upstream only said "try overriding it" without a way to do so.
+		// Naming the module up front is what makes a pinned GObjects usable: without it the scans
+		// run against the process's main module, which in a modular build holds none of this. With
+		// both supplied there is nothing to search for, and the whole-process walk is skipped.
+		if (!HostConfig::ModuleName.empty())
+		{
+			if (RetargetScanModuleByName(HostConfig::ModuleName))
+			{
+				UE_LOG("Scanning %s (named by the host)", HostConfig::ModuleName.c_str());
+			}
+			else
+			{
+				UE_LOG("The host named %s but it is not loaded; searching instead", HostConfig::ModuleName.c_str());
+			}
+		}
+
 		auto GObjectsAddy = Resolve("GObjects", Version::GetGObjectsPatterns(), HostConfig::GObjectsRva);
 
 		if (!GObjectsAddy)

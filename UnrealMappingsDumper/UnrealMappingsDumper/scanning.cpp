@@ -225,6 +225,23 @@ namespace
 		}
 	}
 
+	/// <summary>
+	/// The pointer-following test, behind the same filter. It checks each address before reading it,
+	/// but the editor keeps allocating and freeing while this runs, so a page can still go away in
+	/// between — over minutes of scanning that is not a rare event.
+	/// </summary>
+	bool SafePointsAtRealObjects(uintptr_t Candidate, const FArrayFieldOrder& Order, const FItemLayout*& OutItemLayout)
+	{
+		__try
+		{
+			return PointsAtRealObjects(Candidate, Order, OutItemLayout);
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return false;
+		}
+	}
+
 	/// <summary>Reads one pointer-sized word, or 0 if the page has gone away.</summary>
 	uintptr_t SafeReadPointer(uintptr_t Address)
 	{
@@ -265,7 +282,7 @@ namespace
 				GNearMisses++;
 
 				const FItemLayout* ItemLayout = nullptr;
-				if (!PointsAtRealObjects(Cursor, Order, ItemLayout))
+				if (!SafePointsAtRealObjects(Cursor, Order, ItemLayout))
 					continue;
 
 				GObjectArrayLayout =
@@ -389,6 +406,19 @@ uintptr_t GetScanModuleBase()
 bool IsMemoryReadable(uintptr_t Address, size_t Size)
 {
 	return IsReadable(Address, Size);
+}
+
+bool RetargetScanModuleByName(const std::string& FileName)
+{
+	if (FileName.empty() || !GetModuleHandleA(FileName.c_str()))
+		return false;
+
+	// Memcury resolves the module by name on every call, so the string has to outlive this scope.
+	static std::string Target;
+	Target = FileName;
+
+	Memcury::PE::SetCurrentModule(Target.c_str());
+	return Memcury::PE::GetModuleBase() != 0;
 }
 
 std::string RetargetScanModule(uintptr_t Address)

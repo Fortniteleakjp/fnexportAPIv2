@@ -23,6 +23,10 @@ bool IsMemoryReadable(uintptr_t Address, size_t Size);
 // Returns the module's file name, or an empty string when the address belongs to no module.
 std::string RetargetScanModule(uintptr_t Address);
 
+// Points every later scan at a module named directly, for when its addresses are already known.
+// Returns false when no such module is loaded.
+bool RetargetScanModuleByName(const std::string& FileName);
+
 struct PatternScanObject : public IScanObject
 {
 	PatternScanObject(

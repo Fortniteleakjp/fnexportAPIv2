@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Globalization;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using System.Text;
 using System.Threading;
 using CUE4Parse.MappingsProvider.Usmap;
@@ -95,6 +96,12 @@ public sealed class UefnDumperInjector
         /// wrong one can crash the editor, so this is off unless asked for.
         /// </summary>
         public bool ProbeSignatures;
+
+        /// <summary>
+        /// Module the pinned addresses belong to. UEFN is a modular build, so an address means
+        /// nothing until the module holding it is named.
+        /// </summary>
+        public string? Module;
     }
 
     public sealed class DumpResult
@@ -192,14 +199,37 @@ public sealed class UefnDumperInjector
         // FNameToString cannot be found by signature on UE6, and the dumper refuses an address that
         // does not resolve names, so a run with nothing to go on fails outright. The address is the
         // same for the life of a build, so a known-good one is reused and only has to be found once.
+        var known = OffsetStore.Load(request.Build);
+
+        request.Module ??= known?.Module;
+
         if (request.FNameToStringRva == 0)
         {
-            request.FNameToStringRva = OffsetStore.Load(request.Build)?.FNameToStringRva ?? 0;
+            request.FNameToStringRva = known?.FNameToStringRva ?? 0;
+        }
+
+        // GObjects can be found by walking memory, but that means reading gigabytes of a live
+        // editor for minutes. A known address skips it, which is faster and far less intrusive.
+        if (request.GObjectsRva == 0)
+        {
+            request.GObjectsRva = known?.GObjectsRva ?? 0;
         }
 
         if (request.FNameToStringRva == 0)
         {
             request.FNameToStringRva = Dumper7Offsets.FindFNameToString(request.Build);
+        }
+
+        if (request.GObjectsRva == 0)
+        {
+            request.GObjectsRva = Dumper7Offsets.FindGObjects(request.Build);
+        }
+
+        // A pinned address is meaningless without the module it belongs to, so it is dropped when
+        // the module is unknown and the dumper searches as before.
+        if (string.IsNullOrWhiteSpace(request.Module))
+        {
+            request.GObjectsRva = 0;
         }
 
         File.Copy(dll, stagedDll, overwrite: true);
@@ -231,11 +261,8 @@ public sealed class UefnDumperInjector
 
         // The dumper reports the address it settled on; keeping it turns the search into a one-off.
         // It is only ever written after a dump that produced a mapping, so a bad value cannot stick.
-        var used = ParseResolvedFNameToString(lines);
-        if (used != 0)
-        {
-            OffsetStore.Save(request.Build, used);
-        }
+        var (module, gObjects) = ParseResolvedModule(lines);
+        OffsetStore.Save(request.Build, module ?? request.Module, gObjects, ParseResolvedFNameToString(lines));
 
         if (request.Verify)
         {
@@ -263,6 +290,26 @@ public sealed class UefnDumperInjector
 
         CleanStaging(staging, stagedDll, output, log);
         return result;
+    }
+
+    /// <summary>
+    /// Reads back the module the dumper settled on and where GObjects sat inside it, from the line
+    /// it logs after retargeting: "Scanning &lt;module&gt; from here on (+0x... for GObjects)".
+    /// </summary>
+    private static (string? Module, ulong GObjectsRva) ParseResolvedModule(List<string> lines)
+    {
+        foreach (var line in lines)
+        {
+            var match = Regex.Match(line, @"^Scanning (\S+) from here on \(\+0x([0-9A-Fa-f]+) for GObjects\)");
+            if (!match.Success) continue;
+
+            if (ulong.TryParse(match.Groups[2].Value, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var rva))
+            {
+                return (match.Groups[1].Value, rva);
+            }
+        }
+
+        return (null, 0);
     }
 
     /// <summary>
@@ -382,6 +429,11 @@ public sealed class UefnDumperInjector
             .Append("console=").Append(request.Console ? "true" : "false").Append('\n');
 
         // Only written when pinned; a key the dumper is not given falls back to its signature scan.
+        if (!string.IsNullOrWhiteSpace(request.Module))
+        {
+            config.Append("module=").Append(request.Module).Append('\n');
+        }
+
         if (request.GObjectsRva != 0)
         {
             config.Append("gobjects=").Append(request.GObjectsRva.ToString("x")).Append('\n');

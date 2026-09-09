@@ -115,12 +115,16 @@ bool IUnrealVersion::ResolveFNameToString(
 	return false;
 }
 
-// fnexportAPI local patch: find UEnum's member data by its shape.
+// fnexportAPI local patch: find UEnum's member data by its shape, reading only.
 //
 // Its position depends on build configuration (whether the enum carries compiled-in metadata, and
-// how wide the UField base is), so it is looked for rather than assumed. The shape is distinctive:
-// two pointers that address arrays of exactly the length held in the int32 beside them, whose first
-// entries resolve to real names.
+// how wide the UField base is), so it is looked for rather than assumed.
+//
+// Nothing here calls the engine. An earlier version confirmed a candidate by asking FNameToString
+// to render its first few names, which meant handing the engine hundreds of garbage FNames while
+// sweeping offsets. Catching the resulting faults was not enough: the allocator and locks the
+// engine touched on the way down were left inconsistent, and the editor came apart shortly after.
+// A structure this specific can be recognised without running anything.
 static bool ProbeEnumNames(uintptr_t Candidate)
 {
 	__try
@@ -145,13 +149,29 @@ static bool ProbeEnumNames(uintptr_t Candidate)
 		if (!IsMemoryReadable(Values, sizeof(int64_t) * (size_t)Count))
 			return false;
 
-		// Pointers that merely look plausible are common; names that resolve are not. A few are
-		// checked so a candidate cannot pass on one lucky hit.
-		auto Checked = Count < 3 ? Count : 3;
+		auto Checked = Count < 4 ? Count : 4;
+
+		// Name entries are comparison indices: never zero for a declared member, and distinct from
+		// each other. Two arrays of the right length full of repeats are not an enum.
 		for (int Index = 0; Index < Checked; Index++)
 		{
-			auto Name = (*Data)[Index].Key.AsString();
-			if (Name.empty() || Name == L"None")
+			auto Id = ((const FName*)Names)[Index].GetNumber();
+			if (Id == 0)
+				return false;
+
+			for (int Other = 0; Other < Index; Other++)
+			{
+				if (((const FName*)Names)[Other].GetNumber() == Id)
+					return false;
+			}
+		}
+
+		// Enum values are small numbers written by hand, not pointers or lengths.
+		constexpr int64_t PlausibleValue = 1LL << 32;
+		for (int Index = 0; Index < Checked; Index++)
+		{
+			auto Value = ((const int64_t*)Values)[Index];
+			if (Value < -PlausibleValue || Value > PlausibleValue)
 				return false;
 		}
 

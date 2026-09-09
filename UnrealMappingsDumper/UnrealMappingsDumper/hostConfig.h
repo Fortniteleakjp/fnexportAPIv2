@@ -12,6 +12,7 @@
 //   output=D:\repo\mappings\dump.usmap   absolute path of the .usmap to write
 //   compression=none|oodle               usmap compression (default: none)
 //   console=true|false                   allocate a console in the game (default: true)
+//   module=Something-Win64-Shipping.dll  module the pinned addresses below are relative to
 //   gobjects=1a2b3c4                     module-relative address of GObjects, when the scan fails
 //   fnametostring=1a2b3c4                module-relative address of FNameToString, likewise
 //   probesignatures=true|false           call scan hits to see if they are FNameToString (default: false)
@@ -37,6 +38,14 @@ namespace HostConfig
 	// cannot start without. Zero means "scan for it", which is the normal path.
 	inline uintptr_t GObjectsRva = 0;
 	inline uintptr_t FNameToStringRva = 0;
+
+	// Module the pinned addresses are relative to.
+	//
+	// UEFN is a modular build: the executable is a stub and the engine lives in a DLL, so a
+	// module-relative address means nothing until the right module is named. Supplying it lets a
+	// known GObjects be used directly and skips searching the whole process, which is both slow and
+	// the riskiest thing this DLL does inside a live editor.
+	inline std::string ModuleName;
 
 	// Whether a signature hit may be called to find out whether it is FNameToString.
 	//
@@ -126,6 +135,10 @@ namespace HostConfig
 			else if (Key == "console")
 			{
 				Console = (Value != "false" && Value != "0");
+			}
+			else if (Key == "module")
+			{
+				ModuleName = Value;
 			}
 			else if (Key == "gobjects")
 			{

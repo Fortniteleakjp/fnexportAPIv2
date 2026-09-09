@@ -24,6 +24,11 @@ public static class OffsetStore
     /// <summary>One build's addresses, all module-relative.</summary>
     public sealed class Entry
     {
+        /// <summary>Module the addresses are relative to, e.g. the engine DLL of a modular build.</summary>
+        public string? Module { get; set; }
+
+        public ulong GObjectsRva { get; set; }
+
         public ulong FNameToStringRva { get; set; }
 
         /// <summary>When this was recorded, so a stale file is readable rather than mysterious.</summary>
@@ -49,21 +54,37 @@ public static class OffsetStore
         }
     }
 
-    /// <summary>Records the FNameToString address that worked for a build.</summary>
-    public static void Save(string? build, ulong fNameToStringRva)
+    /// <summary>Records the addresses that worked for a build.</summary>
+    public static void Save(string? build, string? module, ulong gObjectsRva, ulong fNameToStringRva)
     {
-        if (string.IsNullOrWhiteSpace(build) || fNameToStringRva == 0) return;
+        if (string.IsNullOrWhiteSpace(build)) return;
+        if (fNameToStringRva == 0 && gObjectsRva == 0) return;
 
         lock (Gate)
         {
             var all = ReadAll();
 
-            if (all.TryGetValue(build, out var existing) && existing.FNameToStringRva == fNameToStringRva)
+            all.TryGetValue(build, out var existing);
+
+            var entry = new Entry
+            {
+                // Each field falls back to what is already recorded, so a run that only learned one
+                // of them does not erase the other.
+                Module = string.IsNullOrWhiteSpace(module) ? existing?.Module : module,
+                GObjectsRva = gObjectsRva != 0 ? gObjectsRva : existing?.GObjectsRva ?? 0,
+                FNameToStringRva = fNameToStringRva != 0 ? fNameToStringRva : existing?.FNameToStringRva ?? 0,
+                SavedUtc = DateTime.UtcNow
+            };
+
+            if (existing != null &&
+                existing.Module == entry.Module &&
+                existing.GObjectsRva == entry.GObjectsRva &&
+                existing.FNameToStringRva == entry.FNameToStringRva)
             {
                 return;
             }
 
-            all[build] = new Entry { FNameToStringRva = fNameToStringRva, SavedUtc = DateTime.UtcNow };
+            all[build] = entry;
 
             try
             {
