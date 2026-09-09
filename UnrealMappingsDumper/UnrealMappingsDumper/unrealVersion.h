@@ -85,6 +85,16 @@ public:
 			return false;
 		}
 
+		// The search recognises the array by its layout, so finding it that way settles the layout
+		// as a side effect. An address that came from the config or a signature never went through
+		// that, and reading UE6's array with the older field order yields nothing but noise — which
+		// looked like a working FNameToString failing to resolve names.
+		if (!DetectObjectArrayLayout(GObjectsAddy))
+		{
+			UE_LOG("The address given for GObjects does not hold a recognisable object array.");
+			return false;
+		}
+
 		ObjObjects::SetInstance(GObjectsAddy);
 
 		// The scans so far ran against the process's main module. In a modular build that is a stub

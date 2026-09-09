@@ -255,6 +255,44 @@ namespace
 		}
 	}
 
+	/// <summary>
+	/// Works out how the array at this address is laid out, and records it. Returns false when the
+	/// address does not hold a recognisable object array.
+	/// </summary>
+	bool AdoptLayout(uintptr_t Candidate, bool bLog)
+	{
+		for (auto& Order : ArrayFieldOrders)
+		{
+			auto ChunkSize = SafeDeriveChunkSize(Candidate, Order);
+			if (!ChunkSize)
+				continue;
+
+			GNearMisses++;
+
+			const FItemLayout* ItemLayout = nullptr;
+			if (!SafePointsAtRealObjects(Candidate, Order, ItemLayout))
+				continue;
+
+			GObjectArrayLayout =
+			{
+				Order.NumElements, Order.MaxElements, Order.NumChunks, Order.MaxChunks,
+				ItemStride, ItemLayout->ObjectOffset, ItemLayout->Packed, ChunkSize
+			};
+
+			if (bLog)
+			{
+				UE_LOG("GObjects: %s array layout, %s item layout, %d objects across %d/%d chunks of %d",
+					Order.Name, ItemLayout->Name,
+					ReadInt(Candidate, Order.NumElements), ReadInt(Candidate, Order.NumChunks),
+					ReadInt(Candidate, Order.MaxChunks), ChunkSize);
+			}
+
+			return true;
+		}
+
+		return false;
+	}
+
 	// Walks one committed span. Returns the address of the array, or 0.
 	uintptr_t ScanSpan(uintptr_t Start, uintptr_t End)
 	{
@@ -273,29 +311,8 @@ namespace
 			if (ChunkTable < 0x10000 || (ChunkTable & 7) != 0)
 				continue;
 
-			for (auto& Order : ArrayFieldOrders)
+			if (AdoptLayout(Cursor, true))
 			{
-				auto ChunkSize = SafeDeriveChunkSize(Cursor, Order);
-				if (!ChunkSize)
-					continue;
-
-				GNearMisses++;
-
-				const FItemLayout* ItemLayout = nullptr;
-				if (!SafePointsAtRealObjects(Cursor, Order, ItemLayout))
-					continue;
-
-				GObjectArrayLayout =
-				{
-					Order.NumElements, Order.MaxElements, Order.NumChunks, Order.MaxChunks,
-					ItemStride, ItemLayout->ObjectOffset, ItemLayout->Packed, ChunkSize
-				};
-
-				UE_LOG("GObjects: %s array layout, %s item layout, %d objects across %d/%d chunks of %d",
-					Order.Name, ItemLayout->Name,
-					ReadInt(Cursor, Order.NumElements), ReadInt(Cursor, Order.NumChunks),
-					ReadInt(Cursor, Order.MaxChunks), ChunkSize);
-
 				return Cursor;
 			}
 		}
@@ -406,6 +423,11 @@ uintptr_t GetScanModuleBase()
 bool IsMemoryReadable(uintptr_t Address, size_t Size)
 {
 	return IsReadable(Address, Size);
+}
+
+bool DetectObjectArrayLayout(uintptr_t Address)
+{
+	return AdoptLayout(Address, true);
 }
 
 bool RetargetScanModuleByName(const std::string& FileName)

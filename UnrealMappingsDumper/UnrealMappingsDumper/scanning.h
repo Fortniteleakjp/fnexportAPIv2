@@ -27,6 +27,11 @@ std::string RetargetScanModule(uintptr_t Address);
 // Returns false when no such module is loaded.
 bool RetargetScanModuleByName(const std::string& FileName);
 
+// Works out how the object array at this address is laid out and records it, so that reading it
+// does not depend on having searched for it. A pinned address skips the search entirely, and the
+// layout is not something that can be assumed: UE6 reordered both the array and its entries.
+bool DetectObjectArrayLayout(uintptr_t Address);
+
 struct PatternScanObject : public IScanObject
 {
 	PatternScanObject(
