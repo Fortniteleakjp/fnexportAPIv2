@@ -230,12 +230,9 @@ public sealed class UefnDumperInjector
             request.GObjectsRva = Dumper7Offsets.FindGObjects(request.Build);
         }
 
-        // A pinned address is meaningless without the module it belongs to, so it is dropped when
-        // the module is unknown and the dumper searches as before.
-        if (string.IsNullOrWhiteSpace(request.Module))
-        {
-            request.GObjectsRva = 0;
-        }
+        // A pinned address is no longer dropped when the module is unknown: the dumper tries it
+        // against each loaded module, which is still far cheaper than reading the whole process.
+        // The build name it would be keyed on is not always resolved, so this is the common path.
 
         File.Copy(dll, stagedDll, overwrite: true);
         WriteConfig(stagedDll, output, request);
