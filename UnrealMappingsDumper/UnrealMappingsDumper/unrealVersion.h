@@ -90,7 +90,18 @@ public:
 			}
 		}
 
-		auto GObjectsAddy = Resolve("GObjects", Version::GetGObjectsPatterns(), HostConfig::GObjectsRva);
+		uintptr_t GObjectsAddy = 0;
+
+		// A pinned address with no module named still beats searching the whole process.
+		if (HostConfig::GObjectsRva && HostConfig::ModuleName.empty())
+		{
+			GObjectsAddy = ResolvePinnedGObjects(HostConfig::GObjectsRva);
+		}
+
+		if (!GObjectsAddy)
+		{
+			GObjectsAddy = Resolve("GObjects", Version::GetGObjectsPatterns(), HostConfig::GObjectsRva);
+		}
 
 		if (!GObjectsAddy)
 		{
@@ -133,12 +144,17 @@ public:
 		FName::IsOptimized = Version::HasOptimizedFName;
 		FProperty::FPropertySize = Version::FPropertySize;
 
-		// Unlike GObjects, a wrong FNameToString cannot be spotted from its own address: a scan
-		// happily matches an unrelated function and every name then comes back empty, which shows
-		// up much later as "could not grab dynamic offsets". The address is checked by using it.
-		if (!ResolveFNameToString(Version::GetFNameStringPatterns(), HostConfig::FNameToStringRva))
+		// Names come out of the pool when it can be found, which needs no function address at all
+		// and proves itself by decoding a name it already knows. Only if that fails does this fall
+		// back to FNameToString — which cannot be recognised without calling it, and calling the
+		// wrong one takes the editor down.
+		NamePool::Allocator = FindNamePool();
+
+		if (!NamePool::Allocator &&
+			!ResolveFNameToString(Version::GetFNameStringPatterns(), HostConfig::FNameToStringRva))
 		{
-			UE_LOG("Could not find a working address for FNameToString. Pin it with 'fnametostring=<rva>' in the dumper config, or add the correct sig for it.");
+			UE_LOG("Could not read names: the name pool was not found, and no working address for "
+				"FNameToString was available either. Pin one with 'fnametostring=<rva>' in the dumper config.");
 			return false;
 		}
 

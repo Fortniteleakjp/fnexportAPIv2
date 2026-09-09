@@ -32,6 +32,15 @@ bool RetargetScanModuleByName(const std::string& FileName);
 // layout is not something that can be assumed: UE6 reordered both the array and its entries.
 bool DetectObjectArrayLayout(uintptr_t Address);
 
+// Finds the engine's name pool in the module currently being scanned, so names can be read out of
+// it instead of being asked for through FName::ToString. Returns its address, or 0.
+uintptr_t FindNamePool();
+
+// Resolves a pinned GObjects address when the module holding it was not named, by trying it against
+// each loaded module and keeping the one where it lands on a real object array. Retargets to that
+// module on success. Returns the address, or 0.
+uintptr_t ResolvePinnedGObjects(uintptr_t Rva);
+
 struct PatternScanObject : public IScanObject
 {
 	PatternScanObject(

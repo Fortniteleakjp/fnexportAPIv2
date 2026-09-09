@@ -3,7 +3,12 @@
 #include "app.h"
 #include "scanning.h"
 #include "unrealTypes.h"
+#include "namePool.h"
 #include "../Dependencies/Memcury/memcury.h"
+
+// For enumerating the process's loaded modules.
+#include <psapi.h>
+#pragma comment(lib, "psapi.lib")
 
 // ---------------------------------------------------------------------------
 // fnexportAPI local patch: GObjects located by shape rather than by signature.
@@ -277,6 +282,34 @@ namespace
 		}
 	}
 
+	/// <summary>Proves a name-pool candidate by decoding from it, behind the fault filter.</summary>
+	bool SafeVerifyNamePool(uintptr_t Candidate)
+	{
+		__try
+		{
+			return NamePool::Verify(Candidate);
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			NamePool::Allocator = 0;
+			return false;
+		}
+	}
+
+	/// <summary>Reads one 32-bit word behind the same filter.</summary>
+	bool SafeReadInt32(uintptr_t Address, int32_t& Out)
+	{
+		__try
+		{
+			Out = *(int32_t*)Address;
+			return true;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return false;
+		}
+	}
+
 	/// <summary>Reads one pointer-sized word, or 0 if the page has gone away.</summary>
 	uintptr_t SafeReadPointer(uintptr_t Address)
 	{
@@ -463,6 +496,124 @@ bool IsMemoryReadable(uintptr_t Address, size_t Size)
 bool DetectObjectArrayLayout(uintptr_t Address)
 {
 	return AdoptLayout(Address, true);
+}
+
+// fnexportAPI local patch: the name pool is a global in the module that holds the engine, and its
+// allocator has a shape worth recognising — a lock, a block index, a byte cursor, then a table of
+// block pointers of which exactly the live ones are set. Whether a candidate is really it is not
+// left to the shape: NamePool::Verify decodes the first entry, which is always "None".
+uintptr_t ResolvePinnedGObjects(uintptr_t Rva)
+{
+	// fnexportAPI local patch: a module-relative address is useless on its own in a modular build,
+	// and the host does not always know which module it belongs to — the build name it keys its
+	// records on is not always resolved. Rather than fall back to reading gigabytes of the process,
+	// the address is tried against each loaded module and the one where it lands on a real object
+	// array wins. There are a few hundred modules; the walk is milliseconds.
+	HMODULE Modules[1024];
+	DWORD Needed = 0;
+
+	if (!K32EnumProcessModules(GetCurrentProcess(), Modules, sizeof(Modules), &Needed))
+		return 0;
+
+	auto Count = Needed / sizeof(HMODULE);
+	if (Count > (DWORD)std::size(Modules))
+		Count = (DWORD)std::size(Modules);
+
+	for (DWORD Index = 0; Index < Count; Index++)
+	{
+		auto Base = reinterpret_cast<uintptr_t>(Modules[Index]);
+		auto Candidate = Base + Rva;
+
+		if (!IsReadable(Candidate, 0x20) || !AdoptLayout(Candidate, false))
+			continue;
+
+		char Path[MAX_PATH]{};
+		if (GetModuleFileNameA(Modules[Index], Path, MAX_PATH))
+		{
+			std::string FileName = Path;
+			auto Slash = FileName.find_last_of("\\/");
+			if (Slash != std::string::npos)
+				FileName = FileName.substr(Slash + 1);
+
+			if (RetargetScanModuleByName(FileName))
+			{
+				UE_LOG("GObjects pinned at +0x%llX inside %s", (unsigned long long)Rva, FileName.c_str());
+			}
+		}
+
+		return Candidate;
+	}
+
+	return 0;
+}
+
+uintptr_t FindNamePool()
+{
+	auto ModuleBase = Memcury::PE::GetModuleBase();
+	if (!ModuleBase)
+		return 0;
+
+	auto Headers = Memcury::PE::GetNTHeaders();
+	auto Section = IMAGE_FIRST_SECTION(Headers);
+
+	for (WORD Index = 0; Index < Headers->FileHeader.NumberOfSections; Index++, Section++)
+	{
+		if (Section->Characteristics & IMAGE_SCN_MEM_EXECUTE)
+			continue;
+
+		auto Start = ModuleBase + Section->VirtualAddress;
+		auto Size = Section->Misc.VirtualSize;
+		if (Size < NamePool::BlocksOffset + sizeof(void*))
+			continue;
+
+		auto Last = Start + Size - (NamePool::BlocksOffset + sizeof(void*));
+
+		for (auto Cursor = Start; Cursor <= Last; Cursor += sizeof(uintptr_t))
+		{
+			// One cached readability check covers both reads. Going through the fault filter for
+			// every word instead cost two seconds over a section this size, for no added safety:
+			// the section is mapped for as long as the module is loaded.
+			if (!IsReadable(Cursor, NamePool::BlocksOffset + sizeof(void*)))
+				continue;
+
+			auto CurrentBlock = *(int32_t*)(Cursor + NamePool::CurrentBlockOffset);
+			auto ByteCursor = *(int32_t*)(Cursor + NamePool::ByteCursorOffset);
+
+			// A live pool has at least one block, and the cursor sits inside the current one.
+			if (CurrentBlock < 0 || (uint32_t)CurrentBlock >= NamePool::MaxBlocks)
+				continue;
+
+			if (ByteCursor < 0 || (uint32_t)ByteCursor > NamePool::BlockSizeBytes)
+				continue;
+
+			auto BlocksAt = Cursor + NamePool::BlocksOffset;
+			if (!IsReadable(BlocksAt, sizeof(void*) * ((size_t)CurrentBlock + 1)))
+				continue;
+
+			// Every block up to the current one is allocated; the shape is only a filter, so this
+			// stays cheap and the proof comes after.
+			bool bBlocksLookRight = true;
+			for (int32_t Block = 0; Block <= CurrentBlock && bBlocksLookRight; Block++)
+			{
+				auto Pointer = SafeReadPointer(BlocksAt + (size_t)Block * sizeof(void*));
+				bBlocksLookRight = Pointer >= 0x10000 && (Pointer & 7) == 0;
+			}
+
+			if (!bBlocksLookRight)
+				continue;
+
+			// Verifying decodes an entry, which means following a block pointer to wherever it
+			// leads. The shape test above says the pointer is plausible, not that it is mapped.
+			if (SafeVerifyNamePool(Cursor))
+			{
+				UE_LOG("Name pool found in section %.8s (+0x%llX), %d blocks",
+					Section->Name, (unsigned long long)(Cursor - ModuleBase), CurrentBlock + 1);
+				return Cursor;
+			}
+		}
+	}
+
+	return 0;
 }
 
 bool RetargetScanModuleByName(const std::string& FileName)
