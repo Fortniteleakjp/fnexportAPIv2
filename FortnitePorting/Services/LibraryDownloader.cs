@@ -57,6 +57,14 @@ public static class LibraryDownloader
     }
 
     /// <summary>
+    /// Finds a native library that ships with the application (libs/, the base directory, the real
+    /// executable directory, the working directory), honoring an explicit path when one is given.
+    /// Returns null when the file is nowhere to be found; nothing is downloaded.
+    /// </summary>
+    public static string? FindLibrary(string fileName, string? explicitPath = null)
+        => FindExisting(fileName, explicitPath);
+
+    /// <summary>
     /// Finds an existing native library by file name (optionally honoring an explicit env path).
     /// </summary>
     private static string? FindExisting(string fileName, string? explicitPath = null)

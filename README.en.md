@@ -427,21 +427,38 @@ curl -OJ http://localhost:3849/api/v1/backup/fbkp
 
 ### Mappings — `/api/v1/mappings`
 
-Produces and serves `.usmap` files the way [`UnrealMappingsDumper`](https://github.com/TheNaeem/UnrealMappingsDumper)
-does. The original injects a DLL into the game, walks `GObjects`, and writes every `UClass`,
-`UScriptStruct`, and `UEnum` it finds into a `.usmap`. There is no game process here, so **the same type
-information is read out of the mounted paks through CUE4Parse** and written with the dumper's own
-serialization (name table → enums → structs, recursive property type records, `0x30C4` header).
+Produces and serves `.usmap` files with [`UnrealMappingsDumper`](https://github.com/TheNaeem/UnrealMappingsDumper).
+There are two dump routes:
+
+| Route | Endpoint | Needs the game running | Coverage |
+|---|---|---|---|
+| **Pak dump** | `POST /api/v1/mappings/dump` | no | Blueprint-side types in the paks; native `/Script` types merged in from an existing `.usmap` |
+| **UEFN dump** | `POST /api/v1/mappings/dump/uefn` | yes (Windows only) | the engine's own reflection data, native types included |
+
+The original dumper injects a DLL into the game, walks `GObjects`, and writes every `UClass`,
+`UScriptStruct`, and `UEnum` it finds into a `.usmap`. There is no game process behind the pak dump, so
+**the same type information is read out of the mounted paks through CUE4Parse** and written with the
+dumper's own serialization (name table → enums → structs, recursive property type records, `0x30C4` header).
+
+The UEFN dump uses the original DLL itself. Building the vendored
+[`UnrealMappingsDumper/`](UnrealMappingsDumper/VENDORED.md) with `UnrealMappingsDumperuild.bat` (also
+called from `build.bat`) produces `libs/UnrealMappingsDumper.dll`, which the API injects into a running
+UEFN. A `.cfg` next to the DLL tells it where to write, and the DLL reports back through a terminal
+`HOST_RESULT` line in its log.
 
 | Method & path | Description |
 |---|---|
 | `POST /api/v1/mappings/dump?path={frag}&maxPackages={n}&timeoutSeconds={n}&merge={bool}&baseMapping={file}&version={0..4}&compression={none/zstd}&fileName={name}&load={bool}&download={bool}` | Dump a `.usmap` from the mounted build. The binary is returned by default and stored as `mappings/{build}_dumped.usmap`. `load=true` hot-loads it into the provider; `download=false` returns JSON statistics instead. |
 | `GET /api/v1/mappings` | List the stored `.usmap` files (dumped, generated, or downloaded), newest first. |
 | `GET /api/v1/mappings/{fileName}` | Serve one stored `.usmap`. |
+| `GET /api/v1/mappings/uefn` | Report whether a UEFN dump can run right now: whether the DLL is built and where, which UEFN processes can be injected into, `ready`, and what to do next. |
+| `POST /api/v1/mappings/dump/uefn?pid={n}&compression={none/oodle}&fileName={name}&console={bool}&timeoutSeconds={n}&load={bool}&download={bool}` | Dump a `.usmap` out of a running UEFN by injecting the DLL. The binary is returned by default and stored as `mappings/{build}_uefn.usmap`. The target process is detected automatically, so `pid` is rarely needed. |
 | `POST /api/v1/mappings/generate?url={url}&path={path}&fileName={name}&load={bool}&verify={bool}&download={bool}` | Convert a StormForge-style mappings JSON into a `.usmap` (the pre-existing endpoint). |
 
 ```
 curl -OJ -X POST "http://localhost:3849/api/v1/mappings/dump?path=FortniteGame/Content/Athena&maxPackages=2000"
+curl "http://localhost:3849/api/v1/mappings/uefn"
+curl -OJ -X POST "http://localhost:3849/api/v1/mappings/dump/uefn"
 curl "http://localhost:3849/api/v1/mappings"
 curl -OJ "http://localhost:3849/api/v1/mappings/FortniteGame_42_00_dumped.usmap"
 ```
@@ -451,6 +468,15 @@ curl -OJ "http://localhost:3849/api/v1/mappings/FortniteGame_42_00_dumped.usmap"
 > the paks. So by default (`merge=true`) an existing mapping (`USMAP_PATH`, otherwise the newest file in
 > `mappings/`) is **merged underneath**, with the dumped types winning. `merge=false` writes only what
 > the paks yielded.
+>
+> **Something to merge is required**: with no base mapping to be found the request fails with `400`,
+> because a pak-only mapping has no native types and reads almost nothing. Dump one from UEFN first
+> (`POST /api/v1/mappings/dump/uefn`), point `USMAP_PATH` or `baseMapping` at an existing mapping, or
+> pass `merge=false` to accept a Blueprint-only mapping deliberately.
+>
+> **Editor-only properties** are left out: cooked packages do not carry them, and counting one shifts
+> every property index in the struct and in everything derived from it. The UEFN dump and the
+> JSON generator apply the same rule.
 >
 > **Scan size**: bounded by `maxPackages` (default 5000) and `timeoutSeconds` (default 120). When either
 > is hit the dump still serializes what it collected and reports `limitReached` / `timedOut`. Narrow the
@@ -462,6 +488,29 @@ curl -OJ "http://localhost:3849/api/v1/mappings/FortniteGame_42_00_dumped.usmap"
 > values. `compression` accepts `none` (default) and `zstd` — Oodle and Brotli compressors are not
 > available in this process. Every dump is parsed back before it is served, and the counts come back in
 > the `X-Usmap-*` headers (or the JSON body with `download=false`).
+>
+> **UEFN dump requirements**: Windows only, with UEFN (`UnrealEditorFortnite-Win64-*.exe`) running and
+> fully loaded. Run the API as the same Windows user as UEFN (elevated if that is not enough). The DLL is
+> looked up through `USMAP_DUMPER_DLL`, then next to the executable, then `libs/` — the same order the
+> Oodle and RAD Audio libraries use. `compression=oodle` works here because the encoder lives inside the
+> game. Addresses: GObjects is found by walking memory for the object array, but `FNameToString` is a
+> function and only a signature scan can find it — which UE6 defeats. A candidate is accepted only if it
+> actually resolves object names, and candidates are taken from, in order: the `fnameToString` query, the
+> address recorded for this build in `mappings/dumper/offsets.json`, and `OFFSET_TOSTRING` from a Dumper-7
+> run under `DUMPER7_DIR` (default `C:\Dumper-7`). A working address is recorded, so it is found once.
+>
+> The target process is picked automatically: `UnrealEditorFortnite-Win64-Shipping` is preferred, and when
+> several processes share that name the one with the largest working set wins — that is the loaded editor rather
+> than a helper. A candidate under 512MB is refused with `409` instead of dumping an incomplete mapping. Pass `pid`
+> only to override that. `GET /api/v1/mappings/uefn` reports the choice up front as `target`.
+>
+> **How failures surface**: `424` when the DLL has not been built, `409` when no UEFN (or more than one)
+> is running, `501` off Windows, `504` on timeout, and `502` with the tail of the log when the DLL itself
+> failed. The DLL's log is kept next to the mapping as `{fileName}.usmap.log`.
+>
+> **Path constraint**: the DLL opens files through the ANSI C runtime, so its working directory has to be
+> representable in ASCII. `mappings/dumper` is used when its path is ASCII, otherwise its 8.3 form,
+> otherwise the temp directory.
 
 ### Auto-update — `/api/v1/update`
 

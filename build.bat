@@ -16,6 +16,7 @@ rem ============================================================================
 set "ROOT=%~dp0"
 set "PROJECT=%ROOT%FortnitePorting\FortnitePorting.csproj"
 set "NATIVE_BUILD=%ROOT%RADADecoder\shim\build.bat"
+set "DUMPER_BUILD=%ROOT%UnrealMappingsDumper\build.bat"
 set "LIBS=%ROOT%libs"
 set "CONFIG=%~1"
 set "FRAMEWORK=net10.0"
@@ -62,7 +63,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [1/4] Building native RAD decoder shim...
+echo [1/5] Building native RAD decoder shim...
 call "%NATIVE_BUILD%" "%LIBS%" >"%NATIVE_STDOUT%" 2>"%NATIVE_STDERR%"
 set "NATIVE_RC=%ERRORLEVEL%"
 if exist "%NATIVE_STDOUT%" type "%NATIVE_STDOUT%"
@@ -83,7 +84,20 @@ if not exist "%LIBS%\rada_decode.dll" (
 )
 
 echo.
-echo [2/4] Building FortnitePorting...
+echo [2/5] Building UnrealMappingsDumper.dll...
+rem Only the UEFN mapping dump needs this DLL, and it needs MSBuild with the C++ workload, so a
+rem failure here is reported and the build continues instead of stopping.
+if exist "%DUMPER_BUILD%" (
+    call "%DUMPER_BUILD%" "%LIBS%" "%CONFIG%"
+    if errorlevel 1 (
+        echo WARNING: UnrealMappingsDumper.dll was not built. POST /api/v1/mappings/dump/uefn stays unavailable.
+    )
+) else (
+    echo   skipped ^(UnrealMappingsDumper\build.bat not found^)
+)
+
+echo.
+echo [3/5] Building FortnitePorting...
 dotnet build "%PROJECT%" --configuration "%CONFIG%" --framework "%FRAMEWORK%"
 if errorlevel 1 (
     echo ERROR: dotnet build failed.
@@ -97,7 +111,7 @@ if not exist "%EXE%" (
 )
 
 echo.
-echo [3/4] Copying native runtime libraries...
+echo [4/5] Copying native runtime libraries...
 copy /y "%LIBS%\rada_decode.dll" "%OUTDIR%\" >nul
 if errorlevel 1 (
     echo ERROR: Failed to copy rada_decode.dll.
@@ -128,8 +142,19 @@ if exist "%LIBS%\zlib-ng2.dll" (
     echo   skipped zlib-ng2.dll
 )
 
+if exist "%LIBS%\UnrealMappingsDumper.dll" (
+    copy /y "%LIBS%\UnrealMappingsDumper.dll" "%OUTDIR%\" >nul
+    if errorlevel 1 (
+        echo ERROR: Failed to copy UnrealMappingsDumper.dll.
+        exit /b 1
+    )
+    echo   copied UnrealMappingsDumper.dll
+) else (
+    echo   skipped UnrealMappingsDumper.dll
+)
+
 echo.
-echo [4/4] Verifying output...
+echo [5/5] Verifying output...
 if not exist "%EXE%" (
     echo ERROR: Built executable missing after copy.
     echo   %EXE%
