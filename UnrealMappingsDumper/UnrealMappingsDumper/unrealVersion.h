@@ -16,6 +16,13 @@ private:
 	static bool TryDynamicOffsets();
 	static bool TryDeriveEnumNamesOffset();
 
+	/// <summary>True when the currently installed FNameToString resolves real object names.</summary>
+	static bool FNameToStringResolvesNames();
+
+	/// <summary>Installs the first candidate that passes that check, pinned address first.</summary>
+	static bool ResolveFNameToString(
+		const std::vector<std::shared_ptr<IScanObject>>& Candidates, uintptr_t PinnedRva);
+
 	// Tries the pinned address first, then each candidate in order, and reports what was used.
 	static uintptr_t Resolve(
 		const char* Name,
@@ -75,15 +82,15 @@ public:
 				Module.c_str(), (unsigned long long)(GObjectsAddy - GetScanModuleBase()));
 		}
 
-		auto FNameStringAddy = Resolve("FNameToString", Version::GetFNameStringPatterns(), HostConfig::FNameToStringRva);
-
-		if (!FNameStringAddy)
+		// Unlike GObjects, a wrong FNameToString cannot be spotted from its own address: the scan
+		// happily matches an unrelated function and every name then comes back empty, which shows
+		// up much later as "could not grab dynamic offsets". Each candidate is installed and asked
+		// to resolve real names before it is accepted.
+		if (!ResolveFNameToString(Version::GetFNameStringPatterns(), HostConfig::FNameToStringRva))
 		{
-			UE_LOG("Could not find the address for FNameToString. Pin it with 'fnametostring=<rva>' in the dumper config, or add the correct sig for it.");
+			UE_LOG("Could not find a working address for FNameToString. Pin it with 'fnametostring=<rva>' in the dumper config, or add the correct sig for it.");
 			return false;
 		}
-
-		FNameToString = (_FNameToString)FNameStringAddy;
 
 		using UObjectImpl = Version::Offsets::UObject;
 		using UStructImpl = Version::Offsets::UStruct;

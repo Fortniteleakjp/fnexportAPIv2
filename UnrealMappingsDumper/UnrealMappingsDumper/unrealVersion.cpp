@@ -22,6 +22,90 @@
 
 
 //this is super unsafe but hopefully stackoverflow comes in clutch https://stackoverflow.com/a/42389638
+// fnexportAPI local patch: a resolved FNameToString has to be proven, not assumed.
+//
+// The scan matched an unrelated function on this build and returned it as the answer. Nothing
+// downstream noticed: names simply came back empty, and the first visible symptom was the dynamic
+// offset derivation failing several steps later. Asking the installed function to name real objects
+// costs nothing and turns a silent wrong answer into a rejected candidate.
+bool IUnrealVersion::FNameToStringResolvesNames()
+{
+	if (!FNameToString)
+		return false;
+
+	// Enough objects to be sure, spread over the start of the array where core types live.
+	constexpr int RequiredNames = 8;
+	constexpr int ObjectsToTry = 512;
+
+	int Resolved = 0;
+
+	for (int Index = 0; Index < ObjObjects::Num() && Index < ObjectsToTry && Resolved < RequiredNames; Index++)
+	{
+		try
+		{
+			auto Object = ObjObjects::GetObjectByIndex(Index);
+			if (!Object)
+				continue;
+
+			auto Name = Object->GetName();
+			if (!Name.empty() && Name != L"None")
+				Resolved++;
+		}
+		catch (...)
+		{
+			// A wrong function can fault outright rather than just return nothing.
+			return false;
+		}
+	}
+
+	return Resolved >= RequiredNames;
+}
+
+bool IUnrealVersion::ResolveFNameToString(
+	const std::vector<std::shared_ptr<IScanObject>>& Candidates, uintptr_t PinnedRva)
+{
+	auto ModuleBase = GetScanModuleBase();
+
+	auto Install = [&](uintptr_t Address)
+		{
+			FNameToString = (_FNameToString)Address;
+			return Address && FNameToStringResolvesNames();
+		};
+
+	if (PinnedRva)
+	{
+		auto Pinned = ManualAddressScanObject(PinnedRva).TryFind();
+		if (Install(Pinned))
+		{
+			UE_LOG("Using the pinned address for FNameToString (+0x%llX)", (unsigned long long)PinnedRva);
+			return true;
+		}
+
+		UE_LOG("The pinned FNameToString (+0x%llX) did not resolve names; falling back to scanning",
+			(unsigned long long)PinnedRva);
+	}
+
+	for (size_t Index = 0; Index < Candidates.size(); Index++)
+	{
+		auto Found = Candidates[Index]->TryFind();
+		if (!Found)
+			continue;
+
+		if (Install(Found))
+		{
+			UE_LOG("Found FNameToString with candidate %zu (+0x%llX)",
+				Index + 1, (unsigned long long)(Found - ModuleBase));
+			return true;
+		}
+
+		UE_LOG("  candidate %zu (+0x%llX) is not FNameToString; it resolved no names",
+			Index + 1, (unsigned long long)(Found - ModuleBase));
+	}
+
+	FNameToString = nullptr;
+	return false;
+}
+
 // fnexportAPI local patch: find UEnum's member data by its shape.
 //
 // Its position depends on build configuration (whether the enum carries compiled-in metadata, and
