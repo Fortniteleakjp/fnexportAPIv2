@@ -93,15 +93,22 @@ public sealed class MappingsDumperService
 
         if (request.Merge)
         {
-            var basePath = ResolveBaseMapping(request.BaseMapping);
-            if (basePath != null)
-            {
-                // Dumped types win: the paks describe this exact build, the base mapping may not.
-                var (structs, enums) = snapshot.MergeMissingFrom(UsmapSnapshotReader.ReadFile(basePath));
-                result.BaseMapping = basePath;
-                result.MergedStructs = structs;
-                result.MergedEnums = enums;
-            }
+            // Cooked paks hold Blueprint types only; every native /Script type lives in the
+            // executable. Without something to merge underneath, the result cannot describe the
+            // classes most assets are built on — so an empty merge is reported rather than silently
+            // producing a mapping that parses but reads nothing.
+            var basePath = ResolveBaseMapping(request.BaseMapping)
+                ?? throw new FileNotFoundException(
+                    "Nothing to merge: no base mapping was found. The paks only carry Blueprint types, " +
+                    "so a mapping built from them alone cannot describe native /Script classes. Dump one " +
+                    "from UEFN first (POST /api/v1/mappings/dump/uefn), point USMAP_PATH at an existing " +
+                    "mapping, name one with 'baseMapping', or pass merge=false to accept a Blueprint-only mapping.");
+
+            // Dumped types win: the paks describe this exact build, the base mapping may not.
+            var (structs, enums) = snapshot.MergeMissingFrom(UsmapSnapshotReader.ReadFile(basePath));
+            result.BaseMapping = basePath;
+            result.MergedStructs = structs;
+            result.MergedEnums = enums;
         }
 
         result.Serializer = UsmapSerializer.Serialize(snapshot, new UsmapSerializer.Options

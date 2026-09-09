@@ -469,6 +469,15 @@ curl -OJ "http://localhost:3849/api/v1/mappings/FortniteGame_42_00_dumped.usmap"
 > `mappings/`) is **merged underneath**, with the dumped types winning. `merge=false` writes only what
 > the paks yielded.
 >
+> **Something to merge is required**: with no base mapping to be found the request fails with `400`,
+> because a pak-only mapping has no native types and reads almost nothing. Dump one from UEFN first
+> (`POST /api/v1/mappings/dump/uefn`), point `USMAP_PATH` or `baseMapping` at an existing mapping, or
+> pass `merge=false` to accept a Blueprint-only mapping deliberately.
+>
+> **Editor-only properties** are left out: cooked packages do not carry them, and counting one shifts
+> every property index in the struct and in everything derived from it. The UEFN dump and the
+> JSON generator apply the same rule.
+>
 > **Scan size**: bounded by `maxPackages` (default 5000) and `timeoutSeconds` (default 120). When either
 > is hit the dump still serializes what it collected and reports `limitReached` / `timedOut`. Narrow the
 > scan with `path` (e.g. `FortniteGame/Content/Athena`); `maxPackages=0` opens the whole build (~1.65M

@@ -511,6 +511,14 @@ curl -OJ "http://localhost:3849/api/v1/mappings/FortniteGame_42_00_dumped.usmap"
 > そのため既定（`merge=true`）では**既存の `.usmap`（`USMAP_PATH`、無ければ `mappings/` の最新）を土台にマージ**し、
 > pak からダンプした型を優先して上書きします。`merge=false` では pak から採れた型だけの `.usmap` になります。
 >
+> **土台が必要です**: マージするものが1つも見つからない場合は `400` で止まります。pak だけで作った
+> マッピングはネイティブ型を持たず、たいていのアセットが読めないためです。先に UEFN からダンプするか
+> （`POST /api/v1/mappings/dump/uefn`）、`USMAP_PATH` か `baseMapping` で既存のものを指定してください。
+> Blueprint 型だけで良い場合は `merge=false` を明示します。
+>
+> **エディタ専用プロパティ**: cooked パッケージには含まれないため除外します。数に入れると struct 内と
+> 派生先すべてのプロパティ番号がずれます。UEFN ダンプと JSON からの生成も同じ判定です。
+>
 > **走査量**: `maxPackages`（既定 5000）と `timeoutSeconds`（既定 120）で打ち切ります。打ち切った場合もそこまでの収集結果を書き出し、
 > `limitReached`／`timedOut` で通知します。`path` に `FortniteGame/Content/Athena` のようなパス断片を渡すと対象を絞れます。
 > `maxPackages=0` はビルド全体（約165万ファイル）を開くため非常に低速です。

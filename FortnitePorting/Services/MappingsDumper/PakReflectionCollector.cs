@@ -182,6 +182,13 @@ public sealed class PakReflectionCollector
         foreach (var field in s.ChildProperties ?? [])
         {
             if (field is not FProperty prop) continue;
+
+            // A mapping describes cooked packages, which carry no editor-only properties. Counting
+            // one would shift every property index in this struct and in everything derived from it.
+            // Cooked archives normally do not contain them at all; this is the same rule the UEFN
+            // dump and UsmapGenerator apply, kept here so all three agree.
+            if (prop.PropertyFlags.HasFlag(EPropertyFlags.EditorOnly)) continue;
+
             dumped.Properties.Add(new DumpedProperty
             {
                 Name = prop.Name.Text,
