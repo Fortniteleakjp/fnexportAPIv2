@@ -484,7 +484,13 @@ curl -OJ "http://localhost:3849/api/v1/mappings/FortniteGame_42_00_dumped.usmap"
 > fully loaded. Run the API as the same Windows user as UEFN (elevated if that is not enough). The DLL is
 > looked up through `USMAP_DUMPER_DLL`, then next to the executable, then `libs/` — the same order the
 > Oodle and RAD Audio libraries use. `compression=oodle` works here because the encoder lives inside the
-> game. The target process is picked automatically: `UnrealEditorFortnite-Win64-Shipping` is preferred, and when
+> game. Addresses: GObjects is found by walking memory for the object array, but `FNameToString` is a
+> function and only a signature scan can find it — which UE6 defeats. A candidate is accepted only if it
+> actually resolves object names, and candidates are taken from, in order: the `fnameToString` query, the
+> address recorded for this build in `mappings/dumper/offsets.json`, and `OFFSET_TOSTRING` from a Dumper-7
+> run under `DUMPER7_DIR` (default `C:\Dumper-7`). A working address is recorded, so it is found once.
+>
+> The target process is picked automatically: `UnrealEditorFortnite-Win64-Shipping` is preferred, and when
 > several processes share that name the one with the largest working set wins — that is the loaded editor rather
 > than a helper. A candidate under 512MB is refused with `409` instead of dumping an incomplete mapping. Pass `pid`
 > only to override that. `GET /api/v1/mappings/uefn` reports the choice up front as `target`.

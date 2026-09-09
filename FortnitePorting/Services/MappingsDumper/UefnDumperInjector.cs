@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
@@ -181,6 +182,19 @@ public sealed class UefnDumperInjector
         var output = Path.Combine(staging, $"dump_{runId}.usmap");
         var log = output + ".log";
 
+        // FNameToString cannot be found by signature on UE6, and the dumper refuses an address that
+        // does not resolve names, so a run with nothing to go on fails outright. The address is the
+        // same for the life of a build, so a known-good one is reused and only has to be found once.
+        if (request.FNameToStringRva == 0)
+        {
+            request.FNameToStringRva = OffsetStore.Load(request.Build)?.FNameToStringRva ?? 0;
+        }
+
+        if (request.FNameToStringRva == 0)
+        {
+            request.FNameToStringRva = Dumper7Offsets.FindFNameToString(request.Build);
+        }
+
         File.Copy(dll, stagedDll, overwrite: true);
         WriteConfig(stagedDll, output, request);
 
@@ -208,6 +222,14 @@ public sealed class UefnDumperInjector
         result.LogPath = result.FilePath + ".log";
         TryCopy(log, result.LogPath);
 
+        // The dumper reports the address it settled on; keeping it turns the search into a one-off.
+        // It is only ever written after a dump that produced a mapping, so a bad value cannot stick.
+        var used = ParseResolvedFNameToString(lines);
+        if (used != 0)
+        {
+            OffsetStore.Save(request.Build, used);
+        }
+
         if (request.Verify)
         {
             try
@@ -234,6 +256,33 @@ public sealed class UefnDumperInjector
 
         CleanStaging(staging, stagedDll, output, log);
         return result;
+    }
+
+    /// <summary>
+    /// Reads back the FNameToString address the dumper accepted, as a module-relative value. Both
+    /// the pinned and the scanned line carry it, and a rejected candidate's line does not.
+    /// </summary>
+    private static ulong ParseResolvedFNameToString(List<string> lines)
+    {
+        foreach (var line in lines)
+        {
+            if (!line.Contains("FNameToString", StringComparison.Ordinal)) continue;
+            if (!line.StartsWith("Using the pinned address", StringComparison.Ordinal) &&
+                !line.StartsWith("Found FNameToString", StringComparison.Ordinal)) continue;
+
+            var start = line.IndexOf("+0x", StringComparison.Ordinal);
+            if (start < 0) continue;
+
+            var end = start + 3;
+            while (end < line.Length && Uri.IsHexDigit(line[end])) end++;
+
+            if (ulong.TryParse(line.AsSpan(start + 3, end - start - 3), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var rva))
+            {
+                return rva;
+            }
+        }
+
+        return 0;
     }
 
     /// <summary>

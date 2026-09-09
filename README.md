@@ -529,6 +529,17 @@ curl -OJ "http://localhost:3849/api/v1/mappings/FortniteGame_42_00_dumped.usmap"
 > 不完全なマッピングを吐かないよう `409` で止めます。明示したいときだけ `pid` を渡してください。
 > 実行できるかどうかと自動で選ばれる対象は `GET /api/v1/mappings/uefn` の `target` で事前に確認できます。
 >
+> **アドレスの解決**: `GObjects` は構造探索で自動的に見つかりますが、`FNameToString` は関数なので
+> 署名走査に頼るしかなく、UE6 では当たりません（誤った候補は「名前を解決できるか」で検証して弾きます）。
+> そのため次の順で候補を探します。
+>
+> 1. クエリの `fnameToString`
+> 2. `mappings/dumper/offsets.json` に記録された、そのビルドで実際に通ったアドレス
+> 3. Dumper-7 の出力（`DUMPER7_DIR`、既定 `C:\Dumper-7`）の `Dumpspace/OffsetsInfo.json` の `OFFSET_TOSTRING`
+>
+> どれもダンパー側で検証されるため、古い値や誤った値が使われることはありません。一度成功すると
+> そのアドレスが記録され、同じビルドでは以降指定不要になります。
+>
 > **失敗の見え方**: DLL 未ビルドは `424`、UEFN 未起動や複数起動は `409`、Windows 以外は `501`、
 > 時間切れは `504`、DLL 側が失敗した場合は `502` とログ末尾を返します。
 > DLL のログは `.usmap` の隣に `{fileName}.usmap.log` として残ります。
