@@ -228,6 +228,13 @@ void Dumper::Run(ECompressionMethod CompressionMethod)
 	auto StructClass = UScriptStruct::StaticClass();
 	auto EnumClass = UEnum::StaticClass();
 
+	// Path matching depends on the whole outer chain rendering exactly as expected. The three names
+	// are unique among UClass objects, so falling back to a name lookup keeps the dump working on a
+	// build whose package paths read differently.
+	if (!ClassClass) ClassClass = ObjObjects::FindObjectByName<UClass>(L"Class");
+	if (!StructClass) StructClass = ObjObjects::FindObjectByName<UClass>(L"ScriptStruct");
+	if (!EnumClass) EnumClass = ObjObjects::FindObjectByName<UClass>(L"Enum");
+
 	UE_LOG("Walking %d objects; Class=%p ScriptStruct=%p Enum=%p",
 		ObjObjects::Num(), (void*)ClassClass, (void*)StructClass, (void*)EnumClass);
 
@@ -235,57 +242,145 @@ void Dumper::Run(ECompressionMethod CompressionMethod)
 	{
 		// Show what the paths actually look like, so a wrong outer or name offset is visible
 		// instead of having to be inferred.
-		for (int Index = 0; Index < ObjObjects::Num() && Index < 5; Index++)
+		// Low slots are often unnamed, so report objects that resolved to a real name instead.
+		int Shown = 0;
+		for (int Index = 0; Index < ObjObjects::Num() && Shown < 5; Index++)
 		{
-			if (auto Sample = ObjObjects::GetObjectByIndex(Index))
-			{
-				auto Path = Sample->GetPath();
-				UE_LOG("  object %d path: %S", Index, Path.c_str());
-			}
+			auto Sample = ObjObjects::GetObjectByIndex(Index);
+			if (!Sample)
+				continue;
+
+			auto Name = Sample->GetName();
+			if (Name.empty() || Name == L"None")
+				continue;
+
+			UE_LOG("  object %d: name=\"%S\" path=\"%S\"", Index, std::wstring(Name).c_str(), Sample->GetPath().c_str());
+			Shown++;
 		}
 
+		if (!Shown)
+			UE_LOG("  no object in the array resolved to a name at all");
+
 		throw std::runtime_error(
-			"the core classes could not be resolved by path (/Script/CoreUObject.Class); the object "
-			"name or outer offset does not match this build");
+			"the core classes could not be resolved by path or by name (Class / ScriptStruct / Enum); "
+			"the object name offset does not match this build");
 	}
+
+	// fnexportAPI local patch: the walk reads offsets that a new engine version can move, and the
+	// project is built with /EHa, so a bad offset arrives here as a caught access violation with no
+	// indication of where it came from. Failures are attributed to a phase and an object instead,
+	// and an object that faults is left out rather than being carried into serialization.
+	int FailedStructs = 0;
+	int FailedEnums = 0;
+	int FailuresReported = 0;
+
+	auto ReportFailure = [&](const char* Phase, UObject* Object)
+		{
+			if (FailuresReported++ >= 3)
+				return;
+
+			std::wstring Path;
+			try { Path = Object->GetPath(); } catch (...) { Path = L"<unreadable>"; }
+
+			UE_LOG("  failed while reading %s of \"%S\"", Phase, Path.c_str());
+		};
+
+	int Walked = 0;
 
 	ObjObjects::ForEach([&](UObject*& Object)
 		{
-			if (Object->Class() == ClassClass ||
-			Object->Class() == StructClass)
+			// The walk is the slow part and caught faults make it slower, so it says where it is.
+			if (++Walked % 50000 == 0)
+			{
+				UE_LOG("  ... %d/%d objects, %llu structs, %llu enums",
+					Walked, ObjObjects::Num(),
+					(unsigned long long)Structs.size(), (unsigned long long)Enums.size());
+			}
+
+			UClass* ObjectClass = nullptr;
+
+			try
+			{
+				ObjectClass = Object->Class();
+			}
+			catch (...)
+			{
+				ReportFailure("the class pointer", Object);
+				return;
+			}
+
+			if (ObjectClass == ClassClass || ObjectClass == StructClass)
 			{
 				auto Struct = static_cast<UStruct*>(Object);
 
-				Structs.push_back(Struct);
-
-				NameMap.insert_or_assign(Struct->GetFName(), 0);
-
-				if (Struct->Super() && !NameMap.contains(Struct->Super()->GetFName()))
-					NameMap.insert_or_assign(Struct->Super()->GetFName(), 0);
-
-				auto Props = Struct->ChildProperties();
-
-				while (Props)
+				try
 				{
-					NameMap.insert_or_assign(Props->GetFName(), 0);
-					Props = static_cast<FProperty*>(Props->GetNext());
+					NameMap.insert_or_assign(Struct->GetFName(), 0);
+
+					if (Struct->Super() && !NameMap.contains(Struct->Super()->GetFName()))
+						NameMap.insert_or_assign(Struct->Super()->GetFName(), 0);
+
+					// A chain read through a wrong offset does not always fault: it can point back
+					// into itself and loop forever, which is what a hung dump looks like. No real
+					// struct comes close to this many properties.
+					constexpr int MaxPropertiesPerStruct = 65536;
+
+					auto Props = Struct->ChildProperties();
+					auto First = Props;
+					int Count = 0;
+
+					while (Props)
+					{
+						if (++Count > MaxPropertiesPerStruct)
+							throw std::runtime_error("property chain did not terminate");
+
+						NameMap.insert_or_assign(Props->GetFName(), 0);
+						Props = static_cast<FProperty*>(Props->GetNext());
+
+						if (Props == First)
+							throw std::runtime_error("property chain loops back on itself");
+					}
 				}
+				catch (...)
+				{
+					// Kept out of Structs: serializing it would fault again, further from the cause.
+					FailedStructs++;
+					ReportFailure("the properties", Object);
+					return;
+				}
+
+				Structs.push_back(Struct);
 			}
-			else if (Object->Class() == EnumClass)
+			else if (ObjectClass == EnumClass)
 			{
 				auto Enum = static_cast<UEnum*>(Object);
-				Enums.push_back(Enum);
 
-				NameMap.insert_or_assign(Enum->GetFName(), 0);
-
-				auto& EnumNames = Enum->Names();
-
-				for (auto i = 0; i < EnumNames.Num(); i++)
+				try
 				{
-					NameMap.insert_or_assign(EnumNames[i].Key.GetNumber(), 0);
+					NameMap.insert_or_assign(Enum->GetFName(), 0);
+
+					auto& EnumNames = Enum->Names();
+
+					for (auto i = 0; i < EnumNames.Num(); i++)
+					{
+						NameMap.insert_or_assign(EnumNames[i].Key.GetNumber(), 0);
+					}
 				}
+				catch (...)
+				{
+					FailedEnums++;
+					ReportFailure("the enum members", Object);
+					return;
+				}
+
+				Enums.push_back(Enum);
 			}
 		});
+
+	if (FailedStructs || FailedEnums)
+	{
+		UE_LOG("Skipped %d structs and %d enums that could not be read", FailedStructs, FailedEnums);
+	}
 
 	Buffer.Write<int>(NameMap.size());
 

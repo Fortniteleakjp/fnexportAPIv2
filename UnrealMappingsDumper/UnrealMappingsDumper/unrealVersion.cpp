@@ -50,6 +50,17 @@ bool IUnrealVersion::TryDynamicOffsets()
 
 		if (!UObject::OuterOffset)
 			return false;
+
+		// fnexportAPI local patch: these four were found by name, so their paths are what a correct
+		// path looks like on this build. The dump matches classes by path, and when that fails
+		// silently this is the only way to see whether the name or the outer chain is at fault.
+		auto Words = UClassPtr->NameWords();
+		UE_LOG("Name words at +0x%X of \"Class\": %08X %08X %08X %08X",
+			UObject::NameOffset, Words[0], Words[1], Words[2], Words[3]);
+
+		UE_LOG("Sample paths: Class=\"%S\" Object=\"%S\" Actor=\"%S\" Engine=\"%S\"",
+			UClassPtr->GetPath().c_str(), UObjectPtr->GetPath().c_str(),
+			ActorPtr->GetPath().c_str(), EnginePtr->GetPath().c_str());
 	}
 	catch (...)
 	{

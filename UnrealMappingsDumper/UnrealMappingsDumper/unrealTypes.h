@@ -20,6 +20,9 @@ class FName
 {
 private:
 
+	// fnexportAPI local patch: the comparison index identifies the name and is all the dumper keys
+	// on, so the stored form stays two words — FName is embedded by value in FField and in the enum
+	// name pairs, and widening it here would move every field behind it.
 	uint32_t Number = 0;
 	uint32_t Padding = 0;
 
@@ -53,8 +56,14 @@ public:
 
 	std::wstring_view AsString() const
 	{
+		// ToString reads a wider FName than the two words modelled here: on UE6 it came back as
+		// "None" whenever the bytes past those words happened to be non-zero. Reading a name in
+		// place worked only because the object's own memory follows it; a copy on the stack did
+		// not. It is handed a zero-padded value instead, so the call is defined either way.
+		alignas(8) uint32_t Wide[4] = { Number, Padding, 0, 0 };
+
 		FString Ret;
-		FNameToString(this, Ret);
+		FNameToString((const FName*)Wide, Ret);
 
 		if (Ret.Data() != nullptr)
 		{
@@ -98,7 +107,8 @@ public:
 			Result += L".";
 		}
 
-		Result += GetFName().AsString();
+		// Read in place: a copy is what broke path building on UE6 (see FName above).
+		Result += GetName();
 	}
 
 	FORCEINLINE std::wstring_view GetName()
@@ -110,6 +120,12 @@ public:
 	FORCEINLINE FName GetFName()
 	{
 		return QUICK_OFFSET(FName, NameOffset);
+	}
+
+	/// <summary>The first four words at the name offset, for reporting the real FName layout.</summary>
+	FORCEINLINE const uint32_t* NameWords()
+	{
+		return (const uint32_t*)((uintptr_t)this + NameOffset);
 	}
 
 	FORCEINLINE std::wstring GetPath()
