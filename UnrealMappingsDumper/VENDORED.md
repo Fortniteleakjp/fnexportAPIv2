@@ -34,6 +34,9 @@
 | `UnrealMappingsDumper/unrealTypes.h`（FName） | UE6 の `FName` は3ワード。3ワード目を落とすと `ToString` が全て `None` を返します。値コピーで幅が足りず、参照経由だけ動くという非対称の原因でした。 |
 | `UnrealMappingsDumper/unrealTypes.h`（FField） | UE6 の `FFieldVariant` は `bool` を別持ちせずポインタ下位ビットにタグを畳むため 8 バイト。後続の `Next` と `NamePrivate` が 8 バイトずれ、プロパティ連鎖が自己ループしていました。`FProperty` のサイズも `0x70 → 0x68` へ連動。 |
 | `UnrealMappingsDumper/unrealTypes.h`（UEnum） | UE6 は enum メンバーを `TArray<TPair<FName,int64>>` から独自の `FNameData`（名前配列・値配列への各タグ付きポインタ＋件数）へ変更。位置はビルド構成に依存するため、形状による実行時導出にしています。 |
+| `UnrealMappingsDumper/unrealTypes.h`（FFieldClass / FProperty） | 型判定に使う `EClassCastFlags` は、UE6 が `Name` と `Id` の間に `EClassFlags` を挟んだため位置が変わり、`ArrayDim` も `FField` の幅とともに移動していました。どちらも読み違えても例外は出ず、全プロパティが「不明な型」、プロパティ番号が無意味な値になるだけです。実行時に実測して決めます（実機では `ArrayDim +0x38`、`Id +0x18`、`FProperty` サイズ `0x88`）。 |
+| `UnrealMappingsDumper/unrealTypes.h`（FArrayProperty / FSetProperty） | UE6 の `FArrayProperty` は要素型の前に `EArrayPropertyFlags` を置くため、`Inner` が 1 ワード後ろです。`FSetProperty` は先頭のままなので経路を分けています。 |
+| `UnrealMappingsDumper/dumper.cpp`（参照先の検証） | `GetStruct()` / `GetEnum()` / `GetInner()` の参照先は常に辿れるとは限りません（MaterialExpression 系など）。辿れないものは「名前なし」「不明な型」として記録します。読み手はどちらも解釈できるため、レコードを壊さずに済みます。 |
 | `UnrealMappingsDumper/dumper.cpp`（出力形式） | usmap をバージョン 0 ではなく 3（LargeEnums）で出力。バージョン 0 は enum メンバー数が 1 バイトのため、256 個以上を持つ enum でストリームが破綻します。versioning フラグは UE 準拠の 4 バイト bool。 |
 | `UnrealMappingsDumper/dumper.cpp`（堅牢化） | 走査を段階ごとに保護し、読めないオブジェクトは理由付きで除外。プロパティ連鎖と enum 件数に上限を設け、誤ったオフセットでの無限ループとバッファ外読み出しを防止。 |
 | `UnrealMappingsDumper/scanning.{h,cpp}` | 設定で渡されたモジュール相対アドレスを解決する `ManualAddressScanObject` と、`GetScanModuleBase()` を追加（Memcury のヘッダは非 inline 関数を含むため 1 つの翻訳単位からしか include できません）。 |

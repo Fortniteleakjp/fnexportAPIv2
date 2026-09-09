@@ -15,6 +15,8 @@ struct IUnrealVersion
 private:
 	static bool TryDynamicOffsets();
 	static bool TryDeriveEnumNamesOffset();
+	static bool TryDerivePropertySize();
+	static bool TryDeriveFieldOffsets();
 
 	/// <summary>True when the currently installed FNameToString resolves real object names.</summary>
 	static bool FNameToStringResolvesNames();
@@ -136,6 +138,23 @@ public:
 
 			UStruct::SuperOffset = UStructImpl::SuperOffset;
 			UStruct::ChildPropertiesOffset = UStructImpl::ChildPropertiesOffset;
+		}
+
+		// The array dimension and the field class id sit at offsets that move with FName's width and
+		// with members UE6 added, and reading either from the wrong place is silent: the dump comes
+		// out full of unknown types and nonsense property indices.
+		if (!TryDeriveFieldOffsets())
+		{
+			UE_LOG("Could not measure the field offsets; falling back to ArrayDim +0x%X and id +0x%X.",
+				FProperty::ArrayDimOffset, FFieldClass::IdOffset);
+		}
+
+		// Needs the class offset, so it runs after the dynamic offsets above. A wrong size here
+		// does not stop the dump, it corrupts the type of every struct and enum property in it.
+		if (!TryDerivePropertySize())
+		{
+			UE_LOG("Could not measure FProperty; falling back to 0x%X, which may not match this build.",
+				FProperty::FPropertySize);
 		}
 
 		// Enum members moved into their own structure on UE6, and where it sits depends on the

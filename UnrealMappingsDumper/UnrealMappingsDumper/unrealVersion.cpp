@@ -115,6 +115,256 @@ bool IUnrealVersion::ResolveFNameToString(
 	return false;
 }
 
+// fnexportAPI local patch: measure the two field offsets the property records are built from.
+//
+// Property names and their order come out right on this build, so FField's Next and NamePrivate are
+// where the model says. The two values that were wrong are the ones whose position depends on how
+// wide FName is and on a member UE6 added: the array dimension, which sits at the end of FField, and
+// the field class id, which UE6 moved behind an EClassFlags. Both are read rather than called.
+static void SampleProperties(void* Context, bool (*Visit)(void*, FProperty*), UClass* ClassClass, UClass* ScriptStructClass, int Limit)
+{
+	int Sampled = 0;
+
+	for (int Index = 0; Index < ObjObjects::Num() && Sampled < Limit; Index++)
+	{
+		auto Object = ObjObjects::GetObjectByIndex(Index);
+		if (!Object)
+			continue;
+
+		auto ObjectClass = Object->Class();
+		if (ObjectClass != ClassClass && ObjectClass != ScriptStructClass)
+			continue;
+
+		auto Property = static_cast<UStruct*>(Object)->ChildProperties();
+
+		for (int Walked = 0; Property && Walked < 4096 && Sampled < Limit; Walked++)
+		{
+			if (!Visit(Context, Property))
+				return;
+
+			Sampled++;
+			Property = static_cast<FProperty*>(Property->GetNext());
+		}
+	}
+}
+
+static bool ReadInt32At(uintptr_t Address, int32_t& Out)
+{
+	__try
+	{
+		Out = *(int32_t*)Address;
+		return true;
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		return false;
+	}
+}
+
+static bool ReadUInt64At(uintptr_t Address, uint64_t& Out)
+{
+	__try
+	{
+		Out = *(uint64_t*)Address;
+		return true;
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		return false;
+	}
+}
+
+namespace
+{
+	struct FOffsetVotes
+	{
+		static constexpr int First = 0x20;
+		static constexpr int Last = 0x48;
+		static constexpr int Step = 4;
+		static constexpr int Slots = (Last - First) / Step + 1;
+
+		int ArrayDim[Slots] = {};
+
+		// Class ids are 8-aligned inside the field class.
+		static constexpr int IdFirst = 0x08;
+		static constexpr int IdLast = 0x20;
+		static constexpr int IdSlots = (IdLast - IdFirst) / 8 + 1;
+
+		int Id[IdSlots] = {};
+
+		int Count = 0;
+	};
+
+	bool VisitProperty(void* Context, FProperty* Property)
+	{
+		auto& Votes = *(FOffsetVotes*)Context;
+		Votes.Count++;
+
+		// An array dimension is 1 for all but a handful of properties, so the offset that reads 1
+		// almost everywhere is the one.
+		for (int Slot = 0; Slot < FOffsetVotes::Slots; Slot++)
+		{
+			int32_t Value = 0;
+			if (ReadInt32At((uintptr_t)Property + FOffsetVotes::First + Slot * FOffsetVotes::Step, Value) && Value == 1)
+			{
+				Votes.ArrayDim[Slot]++;
+			}
+		}
+
+		auto FieldClass = (uintptr_t)Property->GetClass();
+		if (FieldClass)
+		{
+			for (int Slot = 0; Slot < FOffsetVotes::IdSlots; Slot++)
+			{
+				uint64_t Value = 0;
+				if (ReadUInt64At(FieldClass + FOffsetVotes::IdFirst + Slot * 8, Value) &&
+					FFieldClass::IsPlausibleId(Value))
+				{
+					Votes.Id[Slot]++;
+				}
+			}
+		}
+
+		return true;
+	}
+}
+
+bool IUnrealVersion::TryDeriveFieldOffsets()
+{
+	auto ScriptStructClass = UScriptStruct::StaticClass();
+	auto ClassClass = UClass::StaticClass();
+
+	if (!ScriptStructClass || !ClassClass)
+		return false;
+
+	FOffsetVotes Votes;
+	SampleProperties(&Votes, VisitProperty, ClassClass, ScriptStructClass, 20000);
+
+	if (Votes.Count < 100)
+		return false;
+
+	int BestDim = 0, BestId = 0;
+	for (int Slot = 1; Slot < FOffsetVotes::Slots; Slot++)
+		if (Votes.ArrayDim[Slot] > Votes.ArrayDim[BestDim]) BestDim = Slot;
+	for (int Slot = 1; Slot < FOffsetVotes::IdSlots; Slot++)
+		if (Votes.Id[Slot] > Votes.Id[BestId]) BestId = Slot;
+
+	// Most properties have to agree; a marginal winner means neither offset is really there.
+	if (Votes.ArrayDim[BestDim] * 2 < Votes.Count || Votes.Id[BestId] * 2 < Votes.Count)
+		return false;
+
+	FProperty::ArrayDimOffset = FOffsetVotes::First + BestDim * FOffsetVotes::Step;
+	FFieldClass::IdOffset = FOffsetVotes::IdFirst + BestId * 8;
+
+	UE_LOG("Field offsets: ArrayDim +0x%X (%d/%d), field class id +0x%X (%d/%d)",
+		FProperty::ArrayDimOffset, Votes.ArrayDim[BestDim], Votes.Count,
+		FFieldClass::IdOffset, Votes.Id[BestId], Votes.Count);
+
+	return true;
+}
+
+// fnexportAPI local patch: measure FProperty rather than assume it.
+//
+// Everything a property refers to — the struct behind a StructProperty, the enum behind an
+// EnumProperty, the element type of an array — is stored immediately past the end of FProperty, so
+// its size decides whether those come out right. UE6 makes that size unknowable from the headers
+// alone: several members are conditional on how the build was configured (editor data, metadata,
+// const-initialised objects), and a wrong guess does not fail loudly. It silently records the wrong
+// type for every struct property, which is what made a mapping that loads cleanly unusable for
+// reading assets.
+//
+// So it is measured. A StructProperty holds a pointer to a UScriptStruct at exactly that offset,
+// and nothing else in the property does; the offset where that holds across thousands of properties
+// is the size. Only memory is read.
+static bool ProbeStructTarget(uintptr_t At, int32_t ClassOffset, const void* ScriptStructClass)
+{
+	__try
+	{
+		auto Target = *(uintptr_t*)At;
+
+		// A heap object pointer, not a flag word or a small integer.
+		if (Target < 0x10000 || (Target & 7))
+			return false;
+
+		if (!IsMemoryReadable(Target, (size_t)ClassOffset + sizeof(void*)))
+			return false;
+
+		return *(const void**)(Target + ClassOffset) == ScriptStructClass;
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		return false;
+	}
+}
+
+bool IUnrealVersion::TryDerivePropertySize()
+{
+	auto ScriptStructClass = UScriptStruct::StaticClass();
+	auto ClassClass = UClass::StaticClass();
+
+	if (!ScriptStructClass || !ClassClass)
+		return false;
+
+	// FProperty starts where FField ends and cannot be far past it.
+	constexpr int FirstOffset = 0x30;
+	constexpr int LastOffset = 0xC0;
+	constexpr int Step = 8;
+	constexpr int Slots = (LastOffset - FirstOffset) / Step + 1;
+
+	// Enough properties that the right offset wins clearly, without walking the whole array.
+	constexpr int PropertiesToSample = 20000;
+	constexpr int MaxPropertiesPerStruct = 4096;
+
+	int Votes[Slots] = {};
+	int Sampled = 0;
+
+	for (int Index = 0; Index < ObjObjects::Num() && Sampled < PropertiesToSample; Index++)
+	{
+		auto Object = ObjObjects::GetObjectByIndex(Index);
+		if (!Object)
+			continue;
+
+		auto ObjectClass = Object->Class();
+		if (ObjectClass != ClassClass && ObjectClass != ScriptStructClass)
+			continue;
+
+		auto Property = static_cast<UStruct*>(Object)->ChildProperties();
+
+		for (int Walked = 0; Property && Walked < MaxPropertiesPerStruct && Sampled < PropertiesToSample; Walked++)
+		{
+			for (int Slot = 0; Slot < Slots; Slot++)
+			{
+				if (ProbeStructTarget((uintptr_t)Property + FirstOffset + Slot * Step,
+					UObject::ClassOffset, ScriptStructClass))
+				{
+					Votes[Slot]++;
+				}
+			}
+
+			Sampled++;
+			Property = static_cast<FProperty*>(Property->GetNext());
+		}
+	}
+
+	int Best = -1;
+	for (int Slot = 0; Slot < Slots; Slot++)
+	{
+		if (Best < 0 || Votes[Slot] > Votes[Best])
+			Best = Slot;
+	}
+
+	// Struct properties are common but not universal, so the winner only has to stand out.
+	if (Best < 0 || Votes[Best] < 32)
+		return false;
+
+	FProperty::FPropertySize = FirstOffset + Best * Step;
+
+	UE_LOG("FProperty is 0x%X (%d of %d properties pointed at a script struct there)",
+		FProperty::FPropertySize, Votes[Best], Sampled);
+
+	return true;
+}
+
 // fnexportAPI local patch: find UEnum's member data by its shape, reading only.
 //
 // Its position depends on build configuration (whether the enum carries compiled-in metadata, and

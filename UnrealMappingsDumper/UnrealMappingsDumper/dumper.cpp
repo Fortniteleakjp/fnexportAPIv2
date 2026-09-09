@@ -2,12 +2,23 @@
 
 #include "app.h"
 #include "dumper.h"
+#include "scanning.h"
 #include "hostConfig.h"
 #include "writer.h"
 #include "oodle.h"
 
 static EPropertyType GetPropertyType(FProperty* Prop)
 {
+	// fnexportAPI local patch: the field class is a pointer inside the property, and a property
+	// reached through a container or an enum's underlying type is not guaranteed to be a real one.
+	// Reading the class id through a bad pointer faults, and the dump is well past the point where
+	// that can be recovered from, so it is checked here instead.
+	auto FieldClass = (uintptr_t)Prop->GetClass();
+	if (FieldClass < 0x10000 || (FieldClass & 7) || !IsMemoryReadable(FieldClass, FFieldClass::IdOffset + sizeof(uint64_t)))
+	{
+		return EPropertyType::Unknown;
+	}
+
 	switch (Prop->GetClass()->GetId())
 	{
 	case CASTCLASS_FObjectProperty:
@@ -164,6 +175,40 @@ void Dumper::Run(ECompressionMethod CompressionMethod)
 
 	std::function<void(class FProperty*&, EPropertyType)> WritePropertyWrapper{}; // hacky.. i know
 
+	// fnexportAPI local patch: what a property points at is not always there.
+	//
+	// The struct behind a StructProperty, the enum behind an EnumProperty and the element type of a
+	// container all live past the end of FProperty, and a few editor-only classes — the
+	// MaterialExpression family among them — reach ones that cannot be followed. Dereferencing them
+	// took the whole dump down at the last step, after everything had been collected.
+	//
+	// A record still has to be written for such a property or the file stops making sense, so the
+	// target is checked first and an unusable one is recorded as absent. The reader understands
+	// both: an invalid name index reads back as no name, and an unknown type carries no payload.
+	constexpr int32_t InvalidNameIndex = -1;
+
+	auto IsFollowable = [](const void* Pointer)
+	{
+		auto Address = (uintptr_t)Pointer;
+		return Address >= 0x10000 && (Address & 7) == 0 && IsMemoryReadable(Address, 0x30);
+	};
+
+	auto WriteTypeName = [&](UObject* Object)
+	{
+		if (IsFollowable(Object))
+			Buffer.Write(NameMap[Object->GetFName()]);
+		else
+			Buffer.Write<int32_t>(InvalidNameIndex);
+	};
+
+	auto WriteInner = [&](FProperty* Inner)
+	{
+		if (IsFollowable(Inner))
+			WritePropertyWrapper(Inner, GetPropertyType(Inner));
+		else
+			Buffer.Write(EPropertyType::Unknown);
+	};
+
 	auto WriteProperty = [&](FProperty*& Prop, EPropertyType Type)
 	{
 		if (Type == EPropertyType::EnumAsByteProperty)
@@ -176,43 +221,37 @@ void Dumper::Run(ECompressionMethod CompressionMethod)
 		{
 			auto EnumProp = static_cast<FEnumProperty*>(Prop);
 
-			auto Inner = EnumProp->GetUnderlying();
-			auto InnerType = GetPropertyType(Inner);
-			WritePropertyWrapper(Inner, InnerType);
-			Buffer.Write(NameMap[EnumProp->GetEnum()->GetFName()]);
+			WriteInner(EnumProp->GetUnderlying());
+			WriteTypeName(EnumProp->GetEnum());
 
 			break;
 		}
 		case EPropertyType::EnumAsByteProperty:
 		{
 			Buffer.Write(EPropertyType::ByteProperty);
-			Buffer.Write(NameMap[static_cast<FByteProperty*>(Prop)->GetEnum()->GetFName()]);
+			WriteTypeName(static_cast<FByteProperty*>(Prop)->GetEnum());
 
 			break;
 		}
 		case EPropertyType::StructProperty:
 		{
-			Buffer.Write(NameMap[static_cast<FStructProperty*>(Prop)->GetStruct()->GetFName()]);
+			WriteTypeName(static_cast<FStructProperty*>(Prop)->GetStruct());
 			break;
 		}
 		case EPropertyType::SetProperty:
+		{
+			WriteInner(static_cast<FSetProperty*>(Prop)->GetElement());
+			break;
+		}
 		case EPropertyType::ArrayProperty:
 		{
-			auto Inner = static_cast<FArrayProperty*>(Prop)->GetInner();
-			auto InnerType = GetPropertyType(Inner);
-			WritePropertyWrapper(Inner, InnerType);
-
+			WriteInner(static_cast<FArrayProperty*>(Prop)->GetInner());
 			break;
 		}
 		case EPropertyType::MapProperty:
 		{
-			auto Inner = static_cast<FMapProperty*>(Prop)->GetKey();
-			auto InnerType = GetPropertyType(Inner);
-			WritePropertyWrapper(Inner, InnerType);
-
-			auto Value = static_cast<FMapProperty*>(Prop)->GetValue();
-			auto ValueType = GetPropertyType(Value);
-			WritePropertyWrapper(Value, ValueType);
+			WriteInner(static_cast<FMapProperty*>(Prop)->GetKey());
+			WriteInner(static_cast<FMapProperty*>(Prop)->GetValue());
 
 			break;
 		}
@@ -434,8 +473,15 @@ void Dumper::Run(ECompressionMethod CompressionMethod)
 
 	Buffer.Write<uint32_t>(Structs.size());
 
+	// Names the struct being written, so a fault at this stage says where it came from.
+	UStruct* CurrentStruct = nullptr;
+
+	try
+	{
+
 	for (auto Struct : Structs)
 	{
+		CurrentStruct = Struct;
 		Buffer.Write(NameMap[Struct->GetFName()]);
 		Buffer.Write<int32_t>(Struct->Super() ? NameMap[Struct->Super()->GetFName()] : 0xffffffff);
 
@@ -467,6 +513,16 @@ void Dumper::Run(ECompressionMethod CompressionMethod)
 
 			WriteProperty(P.Prop, P.PropertyType);
 		}
+	}
+
+	}
+	catch (...)
+	{
+		std::wstring Where = L"<unknown>";
+		try { if (CurrentStruct) Where = CurrentStruct->GetPath(); } catch (...) {}
+
+		UE_LOG("Failed while writing \"%S\"", Where.c_str());
+		throw;
 	}
 
 	std::vector<uint8_t> UsmapData;
