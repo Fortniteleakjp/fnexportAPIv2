@@ -323,7 +323,9 @@ void Dumper::Run(ECompressionMethod CompressionMethod)
 					// A chain read through a wrong offset does not always fault: it can point back
 					// into itself and loop forever, which is what a hung dump looks like. No real
 					// struct comes close to this many properties.
-					constexpr int MaxPropertiesPerStruct = 65536;
+					// Kept small on purpose: a looping chain is walked to this bound before it is
+					// given up on, and at 64K per struct that alone made a run take twenty minutes.
+					constexpr int MaxPropertiesPerStruct = 4096;
 
 					auto Props = Struct->ChildProperties();
 					auto First = Props;
@@ -361,9 +363,19 @@ void Dumper::Run(ECompressionMethod CompressionMethod)
 
 					auto& EnumNames = Enum->Names();
 
+					// Without the derived offset this would read whatever happens to sit there.
+					if (!UEnum::NamesOffset)
+						throw std::runtime_error("the enum member data offset was not derived");
+
+					// A garbage count would walk off the end of the arrays.
+					constexpr int MaxEnumMembers = 4096;
+					if (EnumNames.Num() <= 0 || EnumNames.Num() > MaxEnumMembers)
+						throw std::runtime_error("implausible enum member count");
+
 					for (auto i = 0; i < EnumNames.Num(); i++)
 					{
-						NameMap.insert_or_assign(EnumNames[i].Key.GetNumber(), 0);
+						// The whole FName, not just its index: the other words are needed to render it.
+						NameMap.insert_or_assign(EnumNames[i].Key, 0);
 					}
 				}
 				catch (...)
@@ -399,7 +411,7 @@ void Dumper::Run(ECompressionMethod CompressionMethod)
 			NameView = NameView.substr(Find + 2);
 		}
 
-		Buffer.Write<uint8_t>(NameView.length());
+		Buffer.Write<uint16_t>((uint16_t)NameView.length());
 		Buffer.WriteString(NameView);
 
 		CurrentNameIndex++;
@@ -412,7 +424,7 @@ void Dumper::Run(ECompressionMethod CompressionMethod)
 		Buffer.Write(NameMap[Enum->GetFName()]);
 
 		auto& EnumNames = Enum->Names();
-		Buffer.Write<uint8_t>(EnumNames.Num());
+		Buffer.Write<uint16_t>((uint16_t)EnumNames.Num());
 
 		for (size_t i = 0; i < EnumNames.Num(); i++)
 		{
@@ -495,7 +507,19 @@ void Dumper::Run(ECompressionMethod CompressionMethod)
 	}
 
 	FileOutput.Write<uint16_t>(0x30C4); //magic
-	FileOutput.Write<uint8_t>(0); //version
+
+	// fnexportAPI local patch: written as LargeEnums (3) rather than the original 0.
+	//
+	// Version 0 stores an enum's member count in a single byte, so an enum with more than 255
+	// members writes a truncated count followed by the full list of entries — the reader then
+	// resumes mid-list and every following record is garbage. UE6 Fortnite has such enums, which
+	// is why a dump that collected everything correctly still failed to parse back.
+	//
+	// The three steps up to LargeEnums are cumulative: PackageVersioning adds the flag below,
+	// LongFName widens name lengths to 16 bits, LargeEnums widens the member count the same way.
+	FileOutput.Write<uint8_t>(3); //version
+	// The reader takes this flag as a UE-serialized bool, which is four bytes wide, not one.
+	FileOutput.Write<uint32_t>(0); //no package versioning payload follows
 	FileOutput.Write(CompressionMethod); //compression
 	FileOutput.Write<uint32_t>(UsmapData.size()); //compressed size
 	FileOutput.Write<uint32_t>(Buffer.Size()); //decompressed size

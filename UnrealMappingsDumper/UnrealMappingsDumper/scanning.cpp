@@ -386,6 +386,11 @@ uintptr_t GetScanModuleBase()
 	return Memcury::PE::GetModuleBase();
 }
 
+bool IsMemoryReadable(uintptr_t Address, size_t Size)
+{
+	return IsReadable(Address, Size);
+}
+
 std::string RetargetScanModule(uintptr_t Address)
 {
 	MEMORY_BASIC_INFORMATION Info{};

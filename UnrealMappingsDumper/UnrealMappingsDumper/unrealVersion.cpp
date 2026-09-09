@@ -22,6 +22,104 @@
 
 
 //this is super unsafe but hopefully stackoverflow comes in clutch https://stackoverflow.com/a/42389638
+// fnexportAPI local patch: find UEnum's member data by its shape.
+//
+// Its position depends on build configuration (whether the enum carries compiled-in metadata, and
+// how wide the UField base is), so it is looked for rather than assumed. The shape is distinctive:
+// two pointers that address arrays of exactly the length held in the int32 beside them, whose first
+// entries resolve to real names.
+static bool ProbeEnumNames(uintptr_t Candidate)
+{
+	__try
+	{
+		auto Data = (const FEnumNameData*)Candidate;
+		auto Count = Data->Num();
+
+		// A real enum has members, and no enum has thousands of them.
+		if (Count <= 0 || Count > 4096)
+			return false;
+
+		auto Names = (uintptr_t)Data->GetNames();
+		auto Values = (uintptr_t)Data->GetValues();
+
+		if (!Names || (Names & 7) || !Values || (Values & 7))
+			return false;
+
+		// Both arrays have to be addressable for exactly as many entries as the count claims.
+		if (!IsMemoryReadable(Names, sizeof(FName) * (size_t)Count))
+			return false;
+
+		if (!IsMemoryReadable(Values, sizeof(int64_t) * (size_t)Count))
+			return false;
+
+		// Pointers that merely look plausible are common; names that resolve are not. A few are
+		// checked so a candidate cannot pass on one lucky hit.
+		auto Checked = Count < 3 ? Count : 3;
+		for (int Index = 0; Index < Checked; Index++)
+		{
+			auto Name = (*Data)[Index].Key.AsString();
+			if (Name.empty() || Name == L"None")
+				return false;
+		}
+
+		return true;
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		return false;
+	}
+}
+
+bool IUnrealVersion::TryDeriveEnumNamesOffset()
+{
+	auto EnumClass = UEnum::StaticClass();
+	if (!EnumClass)
+		return false;
+
+	// Offsets are voted on across many enums: one enum could match at a wrong offset by chance,
+	// but not the same wrong offset for all of them.
+	constexpr int FirstOffset = 0x30;
+	constexpr int LastOffset = 0xC0;
+	constexpr int Step = 8;
+	constexpr int Slots = (LastOffset - FirstOffset) / Step + 1;
+
+	int Votes[Slots] = {};
+	int Sampled = 0;
+
+	for (int Index = 0; Index < ObjObjects::Num() && Sampled < 64; Index++)
+	{
+		auto Object = ObjObjects::GetObjectByIndex(Index);
+		if (!Object || Object->Class() != EnumClass)
+			continue;
+
+		Sampled++;
+
+		for (int Slot = 0; Slot < Slots; Slot++)
+		{
+			if (ProbeEnumNames((uintptr_t)Object + FirstOffset + Slot * Step))
+				Votes[Slot]++;
+		}
+	}
+
+	int Best = -1;
+	for (int Slot = 0; Slot < Slots; Slot++)
+	{
+		if (Best < 0 || Votes[Slot] > Votes[Best])
+			Best = Slot;
+	}
+
+	// Requiring most of the sample to agree keeps a stray match from being adopted.
+	if (Best < 0 || Sampled == 0 || Votes[Best] * 2 < Sampled)
+		return false;
+
+	UEnum::NamesOffset = FirstOffset + Best * Step;
+
+	UE_LOG("Enum member data at +0x%X (%d of %d enums agreed)",
+		UEnum::NamesOffset, Votes[Best], Sampled);
+
+	return true;
+}
+
 bool IUnrealVersion::TryDynamicOffsets()
 {
 	try

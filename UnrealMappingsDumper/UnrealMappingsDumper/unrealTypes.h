@@ -20,17 +20,23 @@ class FName
 {
 private:
 
-	// fnexportAPI local patch: the comparison index identifies the name and is all the dumper keys
-	// on, so the stored form stays two words — FName is embedded by value in FField and in the enum
-	// name pairs, and widening it here would move every field behind it.
+	// fnexportAPI local patch: upstream models FName as two words. On this UE6 build it is three,
+	// and the third one is load-bearing — zero-filling it made every name resolve to "None", while
+	// carrying it through made them all resolve. The size also has to be right for its own sake:
+	// FName is embedded by value in FField and in the enum name pairs, so modelling it too narrow
+	// or too wide moves every field behind it.
+	//
+	// Only the first word identifies the name, so that stays the hash and comparison key; the rest
+	// is carried so ToString sees the whole value.
 	uint32_t Number = 0;
-	uint32_t Padding = 0;
+	uint32_t Word1 = 0;
+	uint32_t Word2 = 0;
 
 public:
 
 	static inline bool IsOptimized = false;
 
-	__forceinline FName(int InNum) : Number(InNum), Padding(0)
+	__forceinline FName(int InNum) : Number(InNum), Word1(0), Word2(0)
 	{
 	}
 
@@ -56,11 +62,8 @@ public:
 
 	std::wstring_view AsString() const
 	{
-		// ToString reads a wider FName than the two words modelled here: on UE6 it came back as
-		// "None" whenever the bytes past those words happened to be non-zero. Reading a name in
-		// place worked only because the object's own memory follows it; a copy on the stack did
-		// not. It is handed a zero-padded value instead, so the call is defined either way.
-		alignas(8) uint32_t Wide[4] = { Number, Padding, 0, 0 };
+		// Padded to four words so ToString cannot read past the value, whatever it expects.
+		alignas(8) uint32_t Wide[4] = { Number, Word1, Word2, 0 };
 
 		FString Ret;
 		FNameToString((const FName*)Wide, Ret);
@@ -382,13 +385,11 @@ public:
 
 	class Variant
 	{
-		union FFieldObjectUnion
-		{
-			FField* Field;
-			UObject* Object;
-		}Container;
-
-		bool bIsUObject;
+		// fnexportAPI local patch: UE6 tags "this owner is a UObject" in the pointer's own low bit
+		// (FFieldVariant::UObjectMask) instead of keeping a separate bool beside it, which halves
+		// this to one word. Everything behind it — Next and NamePrivate, which the property walk
+		// depends on — sat 8 bytes too far with the old model, so the chain read garbage and looped.
+		uintptr_t Container;
 	};
 
 private:
@@ -444,12 +445,54 @@ public:
 
 	FORCEINLINE int32_t GetArrayDim()
 	{
-		if (FName::IsOptimized)
-		{
-			return QUICK_OFFSET(int32_t, sizeof(FField) - 8);
-		}
-
+		// The upstream adjustment compensated for FField being modelled at the wrong width; with
+		// the layout above matching the engine, the declared member is already in the right place.
 		return ArrayDim;
+	}
+};
+
+/// <summary>
+/// UE6's UEnum::FNameData, which replaced the TArray&lt;TPair&lt;FName, int64&gt;&gt; the enum members
+/// used to live in. Names and values are now two separate allocations addressed by tagged pointers
+/// — the low bit records whether the array was allocated dynamically or points at static data from
+/// the header tool — with the count beside them.
+/// </summary>
+class FEnumNameData
+{
+	static constexpr uintptr_t PointerMask = ~(uintptr_t)1;
+
+	uintptr_t TaggedNames = 0;
+	uintptr_t TaggedValues = 0;
+	int32_t NumValues = 0;
+
+public:
+
+	/// <summary>One member, in the shape the writer already expects.</summary>
+	struct FEntry
+	{
+		FName Key;
+		int64_t Value;
+	};
+
+	FORCEINLINE int Num() const
+	{
+		return NumValues;
+	}
+
+	FORCEINLINE FName* GetNames() const
+	{
+		return (FName*)(TaggedNames & PointerMask);
+	}
+
+	FORCEINLINE int64_t* GetValues() const
+	{
+		return (int64_t*)(TaggedValues & PointerMask);
+	}
+
+	FORCEINLINE FEntry operator[](int Index) const
+	{
+		auto Values = GetValues();
+		return { GetNames()[Index], Values ? Values[Index] : 0 };
 	}
 };
 
@@ -457,13 +500,12 @@ class UEnum : public UObject
 {
 public:
 
-	typedef TArray<TPair<FName, int64_t>> EnumNameMap;
+	/// <summary>Offset of the member data, derived at startup because it moves with the build.</summary>
+	static inline int NamesOffset = 0;
 
-	EnumNameMap& Names()
+	FEnumNameData& Names()
 	{
-		static auto FieldSize = ObjObjects::FindObject<UStruct>(L"/Script/CoreUObject.Field")->PropertiesSize();
-
-		return QUICK_OFFSET(EnumNameMap, FieldSize + sizeof(FString));
+		return QUICK_OFFSET(FEnumNameData, NamesOffset);
 	}
 
 	DECLARE_STATIC_CLASS(L"/Script/CoreUObject.Enum");

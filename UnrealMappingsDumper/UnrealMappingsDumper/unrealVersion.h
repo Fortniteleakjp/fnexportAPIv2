@@ -14,6 +14,7 @@ struct IUnrealVersion
 {
 private:
 	static bool TryDynamicOffsets();
+	static bool TryDeriveEnumNamesOffset();
 
 	// Tries the pinned address first, then each candidate in order, and reports what was used.
 	static uintptr_t Resolve(
@@ -102,6 +103,13 @@ public:
 			UStruct::ChildPropertiesOffset = UStructImpl::ChildPropertiesOffset;
 		}
 
+		// Enum members moved into their own structure on UE6, and where it sits depends on the
+		// build, so it is located rather than assumed. Structs still dump without it.
+		if (!TryDeriveEnumNamesOffset())
+		{
+			UE_LOG("Could not locate the enum member data; enums will be skipped.");
+		}
+
 		// Every lookup after this point is built on these; a wrong one produces an empty dump
 		// rather than an error, so they are reported.
 		UE_LOG("Offsets: Name +0x%X, Class +0x%X, Outer +0x%X, Super +0x%X, ChildProperties +0x%X, FProperty size 0x%X, optimized FName %s",
@@ -174,7 +182,9 @@ struct UnrealVersionBase : IUnrealVersion
 */
 struct Version_OptimizedFName : UnrealVersionBase
 {
-	static constexpr int FPropertySize = 0x70;
+	// fnexportAPI local patch: FField lost a word when FFieldVariant stopped carrying a separate
+	// bool, and FProperty is measured from the end of FField, so it moves with it.
+	static constexpr int FPropertySize = 0x68;
 	static constexpr bool HasOptimizedFName = true;
 };
 

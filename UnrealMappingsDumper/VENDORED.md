@@ -31,6 +31,11 @@
 | `UnrealMappingsDumper/unrealVersion.h` | 設定で指定されたアドレスを走査より優先し、どの候補が当たったかをモジュール相対アドレスで記録。Fortnite プロファイルの GObjects 候補も追加。 |
 | `UnrealMappingsDumper/unrealTypes.h` | `ObjObjects` を固定 struct ではなく検出したレイアウト経由で読むよう変更。UE6 は `FChunkedFixedUObjectArray` の Num/Max を入れ替え、`PreAllocatedObjects` を末尾へ移動し、`FUObjectItem` の先頭に 64bit の `FlagsAndRefCount` を足してオブジェクトポインタを +8 へ押し出しています（さらに packed の場合あり）。いずれも例外ではなく無言で壊れるため、実メモリで検証して確定させます。 |
 | `UnrealMappingsDumper/unrealVersion.h`（モジュール切替） | GObjects を見つけた時点で、それを含むモジュールへ以降の走査対象を切り替えます。UEFN はモジュラービルドで、実行ファイルは小さなスタブ（`.data` が 1KB）でしかなく、エンジン本体は DLL 側にあります。上流はプロセスのメインモジュールしか見ないため、探しているものが存在しない場所を走査していました。 |
+| `UnrealMappingsDumper/unrealTypes.h`（FName） | UE6 の `FName` は3ワード。3ワード目を落とすと `ToString` が全て `None` を返します。値コピーで幅が足りず、参照経由だけ動くという非対称の原因でした。 |
+| `UnrealMappingsDumper/unrealTypes.h`（FField） | UE6 の `FFieldVariant` は `bool` を別持ちせずポインタ下位ビットにタグを畳むため 8 バイト。後続の `Next` と `NamePrivate` が 8 バイトずれ、プロパティ連鎖が自己ループしていました。`FProperty` のサイズも `0x70 → 0x68` へ連動。 |
+| `UnrealMappingsDumper/unrealTypes.h`（UEnum） | UE6 は enum メンバーを `TArray<TPair<FName,int64>>` から独自の `FNameData`（名前配列・値配列への各タグ付きポインタ＋件数）へ変更。位置はビルド構成に依存するため、形状による実行時導出にしています。 |
+| `UnrealMappingsDumper/dumper.cpp`（出力形式） | usmap をバージョン 0 ではなく 3（LargeEnums）で出力。バージョン 0 は enum メンバー数が 1 バイトのため、256 個以上を持つ enum でストリームが破綻します。versioning フラグは UE 準拠の 4 バイト bool。 |
+| `UnrealMappingsDumper/dumper.cpp`（堅牢化） | 走査を段階ごとに保護し、読めないオブジェクトは理由付きで除外。プロパティ連鎖と enum 件数に上限を設け、誤ったオフセットでの無限ループとバッファ外読み出しを防止。 |
 | `UnrealMappingsDumper/scanning.{h,cpp}` | 設定で渡されたモジュール相対アドレスを解決する `ManualAddressScanObject` と、`GetScanModuleBase()` を追加（Memcury のヘッダは非 inline 関数を含むため 1 つの翻訳単位からしか include できません）。 |
 | `UnrealMappingsDumper/*.vcxproj{,.filters}` | `hostConfig.h` をプロジェクトに追加。 |
 | `build.bat` | 新規。MSBuild を解決して x64 Release をビルドし、`libs/UnrealMappingsDumper.dll` へ配置します。 |

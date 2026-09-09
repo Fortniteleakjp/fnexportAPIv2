@@ -9,6 +9,10 @@ struct IScanObject
 // functions, so its header can only be included from scanning.cpp.
 uintptr_t GetScanModuleBase();
 
+// True when the whole span is committed and readable. Used to validate a pointer before
+// following it, so a derivation can reject a candidate instead of faulting on it.
+bool IsMemoryReadable(uintptr_t Address, size_t Size);
+
 // Points every later scan at the module that owns Address.
 //
 // UEFN is a modular build: the executable is a small stub and the engine lives in DLLs, so the
