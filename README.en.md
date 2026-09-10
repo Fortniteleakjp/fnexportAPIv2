@@ -400,14 +400,15 @@ Example response (`/api/v1/search`):
 | `GET /api/v1/build` | Returns the build currently served (`appliedBuild` / `appliedManifestId`), the build the manifest points at, the mounted VFS count, how many keys are still missing, and whether a rebuild is running (`reloading`). It keeps answering during a rebuild. |
 | `POST /api/v1/build/reload` | Rebuilds the provider from the newest manifest immediately instead of waiting for the ~30s poll. Other endpoints return `503` while it runs. |
 
-### Reading a specific build — `/api/v1/versions`
+### Build archive — `/api/v1/versions`
 
-Every build this instance serves keeps its **manifest archived**, so files can be read from **both the
-previous version and the newest one**.
+Every build this instance serves keeps its **manifest archived**, so the previous version stays
+readable after an update. These endpoints only manage that archive — **they do not read files**.
+Reading is done through the ordinary endpoints with a `version` parameter (next section).
 
-No pak content is copied here. A manifest addresses chunks on the Epic CDN, so **one ~10 MB file is all
-it takes** to read a whole build again. "Deleting an old version's data" therefore means deleting that
-archived manifest, the AES keys archived with it, and its chunk cache.
+No pak content is copied here. A manifest addresses chunks on the Epic CDN, so **one ~10 MB file is
+all it takes** to read a whole build again. "Deleting an old version's data" therefore means deleting
+that archived manifest, the AES keys archived with it, and its chunk cache.
 
 | Method & path | Description |
 |---|---|
@@ -416,8 +417,26 @@ archived manifest, the AES keys archived with it, and its chunk cache.
 | `POST /api/v1/versions/load?version=…` | Mounts a build from its archived manifest. |
 | `DELETE /api/v1/versions/unload?version=…` | Unmounts a build; its archived manifest is kept. |
 | `DELETE /api/v1/versions/data?version=…` | Deletes that build's manifest, keys and chunk cache. **Recorded changelists are kept.** |
-| `GET /api/v1/versions/files?version=…` | Lists that build's virtual file paths, paginated. |
-| `GET /api/v1/versions/file?version=…&path=…` | Returns **a file's content as it is in that build**. |
+
+If you already have a manifest file, you can import that build:
+
+```bash
+curl -X POST "http://localhost:3849/api/v1/versions/import"   -F "file=@++Fortnite+Release-42.00-CL-56878558-Windows.manifest"
+```
+
+### Reading an older build — the `version` parameter
+
+These endpoints accept a `version` parameter and return **the content as it is in that build**.
+Without it they read the live build exactly as they always did.
+
+| Endpoint | |
+|---|---|
+| [`/api/v1/export`](#asset-export--apiv1export) | Asset JSON/image/audio, DataTable CSV, locres |
+| [`/api/v1/search`](#string-search--apiv1search) | Path and content search |
+| `/api/v1/paks` | Mounted PAK/UTOC inventory and contents |
+| [`/api/v1/localization`](#localization-lookup--apiv1localization) | Key resolution and reverse lookup |
+| [`/api/v1/pak`](#cosmetics-extraction--apiv1pak) | Cosmetic extraction and icons |
+| `/api/v1/config` | INI listing and configuration lookup |
 
 `version` accepts any of:
 
@@ -427,18 +446,20 @@ archived manifest, the AES keys archived with it, and its chunk cache.
 - `latest` (the live build) or `previous` (the one before it)
 
 ```bash
-# Read the file as it was in the previous version (only builds already mounted are served)
-curl "http://localhost:3849/api/v1/versions/file?version=%2B%2BFortnite%2BRelease-42.10-CL-57566230-Windows&path=FortniteGame/Config/DefaultGame.ini"
+# Export an asset as it was in the previous version
+curl "http://localhost:3849/api/v1/export?path=FortniteGame/Content/Athena/Items/Foo&version=previous"
+
+# Search the file list as it stood in 42.10
+curl "http://localhost:3849/api/v1/search?q=CID_&version=42.10"
 ```
 
-Only **already-loaded** builds are served by default; naming an unloaded one returns `409`. Add
-`load=true` to mount it first, which takes a few minutes for a whole build.
+Only **already-loaded** builds are served; naming an unloaded one returns `409`, because mounting a
+build takes minutes and is never done implicitly on a GET. Mount it first with
+`POST /api/v1/versions/load`, or add `loadVersion=true` to mount it as part of the request.
 
-If you already have a manifest file, you can import that build:
-
-```bash
-curl -X POST "http://localhost:3849/api/v1/versions/import"   -F "file=@++Fortnite+Release-42.00-CL-56878558-Windows.manifest"
-```
+Responses carry `X-Build-Version` (the build actually read) and `X-Build-Is-Live`. A request reading
+an older build uses cache keys of its own, so its content can never be served from — or poison — the
+live build's caches.
 
 ### Changelists — `/api/v1/changes`
 
@@ -458,6 +479,7 @@ through.
 |---|---|
 | `GET /api/v1/changes` | Lists the recorded changelists. |
 | `GET /api/v1/changes/list?from=…&to=…` | Returns the added, removed and modified file paths, composing the pair out of the recorded chain when it was never recorded directly. `to` defaults to the live build. |
+| `GET /api/v1/changes/modified?from=…&to=…` | Returns **only the paths that were actually rewritten**, as a text file with one path per line. Only files present in both builds are considered; files added in the newer build and files removed from it are both excluded. |
 | `GET /api/v1/changes/file?from=…&to=…&path=…` | Returns **the lines that changed in one file**. `format=patch` returns unified-diff text. |
 | `POST /api/v1/changes/compute?from=…&to=…` | Computes and records a changelist as a background job; poll it with the returned `jobId`. |
 | `GET /api/v1/changes/jobs` / `GET /api/v1/changes/jobs/{id}` | Lists jobs, or one job's progress. |
@@ -469,6 +491,9 @@ is diffed **through its JSON export**, which is what makes changed lines meaning
 Anything that is neither is reported as byte ranges rather than invented line numbers.
 
 ```bash
+# Just the paths that were actually rewritten, as a text file
+curl -OJ "http://localhost:3849/api/v1/changes/modified?from=42.00"
+
 # What changed between 42.00 and the live build
 curl "http://localhost:3849/api/v1/changes/list?from=42.00&kind=modified&pathFilter=FortniteGame/Content/Athena"
 

@@ -9,6 +9,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using CUE4Parse.FileProvider;
+using FortnitePorting.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
@@ -23,10 +24,28 @@ namespace FortnitePorting.Controllers
     /// asset properties.
     /// </summary>
     [ApiController]
+    [VersionAware]
     [Route("api/v1/search")]
     public class SearchController : ControllerBase
     {
-        private readonly IFileProvider _provider;
+        private readonly RequestBuildProvider _build;
+
+        /// <summary>
+        /// The build this request reads from: the live one, or the build named by <c>version</c>.
+        /// Read lazily on purpose — MVC creates the controller before the filter that resolves the
+        /// parameter runs, so a provider captured in the constructor would always be the live one.
+        /// </summary>
+        private IFileProvider _provider => _build.Provider;
+
+        /// <summary>Cache-key prefix that keeps an older build's content out of the live cache.</summary>
+        private string _scope => _build.CacheScope;
+
+        /// <summary>
+        /// Whether this request may use the shared byte/export caches. They are keyed by path alone
+        /// and are reset whenever the mounted file count changes, so they belong to the live build:
+        /// a request reading an older build bypasses them rather than poisoning or clearing them.
+        /// </summary>
+        private bool _contentCacheUsable => ContentCacheEnabled && _build.IsLive;
         private readonly ILogger<SearchController> _logger;
         private readonly IMemoryCache _cache;
 
@@ -99,9 +118,9 @@ namespace FortnitePorting.Controllers
         // (large enough to cover the AssetRegistry, which can be tens of MB).
         private const int MaxRawBytes = 64 * 1024 * 1024;
 
-        public SearchController(IFileProvider provider, ILogger<SearchController> logger, IMemoryCache cache)
+        public SearchController(RequestBuildProvider provider, ILogger<SearchController> logger, IMemoryCache cache)
         {
-            _provider = provider;
+            _build = provider;
             _logger = logger;
             _cache = cache;
         }
@@ -165,11 +184,11 @@ namespace FortnitePorting.Controllers
         private byte[]? GetFileBytes(string path)
         {
             EnsureBytesCacheVersion();
-            if (ContentCacheEnabled && BytesCache.TryGetValue(path, out var hit)) return hit;
+            if (_contentCacheUsable && BytesCache.TryGetValue(path, out var hit)) return hit;
 
             if (!_provider.TrySaveAsset(path, out var bytes) || bytes == null) return null;
 
-            var canCache = ContentCacheEnabled &&
+            var canCache = _contentCacheUsable &&
                            (ContentCacheUnbounded ||
                             (Interlocked.Read(ref _bytesCacheUsed) <= long.MaxValue - bytes.Length &&
                              Interlocked.Read(ref _bytesCacheUsed) + bytes.Length <= ContentCacheBudget));
@@ -197,7 +216,7 @@ namespace FortnitePorting.Controllers
 
         private void EnsureBytesCacheVersion()
         {
-            if (!ContentCacheEnabled) return;
+            if (!_contentCacheUsable) return;
 
             var fileCount = _provider.Files.Count;
             if (Volatile.Read(ref _bytesCacheFileCount) == fileCount) return;
@@ -276,7 +295,7 @@ namespace FortnitePorting.Controllers
             var hasExtFilter = extensions.Count > 0;
             var dirPrefix = NormalizeDirPrefix(dir);
             var pathCacheKey = string.Concat(
-                "sp|", _provider.Files.Count.ToString(), "|",
+                _scope, "sp|", _provider.Files.Count.ToString(), "|",
                 JsonConvert.SerializeObject(new
                 {
                     query = needle,
@@ -461,7 +480,7 @@ namespace FortnitePorting.Controllers
             // Result cache: an identical query returns instantly. The mounted file count is part of the
             // key, so a new build / newly decrypted paks transparently invalidate stale results.
             var cacheKey = string.Concat(
-                "sc|", _provider.Files.Count.ToString(), "|", needle, "|", caseSensitive ? "1" : "0",
+                _scope, "sc|", _provider.Files.Count.ToString(), "|", needle, "|", caseSensitive ? "1" : "0",
                 "|", dirPrefix ?? "", "|", pathContains ?? "", "|", extTrim,
                 "|", maxScan.ToString(), "|", maxResults.ToString(), "|", snippetsPerFile.ToString());
             if (_cache.TryGetValue(cacheKey, out string? cachedJson) && cachedJson != null)
@@ -966,7 +985,7 @@ namespace FortnitePorting.Controllers
         private string? TryLoadAssetJson(string path)
         {
             EnsureBytesCacheVersion();
-            if (ContentCacheEnabled && AssetJsonCache.TryGetValue(path, out var cachedJson))
+            if (_contentCacheUsable && AssetJsonCache.TryGetValue(path, out var cachedJson))
             {
                 return cachedJson.Length == 0 ? null : cachedJson;
             }
@@ -975,7 +994,7 @@ namespace FortnitePorting.Controllers
             {
                 if (!_provider.Files.TryGetValue(path, out var gameFile))
                 {
-                    if (ContentCacheEnabled) AssetJsonCache.TryAdd(path, string.Empty);
+                    if (_contentCacheUsable) AssetJsonCache.TryAdd(path, string.Empty);
                     return null;
                 }
 
@@ -983,7 +1002,7 @@ namespace FortnitePorting.Controllers
                 var exports = package.GetExports().ToList();
                 if (exports.Count == 0)
                 {
-                    if (ContentCacheEnabled) AssetJsonCache.TryAdd(path, string.Empty);
+                    if (_contentCacheUsable) AssetJsonCache.TryAdd(path, string.Empty);
                     return null;
                 }
 
@@ -1006,13 +1025,13 @@ namespace FortnitePorting.Controllers
                 }
 
                 var serialized = array.Count > 0 ? array.ToString(Formatting.Indented) : string.Empty;
-                if (ContentCacheEnabled) AssetJsonCache.TryAdd(path, serialized);
+                if (_contentCacheUsable) AssetJsonCache.TryAdd(path, serialized);
                 return serialized.Length == 0 ? null : serialized;
             }
             catch (Exception ex)
             {
                 _logger.LogDebug(ex, "Content search: failed to load {Path}", path);
-                if (ContentCacheEnabled) AssetJsonCache.TryAdd(path, string.Empty);
+                if (_contentCacheUsable) AssetJsonCache.TryAdd(path, string.Empty);
                 return null;
             }
         }

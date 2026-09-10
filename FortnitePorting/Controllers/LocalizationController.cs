@@ -14,10 +14,21 @@ namespace FortnitePorting.Controllers;
 /// find the namespace/key behind a string that is visible in game.
 /// </summary>
 [ApiController]
+[VersionAware]
 [Route("api/v1/localization")]
 public sealed class LocalizationController : ControllerBase
 {
-    private readonly IFileProvider _provider;
+    private readonly RequestBuildProvider _build;
+
+    /// <summary>
+    /// The build this request reads from: the live one, or the build named by <c>version</c>.
+    /// Read lazily on purpose — MVC creates the controller before the filter that resolves the
+    /// parameter runs, so a provider captured in the constructor would always be the live one.
+    /// </summary>
+    private IFileProvider _provider => _build.Provider;
+
+    /// <summary>Cache-key prefix that keeps an older build's content out of the live cache.</summary>
+    private string _scope => _build.CacheScope;
 
     // Cap regex evaluation per entry so one pathological pattern cannot dominate a scan.
     private static readonly TimeSpan RegexTimeout = TimeSpan.FromMilliseconds(250);
@@ -28,9 +39,9 @@ public sealed class LocalizationController : ControllerBase
     // Ceiling on matches collected before sorting, so a query like text=e cannot exhaust memory.
     private const int MaxCollectedMatches = 10_000;
 
-    public LocalizationController(IFileProvider provider)
+    public LocalizationController(RequestBuildProvider provider)
     {
-        _provider = provider;
+        _build = provider;
     }
 
     /// <summary>Lists the language codes the mounted build ships .locres files for.</summary>
@@ -117,7 +128,7 @@ public sealed class LocalizationController : ControllerBase
 
         foreach (var language in languages)
         {
-            foreach (var entry in LocalizationService.Load(_provider, language))
+            foreach (var entry in LocalizationService.Load(_provider, language, scope: _scope))
             {
                 if (ns != null && !entry.Key.Equals(ns, StringComparison.OrdinalIgnoreCase)) continue;
                 if (!entry.Value.TryGetValue(key, out var value)) continue;
@@ -215,7 +226,7 @@ public sealed class LocalizationController : ControllerBase
 
         foreach (var language in languages)
         {
-            foreach (var entry in LocalizationService.Load(_provider, language))
+            foreach (var entry in LocalizationService.Load(_provider, language, scope: _scope))
             {
                 foreach (var pair in entry.Value)
                 {
@@ -277,7 +288,7 @@ public sealed class LocalizationController : ControllerBase
         var translations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var language in languages)
         {
-            var table = LocalizationService.Load(_provider, language);
+            var table = LocalizationService.Load(_provider, language, scope: _scope);
             if (table.TryGetValue(ns, out var entries) && entries.TryGetValue(key, out var value))
             {
                 translations[language] = value;

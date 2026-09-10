@@ -6,12 +6,14 @@ using Newtonsoft.Json;
 namespace FortnitePorting.Controllers;
 
 /// <summary>
-/// Reads files out of a specific Fortnite build instead of only the newest one.
+/// The archive of Fortnite builds this instance can still read: what is kept, what is mounted, and
+/// what gets deleted.
 /// <para>
-/// Every build this instance has served keeps its manifest archived, and a manifest is all it takes to
-/// read that build again: the pak content itself is streamed from the Epic CDN, never copied here. So
-/// the previous build and the live build can both be read, and any build whose manifest is still
-/// retained can be brought back with <c>POST /api/v1/versions/load</c>.
+/// Every build served keeps its manifest archived, and a manifest is all it takes to read that build
+/// again: the pak content itself is streamed from the Epic CDN, never copied here. Reading files is
+/// not done here — the ordinary read endpoints (<c>/api/v1/export</c>, <c>/api/v1/search</c>,
+/// <c>/api/v1/paks</c>, <c>/api/v1/localization</c>, <c>/api/v1/pak</c> and <c>/api/v1/config</c>)
+/// take a <c>version</c> parameter and serve any build that is mounted.
 /// </para>
 /// </summary>
 [ApiController]
@@ -264,188 +266,6 @@ public sealed class VersionsController : ControllerBase
             message = deleted
                 ? "The archived data was deleted. Recorded changelists for this build were kept."
                 : "This build had no archived data left to delete."
-        });
-    }
-
-    /// <summary>
-    /// Lists the virtual file paths of one build.
-    /// </summary>
-    /// <param name="version">Build to list, e.g. <c>++Fortnite+Release-42.10-CL-57566230-Windows</c> or <c>previous</c>.</param>
-    /// <param name="q">Optional case-insensitive path filter.</param>
-    /// <param name="page">1-based page number.</param>
-    /// <param name="pageSize">Paths per page, from 1 to 10000.</param>
-    /// <param name="load">Mount the build when it is archived but not loaded. Default false.</param>
-    [HttpGet("files")]
-    public async Task<IActionResult> GetFiles([FromQuery] string version, [FromQuery] string? q = null,
-        [FromQuery] int page = 1, [FromQuery] int pageSize = 1000, [FromQuery] bool load = false,
-        CancellationToken cancellationToken = default)
-    {
-        var (lease, error) = await ResolveProviderAsync(version, load, cancellationToken);
-        if (error != null)
-        {
-            return error;
-        }
-
-        using var borrowed = lease!;
-
-        page = Math.Max(1, page);
-        pageSize = Math.Clamp(pageSize, 1, 10000);
-
-        var paths = borrowed.Provider.Files.Keys
-            .Where(p => q == null || p.Contains(q, StringComparison.OrdinalIgnoreCase))
-            .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        return Ok(new
-        {
-            build = _diffs.ResolveBuildVersion(version),
-            query = q,
-            totalFiles = paths.Count,
-            totalPages = (int)Math.Ceiling(paths.Count / (double)pageSize),
-            currentPage = page,
-            pageSize,
-            files = paths.Skip((page - 1) * pageSize).Take(pageSize).ToList()
-        });
-    }
-
-    /// <summary>
-    /// Returns one file's content as it is in a specific build.
-    /// </summary>
-    /// <param name="version">Build to read from, e.g. <c>++Fortnite+Release-42.10-CL-57566230-Windows</c>, <c>42.10</c>, <c>previous</c> or <c>latest</c>.</param>
-    /// <param name="path">Virtual file path, with or without its extension.</param>
-    /// <param name="raw">Return the stored bytes instead of the JSON export. Default false.</param>
-    /// <param name="load">Mount the build when it is archived but not loaded. Default false, so a request naming an unloaded build is refused rather than triggering a multi-minute mount.</param>
-    [HttpGet("file")]
-    public async Task<IActionResult> GetFile([FromQuery] string version, [FromQuery] string path,
-        [FromQuery] bool raw = false, [FromQuery] bool load = false, CancellationToken cancellationToken = default)
-    {
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            return BadRequest(new ProblemDetails
-            {
-                Title = "pathが必要です",
-                Detail = "path is required.",
-                Status = StatusCodes.Status400BadRequest
-            });
-        }
-
-        var (lease, error) = await ResolveProviderAsync(version, load, cancellationToken);
-        if (error != null)
-        {
-            return error;
-        }
-
-        using var borrowed = lease!;
-
-        var resolvedBuild = _diffs.ResolveBuildVersion(version)!;
-        var result = VersionedAssetReader.Read(borrowed.Provider, path, raw);
-
-        if (!result.Found)
-        {
-            return NotFound(new ProblemDetails
-            {
-                Title = "そのビルドにファイルがありません",
-                Detail = $"'{path}' does not exist in build '{resolvedBuild}'.",
-                Status = StatusCodes.Status404NotFound,
-                Extensions = { { "build", resolvedBuild }, { "requestedPath", path } }
-            });
-        }
-
-        Response.Headers["X-Build-Version"] = resolvedBuild;
-        Response.Headers["X-Build-Is-Live"] = _diffs.IsLive(resolvedBuild) ? "true" : "false";
-
-        if (raw && result.Bytes != null)
-        {
-            return File(result.Bytes, VersionedAssetReader.ContentTypeFor(result.ResolvedPath),
-                Path.GetFileName(result.ResolvedPath));
-        }
-
-        return result.Kind switch
-        {
-            "package" => Content(
-                JsonConvert.SerializeObject(result.Json, Formatting.Indented,
-                    new JsonSerializerSettings { ReferenceLoopHandling = ReferenceLoopHandling.Ignore }),
-                "application/json; charset=utf-8"),
-
-            "text" => Content(result.Text!, "text/plain; charset=utf-8"),
-
-            "binary" => File(result.Bytes!, VersionedAssetReader.ContentTypeFor(result.ResolvedPath),
-                Path.GetFileName(result.ResolvedPath)),
-
-            _ => StatusCode(StatusCodes.Status502BadGateway, new ProblemDetails
-            {
-                Title = "ファイルを読み取れませんでした",
-                Detail = result.Error ?? "The file could not be read from this build.",
-                Status = StatusCodes.Status502BadGateway,
-                Extensions = { { "build", resolvedBuild }, { "resolvedPath", result.ResolvedPath } }
-            })
-        };
-    }
-
-    /// <summary>
-    /// Resolves the build parameter to a mounted provider, mounting it first when
-    /// <paramref name="load"/> is set. Returns the error response to send when it cannot be served.
-    /// </summary>
-    private async Task<(BuildLease? Lease, IActionResult? Error)> ResolveProviderAsync(
-        string version, bool load, CancellationToken cancellationToken)
-    {
-        var resolved = _diffs.ResolveBuildVersion(version);
-        if (resolved == null)
-        {
-            return (null, UnknownBuild(version));
-        }
-
-        // These routes bypass the global reload gate so archived builds stay readable during an
-        // update, which means the live provider has to be checked here instead: it is being torn
-        // down and re-registered, so nothing may read from it.
-        if (_diffs.IsLive(resolved) && ProviderReloadGate.Instance.IsReloading)
-        {
-            return (null, ReloadingResponse(resolved));
-        }
-
-        if (_diffs.TryLease(resolved, out var lease))
-        {
-            return (lease, null);
-        }
-
-        if (!load)
-        {
-            return (null, StatusCode(StatusCodes.Status409Conflict, new ProblemDetails
-            {
-                Title = "そのビルドは読み込まれていません",
-                Detail = _historical.CanLoad(resolved)
-                    ? $"Build '{resolved}' is archived but not loaded. Re-send with load=true, or mount it first with POST /api/v1/versions/load?version={Uri.EscapeDataString(resolved)}."
-                    : $"Build '{resolved}' has no archived data left; its files cannot be read. Its recorded changelists are still available under /api/v1/changes.",
-                Status = StatusCodes.Status409Conflict,
-                Extensions = { { "build", resolved }, { "loadable", _historical.CanLoad(resolved) } }
-            }));
-        }
-
-        try
-        {
-            return (await _historical.LeaseAsync(resolved, cancellationToken), null);
-        }
-        catch (InvalidOperationException ex)
-        {
-            return (null, NotFound(new ProblemDetails
-            {
-                Title = "アーカイブされたビルドがありません",
-                Detail = ex.Message,
-                Status = StatusCodes.Status404NotFound
-            }));
-        }
-    }
-
-    private IActionResult ReloadingResponse(string build)
-    {
-        Response.Headers.RetryAfter = "30";
-        return StatusCode(StatusCodes.Status503ServiceUnavailable, new ProblemDetails
-        {
-            Title = "ライブビルドを再読み込み中です",
-            Detail = $"Build '{build}' is the live one and is being reloaded right now. Retry shortly, " +
-                     "or name an archived build instead.",
-            Status = StatusCodes.Status503ServiceUnavailable,
-            Extensions = { { "status", ProviderReloadGate.Instance.State } }
         });
     }
 

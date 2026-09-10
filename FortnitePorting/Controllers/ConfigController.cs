@@ -1,6 +1,7 @@
 using System.IO;
 using System.Linq;
 using CUE4Parse.FileProvider;
+using FortnitePorting.Services;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 
@@ -10,14 +11,25 @@ namespace FortnitePorting.Controllers;
 /// Reads text-based Unreal configuration files that are already loaded into the local VFS.
 /// </summary>
 [ApiController]
+[VersionAware]
 [Route("api/v1/config")]
 public sealed class ConfigController : ControllerBase
 {
-    private readonly IFileProvider _provider;
+    private readonly RequestBuildProvider _build;
 
-    public ConfigController(IFileProvider provider)
+    /// <summary>
+    /// The build this request reads from: the live one, or the build named by <c>version</c>.
+    /// Read lazily on purpose — MVC creates the controller before the filter that resolves the
+    /// parameter runs, so a provider captured in the constructor would always be the live one.
+    /// </summary>
+    private IFileProvider _provider => _build.Provider;
+
+    /// <summary>Cache-key prefix that keeps an older build's content out of the live cache.</summary>
+    private string _scope => _build.CacheScope;
+
+    public ConfigController(RequestBuildProvider provider)
     {
-        _provider = provider;
+        _build = provider;
     }
 
     /// <summary>Lists loaded .ini files under Config directories.</summary>

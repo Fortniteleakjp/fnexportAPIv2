@@ -1,6 +1,7 @@
 using System.IO;
 using System.Linq;
 using CUE4Parse.FileProvider;
+using FortnitePorting.Services;
 using CUE4Parse.FileProvider.Vfs;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -11,14 +12,25 @@ namespace FortnitePorting.Controllers;
 /// Public, paginated information about the PAK/UTOC archives currently mounted in this local API process.
 /// </summary>
 [ApiController]
+[VersionAware]
 [Route("api/v1/paks")]
 public sealed class PakController : ControllerBase
 {
-    private readonly IFileProvider _provider;
+    private readonly RequestBuildProvider _build;
 
-    public PakController(IFileProvider provider)
+    /// <summary>
+    /// The build this request reads from: the live one, or the build named by <c>version</c>.
+    /// Read lazily on purpose — MVC creates the controller before the filter that resolves the
+    /// parameter runs, so a provider captured in the constructor would always be the live one.
+    /// </summary>
+    private IFileProvider _provider => _build.Provider;
+
+    /// <summary>Cache-key prefix that keeps an older build's content out of the live cache.</summary>
+    private string _scope => _build.CacheScope;
+
+    public PakController(RequestBuildProvider provider)
     {
-        _provider = provider;
+        _build = provider;
     }
 
     /// <summary>Lists mounted PAK/UTOC archives.</summary>

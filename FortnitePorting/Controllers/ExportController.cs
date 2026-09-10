@@ -37,10 +37,21 @@ namespace FortnitePorting.Controllers
     /// (locres) data and the file listing inside PAK archives.
     /// </summary>
     [ApiController]
+    [VersionAware]
     [Route("api/v1/export")]
     public class ExportController : ControllerBase
     {
-        private readonly IFileProvider _provider;
+        private readonly RequestBuildProvider _build;
+
+        /// <summary>
+        /// The build this request reads from: the live one, or the build named by <c>version</c>.
+        /// Read lazily on purpose — MVC creates the controller before the filter that resolves the
+        /// parameter runs, so a provider captured in the constructor would always be the live one.
+        /// </summary>
+        private IFileProvider _provider => _build.Provider;
+
+        /// <summary>Cache-key prefix that keeps an older build's content out of the live cache.</summary>
+        private string _scope => _build.CacheScope;
         private readonly IMemoryCache _cache;
         private readonly ILogger<ExportController> _logger;
         private static readonly ConcurrentDictionary<string, ConcurrentDictionary<string, ConcurrentDictionary<string, string>>> _localizationCache = new(StringComparer.OrdinalIgnoreCase);
@@ -74,9 +85,9 @@ namespace FortnitePorting.Controllers
         }
 
         // IFileProvider is injected by the DI container.
-        public ExportController(IFileProvider provider, IMemoryCache cache, ILogger<ExportController> logger)
+        public ExportController(RequestBuildProvider provider, IMemoryCache cache, ILogger<ExportController> logger)
         {
-            _provider = provider;
+            _build = provider;
             _cache = cache;
             _logger = logger;
         }
@@ -119,7 +130,7 @@ namespace FortnitePorting.Controllers
 
             var mountSnapshot = GetMountSnapshot();
             var hotfixKeyPart = hotfix ? $"::hotfix={hotfixIndex?.Version ?? "unavailable"}" : string.Empty;
-            var cacheKey = $"export::{path}::image={image}::audio={audio}::lang={lang}::mount={mountSnapshot}{hotfixKeyPart}";
+            var cacheKey = $"{_scope}export::{path}::image={image}::audio={audio}::lang={lang}::mount={mountSnapshot}{hotfixKeyPart}";
             if (_cache.TryGetValue(cacheKey, out CacheEntry? cachedEntry) && cachedEntry is not null)
             {
                 _logger.LogInformation("Cache hit for key: \"{CacheKey}\"", cacheKey);
@@ -836,7 +847,7 @@ namespace FortnitePorting.Controllers
             var rowFilter = ParseRowFilter(rows);
             var cacheKey = string.Join("::", new[]
             {
-                "datatable",
+                _scope + "datatable",
                 path,
                 format,
                 separator.ToString(),
@@ -1411,8 +1422,8 @@ namespace FortnitePorting.Controllers
         {
             var mountSnapshot = GetMountSnapshot();
             var cacheKey = string.IsNullOrEmpty(chunkNo)
-                ? $"{lang}::mount={mountSnapshot}"
-                : $"{lang}::chunk{chunkNo}::mount={mountSnapshot}";
+                ? $"{_scope}{lang}::mount={mountSnapshot}"
+                : $"{_scope}{lang}::chunk{chunkNo}::mount={mountSnapshot}";
             if (_localizationCache.TryGetValue(cacheKey, out var cachedData))
             {
                 return cachedData;
@@ -1451,7 +1462,7 @@ namespace FortnitePorting.Controllers
                     })
                     .ToList();
                 // The fallback prefers the per-language cache
-                cacheKey = $"{lang}::mount={mountSnapshot}";
+                cacheKey = $"{_scope}{lang}::mount={mountSnapshot}";
                 if (_localizationCache.TryGetValue(cacheKey, out cachedData))
                 {
                     return cachedData;

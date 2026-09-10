@@ -127,6 +127,126 @@ public sealed class ChangesController : ControllerBase
     }
 
     /// <summary>
+    /// Returns a file listing only the paths that were actually rewritten between two builds.
+    /// <para>
+    /// This is the intersection of the two builds' path lists with the unchanged files taken out:
+    /// files that only exist in the newer build (added) and files that only exist in the older one
+    /// (removed) are both excluded, so every path in the response exists in both builds and has
+    /// different content in each.
+    /// </para>
+    /// </summary>
+    /// <param name="from">Older build, e.g. <c>++Fortnite+Release-42.00-CL-56878558-Windows</c>, <c>42.00</c> or <c>previous</c>.</param>
+    /// <param name="to">Newer build. Defaults to the live build.</param>
+    /// <param name="pathFilter">Only include paths containing this fragment.</param>
+    /// <param name="verifiedOnly">Include only paths whose rewrite was confirmed by hashing both copies. Default false.</param>
+    /// <param name="format"><c>text</c> for one path per line (default) or <c>json</c> for the list plus its metadata.</param>
+    /// <param name="download">Send the text form as a file attachment. Default true.</param>
+    [HttpGet("modified")]
+    public IActionResult GetModifiedPaths([FromQuery] string from, [FromQuery] string? to = null,
+        [FromQuery] string? pathFilter = null, [FromQuery] bool verifiedOnly = false,
+        [FromQuery] string format = "text", [FromQuery] bool download = true)
+    {
+        var (fromBuild, toBuild, error) = ResolvePair(from, to);
+        if (error != null)
+        {
+            return error;
+        }
+
+        var diff = _diffs.GetOrComposeDiff(fromBuild!, toBuild!);
+        if (diff == null)
+        {
+            return NotFound(new ProblemDetails
+            {
+                Title = "変更リストが記録されていません",
+                Detail = $"No changelist connects '{fromBuild}' to '{toBuild}'. " +
+                         "Compute one with POST /api/v1/changes/compute (both builds have to be readable for that).",
+                Status = StatusCodes.Status404NotFound,
+                Extensions = { { "from", fromBuild! }, { "to", toBuild! } }
+            });
+        }
+
+        // Only Modified survives: Added exists in the newer build alone, Removed in the older one
+        // alone, and Unverified is never recorded as an entry.
+        var entries = diff.Entries.Where(e => e.Kind == BuildChangeKind.Modified);
+
+        if (verifiedOnly)
+        {
+            // A quick comparison infers a rewrite from the size changing. That is sound, but only an
+            // entry carrying both hashes was actually read and compared.
+            entries = entries.Where(e => e.OldHash != null && e.NewHash != null);
+        }
+
+        if (!string.IsNullOrWhiteSpace(pathFilter))
+        {
+            entries = entries.Where(e => e.Path.Contains(pathFilter, StringComparison.OrdinalIgnoreCase));
+        }
+
+        var paths = entries
+            .Select(e => e.Path)
+            .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        // The same-size files a quick comparison never hashed are the one thing that can make this list
+        // short, so the count travels with the response instead of being left implicit.
+        Response.Headers["X-Changes-Mode"] = diff.Mode;
+        Response.Headers["X-Changes-Modified"] = paths.Count.ToString();
+        Response.Headers["X-Changes-Unverified"] = diff.UnverifiedCount.ToString();
+
+        if (string.Equals(format, "json", StringComparison.OrdinalIgnoreCase))
+        {
+            return Ok(new
+            {
+                from = fromBuild,
+                to = toBuild,
+                mode = diff.Mode,
+                via = diff.Via,
+                computedUtc = diff.ComputedUtc,
+                filesInFrom = diff.TotalFilesFrom,
+                filesInTo = diff.TotalFilesTo,
+                modified = paths.Count,
+                excludedAdded = diff.AddedCount,
+                excludedRemoved = diff.RemovedCount,
+                unverifiedSameSize = diff.UnverifiedCount,
+                complete = diff.UnverifiedCount == 0 && !diff.Truncated,
+                note = diff.UnverifiedCount == 0
+                    ? "Every file present in both builds was compared."
+                    : $"{diff.UnverifiedCount} file(s) kept the same size and were never hashed, so a rewrite " +
+                      "that did not change the size is not in this list. Re-run POST /api/v1/changes/compute " +
+                      "with mode=full (scoped by pathFilter) to resolve them.",
+                paths
+            });
+        }
+
+        var body = paths.Count > 0 ? string.Join('\n', paths) + '\n' : string.Empty;
+
+        if (!download)
+        {
+            return Content(body, "text/plain; charset=utf-8");
+        }
+
+        var name = $"modified_{Sanitize(fromBuild!)}_to_{Sanitize(toBuild!)}.txt";
+        return File(System.Text.Encoding.UTF8.GetBytes(body), "text/plain; charset=utf-8", name);
+    }
+
+    /// <summary>Turns a build version into a file name that is safe on every platform.</summary>
+    private static string Sanitize(string buildVersion)
+    {
+        var (version, changelist) = BuildHistoryStore.SplitBuildVersion(buildVersion);
+        if (!string.IsNullOrEmpty(version))
+        {
+            return string.IsNullOrEmpty(changelist) ? version : $"{version}-CL-{changelist}";
+        }
+
+        var safe = buildVersion;
+        foreach (var c in Path.GetInvalidFileNameChars())
+        {
+            safe = safe.Replace(c, '_');
+        }
+
+        return safe.Replace('+', '_');
+    }
+
+    /// <summary>
     /// Returns the lines that changed inside one file between two builds. Text files are diffed as
     /// they are; a <c>.uasset</c>/<c>.umap</c> is diffed through its JSON export, which is what makes
     /// "changed lines" meaningful for an asset. Both builds have to be readable.
