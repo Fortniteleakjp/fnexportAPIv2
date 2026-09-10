@@ -41,6 +41,34 @@ public sealed class BuildHistoryIndex
     public List<ArchivedBuild> Builds { get; set; } = [];
 }
 
+/// <summary>
+/// AES keys supplied for an archived build. Needed for a build whose manifest was imported rather
+/// than served by this instance: Fortnite rotates its keys every build and the live key APIs only
+/// publish the current ones, so an imported manifest has no way to obtain the keys it needs.
+/// </summary>
+public sealed class ArchivedKeysRequest
+{
+    /// <summary>The build's main key, registered against the all-zero GUID.</summary>
+    public string? MainKey { get; set; }
+
+    /// <summary>Per-pak keys, in the same shape the AES APIs use.</summary>
+    public List<DynamicKey>? DynamicKeys { get; set; }
+
+    /// <summary>Raw GUID → key pairs, as an alternative to the two fields above.</summary>
+    public Dictionary<string, string>? Keys { get; set; }
+}
+
+/// <summary>How much of a build actually mounted — what makes a comparison trustworthy or not.</summary>
+/// <param name="Files">Virtual files the build exposes.</param>
+/// <param name="MountedVfs">Containers that mounted.</param>
+/// <param name="UnmountedVfs">Containers that did not mount, almost always for want of their AES key.</param>
+/// <param name="KeysRequired">Distinct encryption GUIDs still missing.</param>
+public readonly record struct MountHealth(int Files, int MountedVfs, int UnmountedVfs, int KeysRequired)
+{
+    /// <summary>True when every container mounted, so the file list is the build's real one.</summary>
+    public bool IsComplete => UnmountedVfs == 0;
+}
+
 /// <summary>How one virtual file changed between two builds.</summary>
 public enum BuildChangeKind
 {
@@ -117,6 +145,12 @@ public sealed class BuildDiff
 
     public int TotalFilesFrom { get; set; }
     public int TotalFilesTo { get; set; }
+
+    /// <summary>Containers of the older build that never mounted when it was compared.</summary>
+    public int UnmountedVfsFrom { get; set; }
+
+    /// <summary>Containers of the newer build that never mounted when it was compared.</summary>
+    public int UnmountedVfsTo { get; set; }
 
     public int AddedCount { get; set; }
     public int RemovedCount { get; set; }

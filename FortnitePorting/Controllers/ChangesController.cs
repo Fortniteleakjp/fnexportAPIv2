@@ -13,6 +13,11 @@ namespace FortnitePorting.Controllers;
 /// extended through the new build at the same time, so a v40 → v41 record plus a fresh v41 → v42
 /// record yields a v40 → v42 record even after v40's and v41's own data is gone.
 /// </para>
+/// <para>
+/// An instance that never lived through the update can still answer: when the pair was not recorded
+/// but both builds are mounted, the comparison runs inside the request and is recorded on the way
+/// out. Comparing two mounted builds only intersects their file indexes, so nothing is downloaded.
+/// </para>
 /// </summary>
 [ApiController]
 [Route("api/v1/changes")]
@@ -55,10 +60,11 @@ public sealed class ChangesController : ControllerBase
     /// <param name="pathFilter">Only return paths starting with this prefix.</param>
     /// <param name="page">1-based page number.</param>
     /// <param name="pageSize">Entries per page, from 1 to 10000.</param>
+    /// <param name="force">Compare even when a container is readable in only one of the builds. Default false.</param>
     [HttpGet("list")]
     public IActionResult GetChangelist([FromQuery] string from, [FromQuery] string? to = null,
         [FromQuery] string? kind = null, [FromQuery] string? pathFilter = null,
-        [FromQuery] int page = 1, [FromQuery] int pageSize = 500)
+        [FromQuery] int page = 1, [FromQuery] int pageSize = 500, [FromQuery] bool force = false)
     {
         var (fromBuild, toBuild, error) = ResolvePair(from, to);
         if (error != null)
@@ -66,20 +72,13 @@ public sealed class ChangesController : ControllerBase
             return error;
         }
 
-        var diff = _diffs.GetOrComposeDiff(fromBuild!, toBuild!);
-        if (diff == null)
+        var (diff, diffError) = ResolveDiff(fromBuild!, toBuild!, force);
+        if (diffError != null)
         {
-            return NotFound(new ProblemDetails
-            {
-                Title = "変更リストが記録されていません",
-                Detail = $"No changelist connects '{fromBuild}' to '{toBuild}'. " +
-                         "Compute one with POST /api/v1/changes/compute (both builds have to be readable for that).",
-                Status = StatusCodes.Status404NotFound,
-                Extensions = { { "from", fromBuild! }, { "to", toBuild! } }
-            });
+            return diffError;
         }
 
-        var entries = diff.Entries.AsEnumerable();
+        var entries = diff!.Entries.AsEnumerable();
 
         if (!string.IsNullOrWhiteSpace(kind))
         {
@@ -141,10 +140,11 @@ public sealed class ChangesController : ControllerBase
     /// <param name="verifiedOnly">Include only paths whose rewrite was confirmed by hashing both copies. Default false.</param>
     /// <param name="format"><c>text</c> for one path per line (default) or <c>json</c> for the list plus its metadata.</param>
     /// <param name="download">Send the text form as a file attachment. Default true.</param>
+    /// <param name="force">Compare even when a container is readable in only one of the builds. Default false.</param>
     [HttpGet("modified")]
     public IActionResult GetModifiedPaths([FromQuery] string from, [FromQuery] string? to = null,
         [FromQuery] string? pathFilter = null, [FromQuery] bool verifiedOnly = false,
-        [FromQuery] string format = "text", [FromQuery] bool download = true)
+        [FromQuery] string format = "text", [FromQuery] bool download = true, [FromQuery] bool force = false)
     {
         var (fromBuild, toBuild, error) = ResolvePair(from, to);
         if (error != null)
@@ -152,22 +152,15 @@ public sealed class ChangesController : ControllerBase
             return error;
         }
 
-        var diff = _diffs.GetOrComposeDiff(fromBuild!, toBuild!);
-        if (diff == null)
+        var (diff, diffError) = ResolveDiff(fromBuild!, toBuild!, force);
+        if (diffError != null)
         {
-            return NotFound(new ProblemDetails
-            {
-                Title = "変更リストが記録されていません",
-                Detail = $"No changelist connects '{fromBuild}' to '{toBuild}'. " +
-                         "Compute one with POST /api/v1/changes/compute (both builds have to be readable for that).",
-                Status = StatusCodes.Status404NotFound,
-                Extensions = { { "from", fromBuild! }, { "to", toBuild! } }
-            });
+            return diffError;
         }
 
         // Only Modified survives: Added exists in the newer build alone, Removed in the older one
         // alone, and Unverified is never recorded as an entry.
-        var entries = diff.Entries.Where(e => e.Kind == BuildChangeKind.Modified);
+        var entries = diff!.Entries.Where(e => e.Kind == BuildChangeKind.Modified);
 
         if (verifiedOnly)
         {
@@ -402,7 +395,7 @@ public sealed class ChangesController : ControllerBase
     public IActionResult Compute([FromQuery] string from, [FromQuery] string? to = null,
         [FromQuery] string mode = "quick", [FromQuery] string? pathFilter = null,
         [FromQuery] int maxEntries = 200000, [FromQuery] int maxHashFiles = 5000,
-        [FromQuery] bool unloadWhenDone = true)
+        [FromQuery] bool unloadWhenDone = true, [FromQuery] bool force = false)
     {
         var (fromBuild, toBuild, error) = ResolvePair(from, to);
         if (error != null)
@@ -436,7 +429,7 @@ public sealed class ChangesController : ControllerBase
         }
 
         var job = _jobs.Start(fromBuild!, toBuild!, mode.ToLowerInvariant(), pathFilter,
-            Math.Clamp(maxEntries, 1, 500000), Math.Clamp(maxHashFiles, 1, 200000), unloadWhenDone);
+            Math.Clamp(maxEntries, 1, 500000), Math.Clamp(maxHashFiles, 1, 200000), unloadWhenDone, force);
 
         return Accepted(new
         {
@@ -487,6 +480,124 @@ public sealed class ChangesController : ControllerBase
     }
 
     // ------------------------------------------------------------ helpers
+
+    /// <summary>
+    /// Returns the changelist between two builds, computing it on the spot when it was never recorded
+    /// but both builds happen to be mounted right now.
+    /// <para>
+    /// A quick comparison of two mounted builds is an intersection of their file indexes: no chunk is
+    /// fetched and no build is mounted, so it belongs in the request rather than behind a job. The
+    /// result is recorded on the way out, so the next caller does not pay for it again. This is what
+    /// lets an instance that never lived through the update still answer for it.
+    /// </para>
+    /// </summary>
+    private (BuildDiff? Diff, IActionResult? Error) ResolveDiff(string fromBuild, string toBuild, bool force = false)
+    {
+        var recorded = _diffs.GetOrComposeDiff(fromBuild, toBuild);
+        if (recorded != null)
+        {
+            return (recorded, null);
+        }
+
+        if (_diffs.TryLease(fromBuild, out var fromLease))
+        {
+            using (fromLease)
+            {
+                if (_diffs.TryLease(toBuild, out var toLease))
+                {
+                    using (toLease)
+                    {
+                        // A build that did not fully mount exposes a fraction of its files, and
+                        // comparing that would claim most of the game changed.
+                        var problem = force
+                            ? null
+                            : _diffs.DescribeComparisonProblem(fromBuild, fromLease.Provider,
+                                toBuild, toLease.Provider);
+                        if (problem != null)
+                        {
+                            return (null, StatusCode(StatusCodes.Status409Conflict, new ProblemDetails
+                            {
+                                Title = "片方のビルドでしか読めないPAKがあります",
+                                Detail = problem,
+                                Status = StatusCodes.Status409Conflict,
+                                Extensions =
+                                {
+                                    { "from", fromBuild },
+                                    { "to", toBuild },
+                                    { "compareAnyway", "add force=true to this request" },
+                                    { "orComputeAnyway", ComputeUrl(fromBuild, toBuild) + "&force=true" }
+                                }
+                            }));
+                        }
+
+                        var computed = _diffs.Compute(fromLease.Provider, toLease.Provider, fromBuild, toBuild);
+                        Response.Headers["X-Changes-Computed"] = "true";
+
+                        // A forced comparison is known to be distorted by the containers only one side
+                        // could read, so it answers this request but is never written to the archive
+                        // where later callers would take it for a sound record.
+                        if (force)
+                        {
+                            Response.Headers["X-Changes-Forced"] = "true";
+                            return (computed, null);
+                        }
+
+                        _store.SaveDiff(computed);
+                        return (computed, null);
+                    }
+                }
+            }
+        }
+
+        return (null, NotRecorded(fromBuild, toBuild));
+    }
+
+    /// <summary>
+    /// The 404 for a pair that is neither recorded nor comparable right now. It names what is missing
+    /// and the exact call that fixes it, because the usual cause is simply that one of the two builds
+    /// is not mounted.
+    /// </summary>
+    private IActionResult NotRecorded(string fromBuild, string toBuild)
+    {
+        var missing = new[] { fromBuild, toBuild }.Where(NotMounted).ToList();
+        var mountable = missing.Where(b => _historical.CanLoad(b)).ToList();
+        var names = string.Join(" and ", missing.Select(b => "'" + b + "'"));
+
+        return NotFound(new ProblemDetails
+        {
+            Title = "変更リストが記録されていません",
+            Detail = $"No changelist connects '{fromBuild}' to '{toBuild}', and they cannot be compared " +
+                     $"right now because {names} " + (missing.Count == 1 ? "is" : "are") + " not mounted. " +
+                     (mountable.Count > 0
+                         ? "Mount " + (mountable.Count == 1 ? "it" : "them") +
+                           " and repeat this request: two mounted builds are compared on the spot."
+                         : "Their archived data is gone, so they can no longer be compared."),
+            Status = StatusCodes.Status404NotFound,
+            Extensions =
+            {
+                { "from", fromBuild },
+                { "to", toBuild },
+                { "notMounted", missing },
+                { "mountWith", mountable.Select(b => "POST /api/v1/versions/load?version=" + Uri.EscapeDataString(b)).ToList() },
+                { "orComputeInBackground", ComputeUrl(fromBuild, toBuild) }
+            }
+        });
+    }
+
+    /// <summary>True when this build is not mounted. Any lease taken to find out is released again.</summary>
+    private bool NotMounted(string buildVersion)
+    {
+        if (!_diffs.TryLease(buildVersion, out var lease))
+        {
+            return true;
+        }
+
+        lease.Dispose();
+        return false;
+    }
+
+    private static string ComputeUrl(string fromBuild, string toBuild)
+        => $"POST /api/v1/changes/compute?from={Uri.EscapeDataString(fromBuild)}&to={Uri.EscapeDataString(toBuild)}";
 
     private static object Describe(DiffJobService.DiffJob job) => new
     {

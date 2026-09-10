@@ -417,12 +417,35 @@ that archived manifest, the AES keys archived with it, and its chunk cache.
 | `POST /api/v1/versions/load?version=…` | Mounts a build from its archived manifest. |
 | `DELETE /api/v1/versions/unload?version=…` | Unmounts a build; its archived manifest is kept. |
 | `DELETE /api/v1/versions/data?version=…` | Deletes that build's manifest, keys and chunk cache. **Recorded changelists are kept.** |
+| `GET /api/v1/versions/keys?version=…` | Returns the AES keys archived for that build. |
+| `POST /api/v1/versions/keys?version=…` | Archives the AES keys of that build. **Required for an imported manifest** (see below). |
 
 If you already have a manifest file, you can import that build:
 
 ```bash
-curl -X POST "http://localhost:3849/api/v1/versions/import"   -F "file=@++Fortnite+Release-42.00-CL-56878558-Windows.manifest"
+curl -X POST "http://localhost:3849/api/v1/versions/import" \
+  -F "file=@++Fortnite+Release-42.00-CL-56878558-Windows.manifest"
 ```
+
+> **An imported build needs its AES keys supplied.**
+> Fortnite rotates its keys every build and the key APIs **only publish the current ones**. Keys are
+> archived automatically for a build this instance actually served, but an imported manifest has
+> none. Mounting it then leaves many paks locked and only a fraction of its files visible.
+>
+> What breaks a comparison is not a locked pak as such — the live build almost always has a few whose
+> keys Epic has not published yet. It is a pak that is **readable in one build and locked in the
+> other**: every file in it is then reported as added or removed when nothing about it changed. The
+> API detects that and refuses the comparison (`force=true` overrides it). A pak locked in both
+> builds appears in neither file list, so it is harmless and is not counted.
+>
+> ```bash
+> curl -X POST "http://localhost:3849/api/v1/versions/keys?version=42.00" \
+>   -H "Content-Type: application/json" \
+>   -d '{"mainKey":"0x...","dynamicKeys":[{"guid":"...","key":"0x..."}]}'
+> ```
+>
+> `GET /api/v1/versions/keys?version=…` shows what is archived. Supplying keys for a build that is
+> already mounted unmounts it, so the next mount picks them up.
 
 ### Reading an older build — the `version` parameter
 
@@ -471,6 +494,12 @@ changelist recorded** before the old build's data is deleted. Every record that 
 extended through the new one at the same time, so `v40→v41` plus `v41→v42` **automatically yields
 `v40→v42`** — which stays answerable long after v41's own data is gone.
 
+**An instance that never lived through the update can still answer.** When a pair was never recorded
+but both builds are **mounted**, the comparison runs inside the request and the result is recorded on
+the way out (the response carries `X-Changes-Computed: true`). Comparing two mounted builds only
+intersects their file indexes, so no chunk is downloaded. A `404` comes back only when one of the two
+is not mounted, and it names the call that mounts it.
+
 Files that did not change never appear in a record. That is what makes the composition sound: a file
 listed in only one of the two steps was left alone by the other, so that step's content is what carries
 through.
@@ -491,6 +520,9 @@ is diffed **through its JSON export**, which is what makes changed lines meaning
 Anything that is neither is reported as byte ranges rather than invented line numbers.
 
 ```bash
+# Mount the older build once (this takes a few minutes)
+curl -X POST "http://localhost:3849/api/v1/versions/load?version=42.00"
+
 # Just the paths that were actually rewritten, as a text file
 curl -OJ "http://localhost:3849/api/v1/changes/modified?from=42.00"
 

@@ -131,6 +131,85 @@ public sealed class BuildDiffService
             : await _historical.LeaseAsync(buildVersion, cancellationToken);
     }
 
+    /// <summary>
+    /// Reports how much of a build actually mounted. A build whose containers stayed locked exposes
+    /// only a fraction of its files, and comparing that against a fully mounted build produces a
+    /// changelist that looks like "the whole game was rewritten" — so this is checked before, not after.
+    /// </summary>
+    public static MountHealth Inspect(IFileProvider provider)
+    {
+        if (provider is not CUE4Parse.FileProvider.Vfs.AbstractVfsFileProvider vfs)
+        {
+            return new MountHealth(provider.Files.Count, 0, 0, 0);
+        }
+
+        return new MountHealth(provider.Files.Count, vfs.MountedVfs.Count, vfs.UnloadedVfs.Count, vfs.RequiredKeys.Count);
+    }
+
+    /// <summary>Names of the containers that mounted, and of those that did not.</summary>
+    private static (HashSet<string> Mounted, HashSet<string> Locked) ContainerNames(IFileProvider provider)
+    {
+        if (provider is not CUE4Parse.FileProvider.Vfs.AbstractVfsFileProvider vfs)
+        {
+            return (new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+                    new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+        }
+
+        return (vfs.MountedVfs.Select(x => x.Name).ToHashSet(StringComparer.OrdinalIgnoreCase),
+                vfs.UnloadedVfs.Select(x => x.Name).ToHashSet(StringComparer.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// Returns the reason two builds cannot be compared, or null when they can.
+    /// <para>
+    /// What breaks a comparison is not a locked container as such — the live build almost always has a
+    /// few whose keys Epic has not published yet — but a container that is <em>readable in one build
+    /// and locked in the other</em>. Every file in it then looks added or removed when nothing about it
+    /// changed. A container locked on both sides contributes nothing to either file list and is
+    /// therefore harmless, which is why the check is pairwise rather than per build.
+    /// </para>
+    /// </summary>
+    public string? DescribeComparisonProblem(string fromBuild, IFileProvider fromProvider,
+        string toBuild, IFileProvider toProvider)
+    {
+        var (fromMounted, fromLocked) = ContainerNames(fromProvider);
+        var (toMounted, toLocked) = ContainerNames(toProvider);
+
+        var lockedOnlyInFrom = fromLocked.Where(toMounted.Contains).OrderBy(x => x).ToList();
+        var lockedOnlyInTo = toLocked.Where(fromMounted.Contains).OrderBy(x => x).ToList();
+
+        var total = lockedOnlyInFrom.Count + lockedOnlyInTo.Count;
+        if (total == 0)
+        {
+            return null;
+        }
+
+        var detail = new List<string>();
+        if (lockedOnlyInFrom.Count > 0)
+        {
+            detail.Add($"{lockedOnlyInFrom.Count} readable in '{toBuild}' but locked in '{fromBuild}' " +
+                       $"({Sample(lockedOnlyInFrom)})");
+        }
+
+        if (lockedOnlyInTo.Count > 0)
+        {
+            detail.Add($"{lockedOnlyInTo.Count} readable in '{fromBuild}' but locked in '{toBuild}' " +
+                       $"({Sample(lockedOnlyInTo)})");
+        }
+
+        return $"{total} container(s) can be read in one of these builds but not the other: " +
+               string.Join("; ", detail) + ". Every file in them would be reported as added or removed " +
+               "even though nothing about it changed. Fortnite rotates its AES keys every build and the " +
+               "key APIs only publish the current ones, so a build whose manifest was imported needs its " +
+               "keys supplied with POST /api/v1/versions/keys?version=<build>. Containers locked in both " +
+               "builds are fine and are not counted here.";
+
+        static string Sample(List<string> names)
+            => names.Count <= 3
+                ? string.Join(", ", names)
+                : string.Join(", ", names.Take(3)) + $", +{names.Count - 3} more";
+    }
+
     // ------------------------------------------------------------ changelist computation
 
     /// <summary>Progress of a running changelist computation.</summary>
@@ -174,7 +253,9 @@ public sealed class BuildDiffService
             PathFilter = pathFilter,
             ComputedUtc = DateTime.UtcNow,
             TotalFilesFrom = fromFiles.Count,
-            TotalFilesTo = toFiles.Count
+            TotalFilesTo = toFiles.Count,
+            UnmountedVfsFrom = Inspect(from).UnmountedVfs,
+            UnmountedVfsTo = Inspect(to).UnmountedVfs
         };
 
         var entries = new List<BuildChangeEntry>();
@@ -520,6 +601,14 @@ public sealed class BuildDiffService
         try
         {
             using var oldBuild = await LeaseAsync(previousBuild, cancellationToken);
+
+            var problem = DescribeComparisonProblem(previousBuild, oldBuild.Provider, currentBuild, _liveProvider);
+            if (problem != null)
+            {
+                Console.WriteLine($"✗ Not recording the changelist {previousBuild} → {currentBuild}: {problem}");
+                Console.WriteLine("  Supply the missing keys and run POST /api/v1/changes/compute to record it later.");
+                return;
+            }
 
             var diff = Compute(oldBuild.Provider, _liveProvider, previousBuild, currentBuild,
                 mode: "quick", cancellationToken: cancellationToken);

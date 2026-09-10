@@ -22,6 +22,13 @@ public sealed class DiffJobService
         public required string Mode { get; init; }
         public string? PathFilter { get; init; }
 
+        /// <summary>Set when the caller chose to compare a build that did not fully mount.</summary>
+        public bool Force { get; init; }
+
+        /// <summary>How much of each build mounted, once the job has looked.</summary>
+        public MountHealth? FromHealth { get; set; }
+        public MountHealth? ToHealth { get; set; }
+
         /// <summary><c>queued</c>, <c>running</c>, <c>done</c>, <c>failed</c> or <c>cancelled</c>.</summary>
         public string Status { get; set; } = "queued";
 
@@ -56,7 +63,7 @@ public sealed class DiffJobService
 
     /// <summary>Starts a computation and returns immediately with the job to poll.</summary>
     public DiffJob Start(string fromBuild, string toBuild, string mode, string? pathFilter,
-        int maxEntries, int maxHashFiles, bool unloadWhenDone)
+        int maxEntries, int maxHashFiles, bool unloadWhenDone, bool force = false)
     {
         var job = new DiffJob
         {
@@ -64,7 +71,8 @@ public sealed class DiffJobService
             FromBuild = fromBuild,
             ToBuild = toBuild,
             Mode = mode,
-            PathFilter = pathFilter
+            PathFilter = pathFilter,
+            Force = force
         };
 
         _jobs[job.Id] = job;
@@ -98,6 +106,24 @@ public sealed class DiffJobService
             // room for something else while it is being read.
             using var from = await _diffs.LeaseAsync(job.FromBuild, token);
             using var to = await _diffs.LeaseAsync(job.ToBuild, token);
+
+            job.FromHealth = BuildDiffService.Inspect(from.Provider);
+            job.ToHealth = BuildDiffService.Inspect(to.Provider);
+
+            // A build whose containers stayed locked exposes a fraction of its files, and comparing
+            // that produces a changelist claiming most of the game changed. Failing here is the whole
+            // point: a wrong changelist looks exactly like a right one.
+            if (!job.Force)
+            {
+                var problem = _diffs.DescribeComparisonProblem(job.FromBuild, from.Provider,
+                    job.ToBuild, to.Provider);
+                if (problem != null)
+                {
+                    job.Status = "failed";
+                    job.Error = problem + " Re-run with force=true to compare it anyway.";
+                    return;
+                }
+            }
 
             var diff = await Task.Run(() => _diffs.Compute(from.Provider, to.Provider, job.FromBuild,
                 job.ToBuild, job.Mode, job.PathFilter, maxEntries, maxHashFiles, job.Progress, token), token);
@@ -144,6 +170,8 @@ public sealed class DiffJobService
         truncated = diff.Truncated,
         totalFilesFrom = diff.TotalFilesFrom,
         totalFilesTo = diff.TotalFilesTo,
+        unmountedVfsFrom = diff.UnmountedVfsFrom,
+        unmountedVfsTo = diff.UnmountedVfsTo,
         added = diff.AddedCount,
         removed = diff.RemovedCount,
         modified = diff.ModifiedCount,
