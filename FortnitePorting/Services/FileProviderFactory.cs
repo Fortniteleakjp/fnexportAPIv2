@@ -18,6 +18,10 @@ public static class FileProviderFactory
     {
         public required DefaultFileProvider FileProvider { get; init; }
         public required ManifestService ManifestService { get; init; }
+        public required BuildHistoryStore BuildHistory { get; init; }
+        public required HistoricalBuildService HistoricalBuilds { get; init; }
+        public required BuildDiffService BuildDiffs { get; init; }
+        public required DiffJobService DiffJobs { get; init; }
     }
 
     /// <summary>
@@ -58,8 +62,11 @@ public static class FileProviderFactory
             versions: new VersionContainer(EGame.GAME_UE6_0), 
             pathComparer: StringComparer.OrdinalIgnoreCase);
 
-        // 6. Initialize the ManifestService
-        var manifestService = new ManifestService(provider, chunkCacheDir, zlibng, rootDir);
+        // 6. Initialize the ManifestService. The build history store is created first because the
+        //    manifest of every build is archived the moment it is loaded — that archive is what lets
+        //    an older build still be read after an update replaces it.
+        var buildHistory = new BuildHistoryStore(rootDir);
+        var manifestService = new ManifestService(provider, chunkCacheDir, zlibng, rootDir, buildHistory);
         manifestService.InitializeAsync().GetAwaiter().GetResult();
 
         if (!manifestService.IsReady)
@@ -99,17 +106,82 @@ public static class FileProviderFactory
         // rebuild on the first poll; the poll only rebuilds when the build actually changes).
         manifestService.MarkCurrentBuildApplied();
 
-        // 10. Print statistics
+        // 10. Wire up the build history: archived builds can be mounted alongside the live one, and
+        //     every update records what changed against the build it replaced before that build's
+        //     data is dropped.
+        var historicalBuilds = new HistoricalBuildService(buildHistory, zlibng, provider, manifestService);
+        var buildDiffs = new BuildDiffService(buildHistory, historicalBuilds, provider, manifestService);
+        var diffJobs = new DiffJobService(buildDiffs, buildHistory);
+        WireBuildHistory(manifestService, historicalBuilds, buildDiffs);
+
+        // 11. Print statistics
         PrintStatistics(provider);
 
-        // 11. Start polling only now that the provider is fully initialized — avoids any race between
+        // 12. Start polling only now that the provider is fully initialized — avoids any race between
         // a poll-triggered mount/mapping-swap and the remaining startup steps above.
         manifestService.StartPolling();
 
         return new InitializationResult
         {
             FileProvider = provider,
-            ManifestService = manifestService
+            ManifestService = manifestService,
+            BuildHistory = buildHistory,
+            HistoricalBuilds = historicalBuilds,
+            BuildDiffs = buildDiffs,
+            DiffJobs = diffJobs
+        };
+    }
+
+    /// <summary>Guards against two changelist recordings overlapping (each mounts a whole extra build).</summary>
+    private static int _recordingChangelist;
+
+    /// <summary>
+    /// Connects the manifest poller to the build history: keep the live build's AES keys archived, and
+    /// record the changelist after every update.
+    /// </summary>
+    private static void WireBuildHistory(ManifestService manifestService,
+        HistoricalBuildService historicalBuilds, BuildDiffService buildDiffs)
+    {
+        // Fortnite rotates its keys every build and the live key APIs only serve the current ones, so
+        // an archived manifest without its keys would parse but decrypt nothing. Refreshed on every
+        // poll because keys for paks that were still locked at mount time arrive later.
+        manifestService.PollCompleted = () =>
+        {
+            try
+            {
+                historicalBuilds.ArchiveLiveKeys(manifestService.GameBuild);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Could not archive the live AES keys: {ex.Message}");
+            }
+        };
+
+        manifestService.PollCompleted.Invoke();
+
+        manifestService.BuildUpdated = (previousBuild, currentBuild) =>
+        {
+            // Recording mounts the replaced build, which takes minutes. Run it off the poll thread so
+            // the next poll — and with it the mapping refresh — is not held up behind it.
+            if (Interlocked.CompareExchange(ref _recordingChangelist, 1, 0) != 0)
+            {
+                Console.WriteLine("A changelist recording is already running; skipping this one.");
+                return Task.CompletedTask;
+            }
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await buildDiffs.RecordUpdateAsync(previousBuild, currentBuild);
+                }
+                finally
+                {
+                    Interlocked.Exchange(ref _recordingChangelist, 0);
+                }
+            });
+
+            return Task.CompletedTask;
         };
     }
 

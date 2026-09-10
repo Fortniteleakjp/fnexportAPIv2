@@ -134,6 +134,9 @@ docker run -p 3849:3849 \
 | `HOTFIX_DISK_CACHE` | `true` | Set to `false` to disable the disk cache and download every time. |
 | `AESFINDER_PATH` | `D:\AesFinder-main\...\AesFinder.exe` | Path to the external AesFinder tool used by `/aes` (a `.exe`, a `.dll`, or a directory containing it). |
 | `AESFINDER_AUTO` | `true` | Background auto-extraction/submission of the MainAES key via AesFinder (**only acts while the main key is missing**; set `false` to disable). |
+| `BUILD_HISTORY_KEEP` | `2` | How many builds keep their manifest archived. The default `2` is "the current build plus the previous one"; anything older has its data deleted automatically on the next update (recorded changelists are kept). |
+| `HISTORICAL_BUILDS_MAX` | `1` | How many archived builds may be mounted at once. A mounted build costs a few GB, so the least recently used one is dropped when this is exceeded. |
+| `HISTORICAL_BUILD_IDLE_MINUTES` | `30` | How long a mounted archived build may sit unused before it is dropped. `0` disables the idle sweep. |
 | `AUTO_UPDATE` | (unset) | `true` = always update without asking, `false` = never contact GitHub, **unset = ask (y/n) at startup, but only when an update exists**. |
 | `UPDATE_CHECK_ONLY` | `false` | Report a newer release but never install it. |
 | `UPDATE_RESTART` | `true` | Relaunch after the swap. `false` swaps the files and leaves starting it to you. |
@@ -396,6 +399,92 @@ Example response (`/api/v1/search`):
 |---|---|
 | `GET /api/v1/build` | Returns the build currently served (`appliedBuild` / `appliedManifestId`), the build the manifest points at, the mounted VFS count, how many keys are still missing, and whether a rebuild is running (`reloading`). It keeps answering during a rebuild. |
 | `POST /api/v1/build/reload` | Rebuilds the provider from the newest manifest immediately instead of waiting for the ~30s poll. Other endpoints return `503` while it runs. |
+
+### Reading a specific build — `/api/v1/versions`
+
+Every build this instance serves keeps its **manifest archived**, so files can be read from **both the
+previous version and the newest one**.
+
+No pak content is copied here. A manifest addresses chunks on the Epic CDN, so **one ~10 MB file is all
+it takes** to read a whole build again. "Deleting an old version's data" therefore means deleting that
+archived manifest, the AES keys archived with it, and its chunk cache.
+
+| Method & path | Description |
+|---|---|
+| `GET /api/v1/versions` | Lists the known builds and whether each is still `readable` and currently `loaded`. |
+| `POST /api/v1/versions/import` | Imports a manifest file (uploaded, or `path=` for one already on the server), so a build this instance never served becomes readable and comparable. |
+| `POST /api/v1/versions/load?version=…` | Mounts a build from its archived manifest. |
+| `DELETE /api/v1/versions/unload?version=…` | Unmounts a build; its archived manifest is kept. |
+| `DELETE /api/v1/versions/data?version=…` | Deletes that build's manifest, keys and chunk cache. **Recorded changelists are kept.** |
+| `GET /api/v1/versions/files?version=…` | Lists that build's virtual file paths, paginated. |
+| `GET /api/v1/versions/file?version=…&path=…` | Returns **a file's content as it is in that build**. |
+
+`version` accepts any of:
+
+- the full build string — `++Fortnite+Release-42.10-CL-57566230-Windows`
+- the version alone — `42.10`
+- a changelist number — `57566230`
+- `latest` (the live build) or `previous` (the one before it)
+
+```bash
+# Read the file as it was in the previous version (only builds already mounted are served)
+curl "http://localhost:3849/api/v1/versions/file?version=%2B%2BFortnite%2BRelease-42.10-CL-57566230-Windows&path=FortniteGame/Config/DefaultGame.ini"
+```
+
+Only **already-loaded** builds are served by default; naming an unloaded one returns `409`. Add
+`load=true` to mount it first, which takes a few minutes for a whole build.
+
+If you already have a manifest file, you can import that build:
+
+```bash
+curl -X POST "http://localhost:3849/api/v1/versions/import"   -F "file=@++Fortnite+Release-42.00-CL-56878558-Windows.manifest"
+```
+
+### Changelists — `/api/v1/changes`
+
+The **exact changelist** between two builds: the file paths that were added, removed or modified, and
+the lines that changed inside one of them.
+
+When an update ships, the build that is about to be replaced is **compared against the new one and the
+changelist recorded** before the old build's data is deleted. Every record that ended at that build is
+extended through the new one at the same time, so `v40→v41` plus `v41→v42` **automatically yields
+`v40→v42`** — which stays answerable long after v41's own data is gone.
+
+Files that did not change never appear in a record. That is what makes the composition sound: a file
+listed in only one of the two steps was left alone by the other, so that step's content is what carries
+through.
+
+| Method & path | Description |
+|---|---|
+| `GET /api/v1/changes` | Lists the recorded changelists. |
+| `GET /api/v1/changes/list?from=…&to=…` | Returns the added, removed and modified file paths, composing the pair out of the recorded chain when it was never recorded directly. `to` defaults to the live build. |
+| `GET /api/v1/changes/file?from=…&to=…&path=…` | Returns **the lines that changed in one file**. `format=patch` returns unified-diff text. |
+| `POST /api/v1/changes/compute?from=…&to=…` | Computes and records a changelist as a background job; poll it with the returned `jobId`. |
+| `GET /api/v1/changes/jobs` / `GET /api/v1/changes/jobs/{id}` | Lists jobs, or one job's progress. |
+| `DELETE /api/v1/changes/jobs/{id}` | Cancels a running computation. |
+| `DELETE /api/v1/changes?from=…&to=…` | Deletes a recorded changelist. |
+
+**How "changed lines" are derived**: text (`.ini` and friends) is diffed as it is. A `.uasset`/`.umap`
+is diffed **through its JSON export**, which is what makes changed lines meaningful for an asset.
+Anything that is neither is reported as byte ranges rather than invented line numbers.
+
+```bash
+# What changed between 42.00 and the live build
+curl "http://localhost:3849/api/v1/changes/list?from=42.00&kind=modified&pathFilter=FortniteGame/Content/Athena"
+
+# The changed lines of one file, as a unified diff
+curl "http://localhost:3849/api/v1/changes/file?from=42.00&path=FortniteGame/Config/DefaultGame.ini&format=patch"
+```
+
+**`quick` versus `full`** (the `mode` of `POST /api/v1/changes/compute`):
+
+| Mode | What it looks at | What it tells you |
+|---|---|---|
+| `quick` (default) | Virtual path, file size and containing archive. Nothing is fetched from the CDN. | Every addition and removal **exactly**, and every modification whose size changed. Files that kept their exact size are reported as a **count of unverified files** rather than claimed unchanged. |
+| `full` | The above, plus reading and hashing both copies of every same-size file. | Modifications exactly as well — but each candidate is streamed from the CDN, so scope it with `pathFilter` and `maxHashFiles`. |
+
+The changelist recorded automatically on an update is a `quick` one. Run `full` with a `pathFilter`
+when you need certainty about a specific directory.
 
 ### FModel backup — `/api/v1/backup`
 

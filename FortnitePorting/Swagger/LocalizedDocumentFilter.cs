@@ -22,7 +22,9 @@ public sealed class LocalizedDocumentFilter : IDocumentFilter
         ["Assets"] = ("アセット間のハード参照・ソフト参照の解析。", "Hard and soft reference inspection between assets."),
         ["Backup"] = ("現在のビルドのファイル一覧をFModelの.fbkp形式で配信。", "Serves the mounted build's file list as an FModel .fbkp backup."),
         ["Localization"] = ("locresのKey解決と表示文字列からの逆引き。", "Key resolution and reverse lookup over the .locres tables."),
-        ["Update"] = ("GitHubリリースとの比較と、最新版への自動更新。", "Comparison against GitHub releases and self-update to the newest one.")
+        ["Update"] = ("GitHubリリースとの比較と、最新版への自動更新。", "Comparison against GitHub releases and self-update to the newest one."),
+        ["Versions"] = ("過去のビルドのアーカイブと、ビルドを指定したファイル読み取り。", "The archive of previously served builds, and reading files from a build you name."),
+        ["Changes"] = ("ビルド間の正確な変更リスト（ファイルパスと変わった行）。", "The exact changelist between two builds: file paths and changed lines.")
     };
 
     public void Apply(OpenApiDocument document, DocumentFilterContext context)

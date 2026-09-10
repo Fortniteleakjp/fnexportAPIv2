@@ -108,6 +108,13 @@ Console.WriteLine("\n✓ FileProvider initialization complete\n");
 builder.Services.AddSingleton<IFileProvider>(initializationResult.FileProvider);
 builder.Services.AddSingleton(initializationResult.ManifestService);
 
+// Build history: the archive of previously served builds, the on-demand mounting of those builds, and
+// the changelists recorded between them (see /api/v1/versions and /api/v1/changes).
+builder.Services.AddSingleton(initializationResult.BuildHistory);
+builder.Services.AddSingleton(initializationResult.HistoricalBuilds);
+builder.Services.AddSingleton(initializationResult.BuildDiffs);
+builder.Services.AddSingleton(initializationResult.DiffJobs);
+
 var app = builder.Build();
 
 // Register the caches that hold data derived from the mounted build. They are all cleared whenever the
@@ -147,7 +154,11 @@ app.Use(async (context, next) =>
     var path = context.Request.Path.Value ?? string.Empty;
     var exempt = path.Equals("/", StringComparison.Ordinal)
                  || path.StartsWith("/swagger", StringComparison.OrdinalIgnoreCase)
-                 || path.StartsWith("/api/v1/build", StringComparison.OrdinalIgnoreCase);
+                 || path.StartsWith("/api/v1/build", StringComparison.OrdinalIgnoreCase)
+                 // Recorded changelists are files on disk and archived builds have their own
+                 // providers, so neither is affected by the live provider being torn down.
+                 || path.StartsWith("/api/v1/changes", StringComparison.OrdinalIgnoreCase)
+                 || path.StartsWith("/api/v1/versions", StringComparison.OrdinalIgnoreCase);
 
     if (exempt)
     {
