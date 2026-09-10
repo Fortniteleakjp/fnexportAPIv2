@@ -306,17 +306,19 @@ public sealed class HistoricalBuildService : IAsyncDisposable
                 versions: new VersionContainer(EGame.GAME_UE6_0),
                 pathComparer: StringComparer.OrdinalIgnoreCase);
 
-            // The archived keys are submitted before mounting, so paks whose key was rotated away from
-            // the live APIs still decrypt. VfsLoader additionally submits the current live keys, which
-            // is harmless (extra keys are simply unused) and covers builds archived before this feature.
-            SubmitArchivedKeys(provider, buildVersion);
-
             // Old builds deserialize against the mapping of the build that shipped them; we only have
             // the live one. It is close enough for path/size/content reads, and the alternative — no
             // mapping at all — would fail far more assets.
             provider.MappingsContainer = _liveProvider.MappingsContainer;
 
             VfsLoader.LoadAllVfsFiles(provider, manifest);
+
+            // Only now, with every container registered. SubmitKeys walks the containers that are still
+            // unmounted and mounts the ones a submitted key opens — on an empty provider it matches
+            // nothing and the keys are dropped, so submitting them any earlier does nothing at all.
+            // VfsLoader has already submitted the live build's keys, which open whatever Fortnite has
+            // not rotated since; these archived ones open the rest.
+            SubmitArchivedKeys(provider, buildVersion);
 
             var loaded = new LoadedHistoricalBuild
             {
@@ -386,13 +388,12 @@ public sealed class HistoricalBuildService : IAsyncDisposable
             return;
         }
 
-        var submitted = 0;
+        var keys = new Dictionary<FGuid, FAesKey>();
         foreach (var (guidText, keyText) in archived)
         {
             try
             {
-                provider.SubmitKey(new FGuid(guidText), new FAesKey(keyText));
-                submitted++;
+                keys[new FGuid(guidText)] = new FAesKey(keyText);
             }
             catch (Exception ex)
             {
@@ -400,7 +401,10 @@ public sealed class HistoricalBuildService : IAsyncDisposable
             }
         }
 
-        Console.WriteLine($"  Submitted {submitted} archived AES key(s) for {buildVersion}.");
+        // Submitted in one call so the containers they open are mounted in parallel.
+        var newMounts = keys.Count > 0 ? provider.SubmitKeys(keys) : 0;
+        Console.WriteLine($"  Submitted {keys.Count} archived AES key(s) for {buildVersion}; " +
+                          $"{newMounts} additional container(s) mounted.");
     }
 
     /// <summary>Evicts least-recently-used builds until one more fits. Caller holds <see cref="_loadLock"/>.</summary>

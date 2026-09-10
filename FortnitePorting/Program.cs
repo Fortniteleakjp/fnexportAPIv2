@@ -93,6 +93,7 @@ builder.Services.AddCors(options =>
                   "X-Hotfix-Status", "X-Hotfix-Applied",
                   "X-Build-Version", "X-Build-Is-Live",
                   "X-Changes-Mode", "X-Changes-Modified", "X-Changes-Unverified", "X-Changes-Computed",
+                  "X-Changes-Forced", "X-Changes-Excluded-Archives",
                   "X-Icon-Source", "X-Icon-Name"));
 });
 

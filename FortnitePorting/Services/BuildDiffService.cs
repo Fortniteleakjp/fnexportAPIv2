@@ -160,54 +160,24 @@ public sealed class BuildDiffService
     }
 
     /// <summary>
-    /// Returns the reason two builds cannot be compared, or null when they can.
+    /// Containers that can be read in one of these builds but not the other.
     /// <para>
-    /// What breaks a comparison is not a locked container as such — the live build almost always has a
-    /// few whose keys Epic has not published yet — but a container that is <em>readable in one build
-    /// and locked in the other</em>. Every file in it then looks added or removed when nothing about it
-    /// changed. A container locked on both sides contributes nothing to either file list and is
-    /// therefore harmless, which is why the check is pairwise rather than per build.
+    /// A locked container is not by itself a problem — the live build almost always has a few whose
+    /// keys Epic has not published yet, and one locked on both sides simply appears in neither file
+    /// list. What ruins a comparison is a container readable on one side only: every file in it looks
+    /// added or removed when all that changed is whether it could be opened. Those containers are left
+    /// out of the comparison and reported, rather than silently distorting it.
     /// </para>
     /// </summary>
-    public string? DescribeComparisonProblem(string fromBuild, IFileProvider fromProvider,
-        string toBuild, IFileProvider toProvider)
+    public static HashSet<string> AsymmetricContainers(IFileProvider fromProvider, IFileProvider toProvider)
     {
         var (fromMounted, fromLocked) = ContainerNames(fromProvider);
         var (toMounted, toLocked) = ContainerNames(toProvider);
 
-        var lockedOnlyInFrom = fromLocked.Where(toMounted.Contains).OrderBy(x => x).ToList();
-        var lockedOnlyInTo = toLocked.Where(fromMounted.Contains).OrderBy(x => x).ToList();
-
-        var total = lockedOnlyInFrom.Count + lockedOnlyInTo.Count;
-        if (total == 0)
-        {
-            return null;
-        }
-
-        var detail = new List<string>();
-        if (lockedOnlyInFrom.Count > 0)
-        {
-            detail.Add($"{lockedOnlyInFrom.Count} readable in '{toBuild}' but locked in '{fromBuild}' " +
-                       $"({Sample(lockedOnlyInFrom)})");
-        }
-
-        if (lockedOnlyInTo.Count > 0)
-        {
-            detail.Add($"{lockedOnlyInTo.Count} readable in '{fromBuild}' but locked in '{toBuild}' " +
-                       $"({Sample(lockedOnlyInTo)})");
-        }
-
-        return $"{total} container(s) can be read in one of these builds but not the other: " +
-               string.Join("; ", detail) + ". Every file in them would be reported as added or removed " +
-               "even though nothing about it changed. Fortnite rotates its AES keys every build and the " +
-               "key APIs only publish the current ones, so a build whose manifest was imported needs its " +
-               "keys supplied with POST /api/v1/versions/keys?version=<build>. Containers locked in both " +
-               "builds are fine and are not counted here.";
-
-        static string Sample(List<string> names)
-            => names.Count <= 3
-                ? string.Join(", ", names)
-                : string.Join(", ", names.Take(3)) + $", +{names.Count - 3} more";
+        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        result.UnionWith(fromLocked.Where(toMounted.Contains));
+        result.UnionWith(toLocked.Where(fromMounted.Contains));
+        return result;
     }
 
     // ------------------------------------------------------------ changelist computation
@@ -237,13 +207,19 @@ public sealed class BuildDiffService
     /// </summary>
     public BuildDiff Compute(IFileProvider from, IFileProvider to, string fromBuild, string toBuild,
         string mode = "quick", string? pathFilter = null, int maxEntries = 200000, int maxHashFiles = 5000,
-        DiffProgress? progress = null, CancellationToken cancellationToken = default)
+        DiffProgress? progress = null, IReadOnlySet<string>? excludeArchives = null,
+        CancellationToken cancellationToken = default)
     {
         var stopwatch = Stopwatch.StartNew();
         var full = string.Equals(mode, "full", StringComparison.OrdinalIgnoreCase);
 
-        var fromFiles = Snapshot(from, pathFilter);
-        var toFiles = Snapshot(to, pathFilter);
+        var fromAll = Snapshot(from, pathFilter);
+        var toAll = Snapshot(to, pathFilter);
+
+        // Files living in a container only one build could open are dropped from both sides, so they
+        // are absent from the changelist rather than misreported as added or removed.
+        var fromFiles = Exclude(fromAll, excludeArchives);
+        var toFiles = Exclude(toAll, excludeArchives);
 
         var diff = new BuildDiff
         {
@@ -255,7 +231,10 @@ public sealed class BuildDiffService
             TotalFilesFrom = fromFiles.Count,
             TotalFilesTo = toFiles.Count,
             UnmountedVfsFrom = Inspect(from).UnmountedVfs,
-            UnmountedVfsTo = Inspect(to).UnmountedVfs
+            UnmountedVfsTo = Inspect(to).UnmountedVfs,
+            ExcludedArchives = excludeArchives?.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList() ?? [],
+            ExcludedFilesFrom = fromAll.Count - fromFiles.Count,
+            ExcludedFilesTo = toAll.Count - toFiles.Count
         };
 
         var entries = new List<BuildChangeEntry>();
@@ -422,6 +401,27 @@ public sealed class BuildDiffService
         }
 
         return result;
+    }
+
+    /// <summary>Drops the entries whose containing archive is excluded.</summary>
+    private static Dictionary<string, FileSnapshot> Exclude(Dictionary<string, FileSnapshot> files,
+        IReadOnlySet<string>? excludeArchives)
+    {
+        if (excludeArchives == null || excludeArchives.Count == 0)
+        {
+            return files;
+        }
+
+        var kept = new Dictionary<string, FileSnapshot>(files.Count, StringComparer.OrdinalIgnoreCase);
+        foreach (var (path, snapshot) in files)
+        {
+            if (snapshot.Archive == null || !excludeArchives.Contains(snapshot.Archive))
+            {
+                kept[path] = snapshot;
+            }
+        }
+
+        return kept;
     }
 
     private static string? TryHash(IFileProvider provider, string path)
@@ -602,16 +602,15 @@ public sealed class BuildDiffService
         {
             using var oldBuild = await LeaseAsync(previousBuild, cancellationToken);
 
-            var problem = DescribeComparisonProblem(previousBuild, oldBuild.Provider, currentBuild, _liveProvider);
-            if (problem != null)
+            var excluded = AsymmetricContainers(oldBuild.Provider, _liveProvider);
+            if (excluded.Count > 0)
             {
-                Console.WriteLine($"✗ Not recording the changelist {previousBuild} → {currentBuild}: {problem}");
-                Console.WriteLine("  Supply the missing keys and run POST /api/v1/changes/compute to record it later.");
-                return;
+                Console.WriteLine($"  Leaving {excluded.Count} container(s) out of the comparison: they can be " +
+                                  "read in only one of the two builds, so their files would look added or removed.");
             }
 
             var diff = Compute(oldBuild.Provider, _liveProvider, previousBuild, currentBuild,
-                mode: "quick", cancellationToken: cancellationToken);
+                mode: "quick", excludeArchives: excluded, cancellationToken: cancellationToken);
 
             // Another update can land while this comparison is running, which would have swapped the
             // live provider out from under it and made the result a mix of two builds. Recording

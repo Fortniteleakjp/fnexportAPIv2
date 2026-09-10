@@ -110,23 +110,16 @@ public sealed class DiffJobService
             job.FromHealth = BuildDiffService.Inspect(from.Provider);
             job.ToHealth = BuildDiffService.Inspect(to.Provider);
 
-            // A build whose containers stayed locked exposes a fraction of its files, and comparing
-            // that produces a changelist claiming most of the game changed. Failing here is the whole
-            // point: a wrong changelist looks exactly like a right one.
-            if (!job.Force)
-            {
-                var problem = _diffs.DescribeComparisonProblem(job.FromBuild, from.Provider,
-                    job.ToBuild, to.Provider);
-                if (problem != null)
-                {
-                    job.Status = "failed";
-                    job.Error = problem + " Re-run with force=true to compare it anyway.";
-                    return;
-                }
-            }
+            // Containers only one of the two builds can open are left out: every file in them would
+            // otherwise be reported as added or removed when all that changed is whether the container
+            // could be decrypted. force keeps them in, for a caller who wants the raw comparison.
+            var excluded = job.Force
+                ? null
+                : BuildDiffService.AsymmetricContainers(from.Provider, to.Provider);
 
             var diff = await Task.Run(() => _diffs.Compute(from.Provider, to.Provider, job.FromBuild,
-                job.ToBuild, job.Mode, job.PathFilter, maxEntries, maxHashFiles, job.Progress, token), token);
+                job.ToBuild, job.Mode, job.PathFilter, maxEntries, maxHashFiles, job.Progress,
+                excluded, token), token);
 
             _store.SaveDiff(diff);
             job.Result = Summarize(diff);
@@ -172,6 +165,9 @@ public sealed class DiffJobService
         totalFilesTo = diff.TotalFilesTo,
         unmountedVfsFrom = diff.UnmountedVfsFrom,
         unmountedVfsTo = diff.UnmountedVfsTo,
+        excludedArchives = diff.ExcludedArchives,
+        excludedFilesFrom = diff.ExcludedFilesFrom,
+        excludedFilesTo = diff.ExcludedFilesTo,
         added = diff.AddedCount,
         removed = diff.RemovedCount,
         modified = diff.ModifiedCount,

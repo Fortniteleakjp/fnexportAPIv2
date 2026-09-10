@@ -184,6 +184,7 @@ public sealed class ChangesController : ControllerBase
         Response.Headers["X-Changes-Mode"] = diff.Mode;
         Response.Headers["X-Changes-Modified"] = paths.Count.ToString();
         Response.Headers["X-Changes-Unverified"] = diff.UnverifiedCount.ToString();
+        Response.Headers["X-Changes-Excluded-Archives"] = diff.ExcludedArchives.Count.ToString();
 
         if (string.Equals(format, "json", StringComparison.OrdinalIgnoreCase))
         {
@@ -200,12 +201,11 @@ public sealed class ChangesController : ControllerBase
                 excludedAdded = diff.AddedCount,
                 excludedRemoved = diff.RemovedCount,
                 unverifiedSameSize = diff.UnverifiedCount,
-                complete = diff.UnverifiedCount == 0 && !diff.Truncated,
-                note = diff.UnverifiedCount == 0
-                    ? "Every file present in both builds was compared."
-                    : $"{diff.UnverifiedCount} file(s) kept the same size and were never hashed, so a rewrite " +
-                      "that did not change the size is not in this list. Re-run POST /api/v1/changes/compute " +
-                      "with mode=full (scoped by pathFilter) to resolve them.",
+                excludedArchives = diff.ExcludedArchives,
+                excludedFilesFrom = diff.ExcludedFilesFrom,
+                excludedFilesTo = diff.ExcludedFilesTo,
+                complete = diff.UnverifiedCount == 0 && diff.ExcludedArchives.Count == 0 && !diff.Truncated,
+                notes = BuildNotes(diff),
                 paths
             });
         }
@@ -507,35 +507,19 @@ public sealed class ChangesController : ControllerBase
                 {
                     using (toLease)
                     {
-                        // A build that did not fully mount exposes a fraction of its files, and
-                        // comparing that would claim most of the game changed.
-                        var problem = force
+                        // Containers only one of the two builds can open are left out, so their files
+                        // are absent rather than misreported as added or removed. force keeps them in.
+                        var excluded = force
                             ? null
-                            : _diffs.DescribeComparisonProblem(fromBuild, fromLease.Provider,
-                                toBuild, toLease.Provider);
-                        if (problem != null)
-                        {
-                            return (null, StatusCode(StatusCodes.Status409Conflict, new ProblemDetails
-                            {
-                                Title = "片方のビルドでしか読めないPAKがあります",
-                                Detail = problem,
-                                Status = StatusCodes.Status409Conflict,
-                                Extensions =
-                                {
-                                    { "from", fromBuild },
-                                    { "to", toBuild },
-                                    { "compareAnyway", "add force=true to this request" },
-                                    { "orComputeAnyway", ComputeUrl(fromBuild, toBuild) + "&force=true" }
-                                }
-                            }));
-                        }
+                            : BuildDiffService.AsymmetricContainers(fromLease.Provider, toLease.Provider);
 
-                        var computed = _diffs.Compute(fromLease.Provider, toLease.Provider, fromBuild, toBuild);
+                        var computed = _diffs.Compute(fromLease.Provider, toLease.Provider, fromBuild,
+                            toBuild, excludeArchives: excluded);
                         Response.Headers["X-Changes-Computed"] = "true";
 
-                        // A forced comparison is known to be distorted by the containers only one side
-                        // could read, so it answers this request but is never written to the archive
-                        // where later callers would take it for a sound record.
+                        // A forced comparison is known to be distorted by those containers, so it
+                        // answers this request but is never written to the archive where a later caller
+                        // would take it for a sound record.
                         if (force)
                         {
                             Response.Headers["X-Changes-Forced"] = "true";
@@ -594,6 +578,40 @@ public sealed class ChangesController : ControllerBase
 
         lease.Dispose();
         return false;
+    }
+
+    /// <summary>Everything about this changelist that keeps it from being the complete truth.</summary>
+    private static List<string> BuildNotes(BuildDiff diff)
+    {
+        var notes = new List<string>();
+
+        if (diff.UnverifiedCount > 0)
+        {
+            notes.Add($"{diff.UnverifiedCount} file(s) kept the same size and were never hashed, so a rewrite " +
+                      "that did not change the size is not in this list. Re-run POST /api/v1/changes/compute " +
+                      "with mode=full (scoped by pathFilter) to resolve them.");
+        }
+
+        if (diff.ExcludedArchives.Count > 0)
+        {
+            notes.Add($"{diff.ExcludedArchives.Count} container(s) were left out because only one of the two " +
+                      $"builds could open them ({string.Join(", ", diff.ExcludedArchives.Take(5))}" +
+                      (diff.ExcludedArchives.Count > 5 ? $", +{diff.ExcludedArchives.Count - 5} more" : "") +
+                      $"), hiding {diff.ExcludedFilesFrom} file(s) of the older build and {diff.ExcludedFilesTo} " +
+                      "of the newer one. Supply the missing AES keys with POST /api/v1/versions/keys to include them.");
+        }
+
+        if (diff.Truncated)
+        {
+            notes.Add("The comparison hit a limit and this changelist is incomplete.");
+        }
+
+        if (notes.Count == 0)
+        {
+            notes.Add("Every file present in both builds was compared.");
+        }
+
+        return notes;
     }
 
     private static string ComputeUrl(string fromBuild, string toBuild)

@@ -152,6 +152,19 @@ public sealed class BuildDiff
     /// <summary>Containers of the newer build that never mounted when it was compared.</summary>
     public int UnmountedVfsTo { get; set; }
 
+    /// <summary>
+    /// Containers left out of the comparison because they could be read in only one of the two builds.
+    /// Their files are absent from this changelist entirely — reporting them would mean calling a file
+    /// added or removed when all that changed is whether its container could be opened.
+    /// </summary>
+    public List<string> ExcludedArchives { get; set; } = [];
+
+    /// <summary>Files of the older build hidden by <see cref="ExcludedArchives"/>.</summary>
+    public int ExcludedFilesFrom { get; set; }
+
+    /// <summary>Files of the newer build hidden by <see cref="ExcludedArchives"/>.</summary>
+    public int ExcludedFilesTo { get; set; }
+
     public int AddedCount { get; set; }
     public int RemovedCount { get; set; }
     public int ModifiedCount { get; set; }

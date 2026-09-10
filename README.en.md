@@ -434,9 +434,14 @@ curl -X POST "http://localhost:3849/api/v1/versions/import" \
 >
 > What breaks a comparison is not a locked pak as such — the live build almost always has a few whose
 > keys Epic has not published yet. It is a pak that is **readable in one build and locked in the
-> other**: every file in it is then reported as added or removed when nothing about it changed. The
-> API detects that and refuses the comparison (`force=true` overrides it). A pak locked in both
-> builds appears in neither file list, so it is harmless and is not counted.
+> other**: every file in it is then reported as added or removed when nothing about it changed.
+>
+> The API detects those and **leaves just those containers out of the comparison** rather than
+> refusing it. Which containers were dropped, and how many files that hid, come back with the response
+> (the `X-Changes-Excluded-Archives` header, and `excludedArchives` / `notes` under `format=json`).
+> Supplying the missing keys shrinks that set. A pak locked in both builds appears in neither file
+> list, so it is harmless and is not counted. `force=true` compares without excluding anything, but
+> such a result is distorted and is never recorded.
 >
 > ```bash
 > curl -X POST "http://localhost:3849/api/v1/versions/keys?version=42.00" \
