@@ -20,6 +20,8 @@ HTTP で公開され、全エンドポイントを Swagger UI から確認・実
 | FModel バックアップ | 現在のビルドのファイル一覧を FModel の `.fbkp` 形式で配信 |
 | 自動アップデート | 起動時に GitHub Releases API を確認し、確認プロンプト（y/n）を経て適用・再起動 |
 | AES／マニフェスト監視 | 新しいビルド・復号鍵・`.usmap` をバックグラウンドで自動反映 |
+| バージョン指定 | エクスポート・検索・PAK・ローカライズ・コスメ・INI の各エンドポイントに `version` を付けて、1つ前のバージョンの内容を取得 |
+| 変更リスト | ビルド間で追加・削除・変更されたファイルパスと、ファイル内の変わった行を配信 |
 | API ドキュメント | 日本語・英語対応の Swagger UI と OpenAPI JSON |
 
 ## 目次
@@ -168,6 +170,9 @@ docker run -p 3849:3849 \
 | `HOTFIX_DISK_CACHE` | `true` | `false` でディスクキャッシュを無効化（毎回ダウンロード）。 |
 | `AESFINDER_PATH` | `D:\AesFinder-main\...\AesFinder.exe` | `/aes` で使う外部 AesFinder ツールのパス（`.exe`／`.dll`／それを含むディレクトリ可）。 |
 | `AESFINDER_AUTO` | `true` | バックグラウンドで AesFinder により MainAES を自動抽出・投入（**main 鍵が未適用の時のみ**動作。`false` で無効）。 |
+| `BUILD_HISTORY_KEEP` | `2` | マニフェストを保管しておくビルド数。既定の `2` は「現在のビルド + 1つ前」で、これを超えた古いビルドのデータはアップデート時に自動削除されます（記録済みの変更リストは残ります）。 |
+| `HISTORICAL_BUILDS_MAX` | `1` | 旧ビルドを同時にマウントできる数。1ビルド分のマウントは数GBのメモリを使うため、超過分は最終利用が古いものから解放されます。 |
+| `HISTORICAL_BUILD_IDLE_MINUTES` | `30` | マウントした旧ビルドを未使用のまま保持する分数。経過後は自動で解放されます。`0` で自動解放を無効化。 |
 | `AUTO_UPDATE` | (未設定) | `true` = 確認せず常に更新／`false` = GitHub へ一切アクセスしない／**未設定 = 更新がある時だけ起動時に y/n を尋ねる**。 |
 | `UPDATE_CHECK_ONLY` | `false` | 新しいリリースを通知するだけで、適用しません。 |
 | `UPDATE_RESTART` | `true` | 差し替え後に自動で再起動。`false` の場合は差し替えのみで、起動は手動になります。 |
@@ -198,6 +203,8 @@ docker run -p 3849:3849 \
 | FModel 用バックアップ（`.fbkp`）の配信 | [`/api/v1/backup`](#fmodel-バックアップ--apiv1backup) |
 | マッピング（`.usmap`）のダンプ・配信 | [`/api/v1/mappings`](#マッピング--apiv1mappings) |
 | 更新状況の確認・最新リリースへの更新 | [`/api/v1/update`](#自動アップデート--apiv1update) |
+| 旧ビルドの一覧・取り込み・読み込み・削除 | [`/api/v1/versions`](#ビルドアーカイブ--apiv1versions) |
+| ビルド間の正確な変更リスト（ファイルパスと変わった行） | [`/api/v1/changes`](#変更リスト--apiv1changes) |
 
 > **CORS**: すべてのオリジンからの呼び出しを許可しています（任意のオリジン／メソッド／ヘッダ）。
 > 音声診断ヘッダ（`X-Audio-Format` / `X-Audio-Decoded` / `X-Rada-Native-Decoder`）と
@@ -357,6 +364,17 @@ http://localhost:3849/api/v1/export/datatable?path=.../CurveTable.uasset&delimit
 | `GET /api/v1/items/properties?prefixes={csv}&page={n}&pageSize={n}` | 各アセットから `Properties.ItemName.SourceString`、`DataList → Traits`、`LargeIcon.AssetPathName` を抽出（ページング）。 |
 | `GET /api/v1/items/properties/single?path={path}` | 単一アセットに対する同じ抽出。 |
 
+`files` と `properties` は除外フィルターも受け付けます（いずれもCSV・大文字小文字の区別なし）。
+
+| パラメーター | 説明 |
+|---|---|
+| `excludePrefixes` | この接頭辞で始まるファイル名を除外。`prefixes` に一致していても除外されます。 |
+| `excludePaths` | フルパスにこの文字列を含むファイルを除外。 |
+
+```
+http://localhost:3849/api/v1/items/files?prefixes=WID_&excludePrefixes=WID_Harvest_&excludePaths=/Juno/
+```
+
 レスポンス例（`/api/v1/items/properties/single`）:
 ```json
 {
@@ -444,6 +462,133 @@ http://localhost:3849/api/v1/search?q={CID,EID}_*&mode=glob&field=stem
 |---|---|
 | `GET /api/v1/build` | 現在配信中のビルド（`appliedBuild`／`appliedManifestId`）、マニフェストが指すビルド、マウント済み VFS 数、未取得の鍵数、再構築中かどうか（`reloading`）を返します。再構築中も応答します。 |
 | `POST /api/v1/build/reload` | 30秒ポーリングを待たずに、最新マニフェストでプロバイダーを即座に再構築します。実行中は他のエンドポイントが `503` を返します。 |
+
+### ビルドアーカイブ — `/api/v1/versions`
+
+配信したビルドの**マニフェストを保管**しておき、アップデート後も1つ前のバージョンを読めるようにします。ここはアーカイブの管理だけを行い、**ファイルの読み取りは行いません**。読み取りは既存の各エンドポイントに `version` を付けて行います（次項）。
+
+pak の中身をローカルへコピーするわけではありません。マニフェストは Epic の CDN 上のチャンクを指し示すデータなので、**約10MBのファイルを1つ残すだけ**でそのビルドを丸ごと読み直せます。したがって「旧バージョンのデータを削除する」とは、保管したマニフェスト・そのビルド用のAES鍵・チャンクキャッシュを消すことを指します。
+
+| メソッド & パス | 説明 |
+|---|---|
+| `GET /api/v1/versions` | 把握しているビルドと、それぞれが今も読み取れるか（`readable`）、マウント済みか（`loaded`）を返します。 |
+| `POST /api/v1/versions/import` | 手元のマニフェストファイル（アップロード、または `path=` でサーバー上のパス）を取り込み、このインスタンスが配信していないビルドも読み取り・比較の対象にします。 |
+| `POST /api/v1/versions/load?version=…` | 保管したマニフェストからそのビルドをマウントします。 |
+| `DELETE /api/v1/versions/unload?version=…` | マウント中のビルドを解放します（マニフェストは残ります）。 |
+| `DELETE /api/v1/versions/data?version=…` | そのビルドのマニフェスト・AES鍵・チャンクキャッシュを削除します。**記録済みの変更リストは残ります。** |
+| `GET /api/v1/versions/keys?version=…` | そのビルドに保存されている AES 鍵を返します。 |
+| `POST /api/v1/versions/keys?version=…` | そのビルドの AES 鍵を登録します。**取り込んだマニフェストには必須です**（下記）。 |
+
+手元にマニフェストがあれば、そのビルドを取り込んでおくこともできます。
+
+```bash
+curl -X POST "http://localhost:3849/api/v1/versions/import" \
+  -F "file=@++Fortnite+Release-42.00-CL-56878558-Windows.manifest"
+```
+
+> **取り込んだビルドには AES 鍵の登録が必要です。**
+> Fortnite はビルドごとに AES 鍵を更新し、鍵の配信APIは**現行ビルドの分しか返しません**。
+> このインスタンスが実際に配信していたビルドの鍵は自動で保存されますが、マニフェストを後から
+> 取り込んだビルドには鍵がありません。そのままマウントすると多くの pak が復号できず、
+> ファイルが一部しか見えない状態になります。
+>
+> 比較で問題になるのは「復号できない pak がある」ことそのものではありません（ライブビルドにも
+> Epic が鍵を出していない pak が常に数個あります）。問題は **片方のビルドでは読めて、もう片方では
+> 読めない pak** で、その中身が丸ごと「追加」「削除」として出てしまいます。
+>
+> API はこれを検出して、**そのコンテナだけを比較対象から外します**（拒否はしません）。外した
+> コンテナ名と、それによって見えなくなったファイル数はレスポンスに含まれます
+> （`X-Changes-Excluded-Archives` ヘッダーと、`format=json` の `excludedArchives` / `notes`）。
+> 鍵を登録すれば外れる数は減ります。両方のビルドで読めない pak はどちらのファイル一覧にも
+> 出てこないため無害で、判定の対象外です。`force=true` を付けると除外せずそのまま比較しますが、
+> その結果は歪んでいるため記録には残しません。
+>
+> ```bash
+> curl -X POST "http://localhost:3849/api/v1/versions/keys?version=42.00" \
+>   -H "Content-Type: application/json" \
+>   -d '{"mainKey":"0x...","dynamicKeys":[{"guid":"...","key":"0x..."}]}'
+> ```
+>
+> `GET /api/v1/versions/keys?version=…` で登録状況を確認できます。マウント済みのビルドに鍵を
+> 登録すると自動でアンマウントされ、次回マウント時に反映されます。
+
+### バージョンを指定した読み取り — `version` パラメーター
+
+以下のエンドポイントは `version` パラメーターを受け付け、**そのビルド時点での内容**を返します。付けなければ従来どおり配信中のビルドを読みます。
+
+| エンドポイント | |
+|---|---|
+| [`/api/v1/export`](#アセットエクスポート--apiv1export) | アセットのJSON・画像・音声、DataTableのCSV、locres |
+| [`/api/v1/search`](#文字列検索--apiv1search) | パス検索・内容検索 |
+| `/api/v1/paks` | マウント済み PAK/UTOC の一覧と中身 |
+| [`/api/v1/localization`](#ローカライズ検索--apiv1localization) | Key解決・表示文字列の逆引き |
+| [`/api/v1/pak`](#コスメ抽出--apiv1pak) | コスメ抽出・アイコン |
+| `/api/v1/config` | INI ファイルの一覧・設定値検索 |
+
+`version` には次のいずれも指定できます。
+
+- 完全なビルド文字列 — `++Fortnite+Release-42.10-CL-57566230-Windows`
+- バージョンだけ — `42.10`
+- CL番号だけ — `57566230`
+- `latest`（＝配信中のビルド）／`previous`（＝1つ前のビルド）
+
+```bash
+# 1つ前のバージョンでのアセットを取得する
+curl "http://localhost:3849/api/v1/export?path=FortniteGame/Content/Athena/Items/Foo&version=previous"
+
+# 42.10 時点のファイル一覧を検索する
+curl "http://localhost:3849/api/v1/search?q=CID_&version=42.10"
+```
+
+対象は**すでに読み込まれているビルド**だけで、未読み込みのビルドを指定すると `409` を返します。1ビルドのマウントには数分かかるため、GET リクエストで暗黙に走らせません。先に `POST /api/v1/versions/load` でマウントするか、`loadVersion=true` を付けてその場でマウントしてください。
+
+レスポンスには `X-Build-Version`（実際に読んだビルド）と `X-Build-Is-Live` が付きます。旧ビルドを読むリクエストは、ライブビルド用のキャッシュとは別のキーで扱われるため、混ざることはありません。
+
+### 変更リスト — `/api/v1/changes`
+
+2つのビルド間の**正確な変更リスト**（追加・削除・変更されたファイルパスと、ファイル内の変わった行）を配信します。
+
+アップデートが配信されると、**入れ替わる直前のビルドと新しいビルドを比較して変更リストを記録し**、そのうえで古いビルドのデータを削除します。同時に、そのビルドで終わっていた記録をすべて新ビルドまで延長するため、`v40→v41` と `v41→v42` から **`v40→v42` が自動的に作られます**。v41 のデータが消えたあとも `v40→v42` は答えられます。
+
+**そのアップデートを経験していないインスタンスでも答えられます。** 記録が無い組み合わせでも、両方のビルドが**マウントされていれば**リクエストの中でその場で比較して返し、結果を記録します（レスポンスに `X-Changes-Computed: true` が付きます）。マウント済み同士の比較はファイルインデックスの突き合わせだけなので、チャンクのダウンロードは一切発生しません。どちらかが未マウントの場合のみ `404` を返し、マウント用の呼び出しを併記します。
+
+変更のなかったファイルは記録に現れません。これが合成が成立する理由で、片方の記録にしか出てこないファイルは、もう片方の手順が触っていない＝そちらのビルドの内容がそのまま使われます。
+
+| メソッド & パス | 説明 |
+|---|---|
+| `GET /api/v1/changes` | 記録済みの変更リストを一覧します。 |
+| `GET /api/v1/changes/list?from=…&to=…` | 追加・削除・変更されたファイルパスを返します。直接記録が無い組み合わせは記録済みの連鎖から合成します。`to` の既定は配信中のビルドです。 |
+| `GET /api/v1/changes/modified?from=…&to=…` | **実際に書き換わったファイルパスだけ**を1行1件のテキストファイルで返します。過去バージョンと最新バージョンの両方に存在するファイルのみが対象で、追加されたファイルと削除されたファイルは除外されます。 |
+| `GET /api/v1/changes/file?from=…&to=…&path=…` | **1ファイルの変わった行**を返します。`format=patch` で unified diff テキストになります。 |
+| `POST /api/v1/changes/compute?from=…&to=…` | 変更リストを計算して記録します。バックグラウンドジョブとして動き、`jobId` で進捗を確認します。 |
+| `GET /api/v1/changes/jobs` / `GET /api/v1/changes/jobs/{id}` | 計算ジョブの一覧・進捗。 |
+| `DELETE /api/v1/changes/jobs/{id}` | 実行中の計算を中止します。 |
+| `DELETE /api/v1/changes?from=…&to=…` | 記録済みの変更リストを削除します。 |
+
+**変わった行の取り方**: テキスト（`.ini` など）はそのまま行単位で比較します。`.uasset`／`.umap` は**JSONエクスポートを介して**比較するため、アセットでも「変わった行」が意味を持ちます。どちらでもないファイルは、行番号を捏造せずにバイト単位の差分位置として返します。
+
+```bash
+# 比較したい旧ビルドをマウントしておく（初回のみ、数分かかります）
+curl -X POST "http://localhost:3849/api/v1/versions/load?version=42.00"
+
+# 実際に書き換わったファイルパスだけをテキストファイルで取得する
+curl -OJ "http://localhost:3849/api/v1/changes/modified?from=42.00"
+
+# 42.00 から現在のビルドまでに変わったファイル
+curl "http://localhost:3849/api/v1/changes/list?from=42.00&kind=modified&pathFilter=FortniteGame/Content/Athena"
+
+# 1ファイルの変わった行を unified diff で
+curl "http://localhost:3849/api/v1/changes/file?from=42.00&path=FortniteGame/Config/DefaultGame.ini&format=patch"
+```
+
+**`quick` と `full` の違い**（`POST /api/v1/changes/compute` の `mode`）:
+
+| モード | 判定に使うもの | わかること |
+|---|---|---|
+| `quick`（既定） | 仮想パス・ファイルサイズ・格納アーカイブ。CDN へのアクセスは発生しません。 | 追加・削除は**すべて正確**。変更はサイズが変わったものを検出。サイズが同一のファイルは「未検証」として**件数だけ**報告し、変更なしとは断定しません。 |
+| `full` | 上記に加えて、サイズが同一のファイルを両ビルドで実際に読み込んでハッシュ比較。 | 変更も正確。ただし候補ごとに CDN から内容を取得するため時間がかかります。`pathFilter` と `maxHashFiles` で範囲を絞ってください。 |
+
+アップデート時に自動で記録されるのは `quick` です。特定のディレクトリを厳密に知りたい場合は、`pathFilter` を付けて `full` を実行してください。
 
 ### FModel バックアップ — `/api/v1/backup`
 

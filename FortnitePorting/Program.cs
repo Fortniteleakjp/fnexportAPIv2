@@ -23,7 +23,10 @@ var port = Environment.GetEnvironmentVariable("PORT") ?? "3849";
 builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
 
 // Add services to the container
-builder.Services.AddControllers();
+// The version filter lets every read controller marked [VersionAware] serve an older build when the
+// request names one; without a version parameter nothing about those endpoints changes.
+builder.Services.AddControllers(options => options.Filters.Add<FortnitePorting.Services.VersionParameterFilter>());
+builder.Services.AddScoped<FortnitePorting.Services.RequestBuildProvider>();
 builder.Services.AddMemoryCache();
 // Gate that blocks requests while the provider is rebuilt for a new Fortnite build.
 builder.Services.AddSingleton(ProviderReloadGate.Instance);
@@ -64,6 +67,10 @@ builder.Services.AddSwaggerGen(options =>
     // Registered AFTER IncludeXmlComments so it overrides the XML text for both documents.
     options.OperationFilter<FortnitePorting.Swagger.LocalizedOperationFilter>();
 
+    // Document the version/loadVersion query parameters, which are handled by an action filter and
+    // therefore do not appear in the action signatures.
+    options.OperationFilter<FortnitePorting.Swagger.VersionParameterOperationFilter>();
+
     // Localize the controller (tag) descriptions per document.
     options.DocumentFilter<FortnitePorting.Swagger.LocalizedDocumentFilter>();
 });
@@ -84,6 +91,9 @@ builder.Services.AddCors(options =>
                   "X-Usmap-Merged-Structs", "X-Usmap-Merged-Enums",
                   "X-Backup-Entries", "X-Backup-Version",
                   "X-Hotfix-Status", "X-Hotfix-Applied",
+                  "X-Build-Version", "X-Build-Is-Live",
+                  "X-Changes-Mode", "X-Changes-Modified", "X-Changes-Unverified", "X-Changes-Computed",
+                  "X-Changes-Forced", "X-Changes-Excluded-Archives",
                   "X-Icon-Source", "X-Icon-Name"));
 });
 
@@ -107,6 +117,13 @@ Console.WriteLine("\n✓ FileProvider initialization complete\n");
 
 builder.Services.AddSingleton<IFileProvider>(initializationResult.FileProvider);
 builder.Services.AddSingleton(initializationResult.ManifestService);
+
+// Build history: the archive of previously served builds, the on-demand mounting of those builds, and
+// the changelists recorded between them (see /api/v1/versions and /api/v1/changes).
+builder.Services.AddSingleton(initializationResult.BuildHistory);
+builder.Services.AddSingleton(initializationResult.HistoricalBuilds);
+builder.Services.AddSingleton(initializationResult.BuildDiffs);
+builder.Services.AddSingleton(initializationResult.DiffJobs);
 
 var app = builder.Build();
 
@@ -147,7 +164,15 @@ app.Use(async (context, next) =>
     var path = context.Request.Path.Value ?? string.Empty;
     var exempt = path.Equals("/", StringComparison.Ordinal)
                  || path.StartsWith("/swagger", StringComparison.OrdinalIgnoreCase)
-                 || path.StartsWith("/api/v1/build", StringComparison.OrdinalIgnoreCase);
+                 || path.StartsWith("/api/v1/build", StringComparison.OrdinalIgnoreCase)
+                 // Recorded changelists are files on disk and archived builds have their own
+                 // providers, so neither is affected by the live provider being torn down.
+                 || path.StartsWith("/api/v1/changes", StringComparison.OrdinalIgnoreCase)
+                 || path.StartsWith("/api/v1/versions", StringComparison.OrdinalIgnoreCase)
+                 // A request that names an archived build reads that build's own provider, so it does
+                 // not have to wait out the live rebuild - which is exactly when an older build is
+                 // most likely to be wanted.
+                 || ReadsAnArchivedBuild(context);
 
     if (exempt)
     {
@@ -185,6 +210,38 @@ app.MapControllers();
 
 // Redirect to the Swagger UI when the root is accessed
 app.MapGet("/", () => Results.Redirect("/swagger")).ExcludeFromDescription();
+
+/// <summary>
+/// True when the request names a build other than the live one that is currently mounted. Resolution
+/// failures answer false so the request still goes through the gate and is handled by the normal
+/// pipeline, which reports the actual problem.
+/// </summary>
+static bool ReadsAnArchivedBuild(HttpContext context)
+{
+    var requested = context.Request.Query[FortnitePorting.Services.VersionParameterFilter.VersionParameter].ToString();
+    if (string.IsNullOrWhiteSpace(requested))
+    {
+        return false;
+    }
+
+    try
+    {
+        var diffs = context.RequestServices.GetService<FortnitePorting.Services.BuildDiffService>();
+        var resolved = diffs?.ResolveBuildVersion(requested);
+        return resolved != null && !diffs!.IsLive(resolved) && diffs.TryLease(resolved, out var lease) && Release(lease);
+    }
+    catch
+    {
+        return false;
+    }
+
+    // The lease is only taken to prove the build is mounted; the action filter takes its own.
+    static bool Release(FortnitePorting.Services.BuildLease lease)
+    {
+        lease.Dispose();
+        return true;
+    }
+}
 
 var listeningPort = Environment.GetEnvironmentVariable("PORT") ?? "3849";
 Console.WriteLine($"\n✓ Server ready to start");

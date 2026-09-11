@@ -18,6 +18,10 @@ namespace FortnitePorting
     public partial class ManifestService
     {
         private const string BuildApiUrl = "https://fljpapi.jp/api/v2/build/Windows";
+
+        /// <summary>Epic CDN root the manifests address their chunks against.</summary>
+        public const string ChunkBaseUrl = "http://download.epicgames.com/Builds/Fortnite/CloudDir/";
+
         private const int PollingIntervalSeconds = 30;
         private const int MaxRetryAttempts = 5;
         private const int RetryDelaySeconds = 5;
@@ -28,6 +32,7 @@ namespace FortnitePorting
         private readonly HttpClient _httpClient;
         private readonly Zlibng _zlibng;
         private readonly Timer _pollingTimer;
+        private readonly BuildHistoryStore _history;
 
         public FBuildPatchAppManifest Manifest { get; private set; } = null!;
         public byte[]? ManifestBytes { get; private set; }
@@ -38,14 +43,17 @@ namespace FortnitePorting
         public bool IsReady { get; private set; }
 
         private string _currentBuildVersion = string.Empty;
+        private string _previousBuildVersion = string.Empty;   // build served before the current one
         private string _appliedBuildVersion = string.Empty;    // build whose VFS files are currently mounted
         private string _appliedManifestId = string.Empty;      // manifest whose VFS files are currently mounted
         private string _mappedBuildVersion = string.Empty;   // build whose .usmap is currently applied
         private int _mappingAttempts;                          // retries for the current build's mapping
         private const int MaxMappingAttemptsPerBuild = 120;    // ~1h at 30s, then stop retrying
 
-        public ManifestService(IFileProvider cue4ParseProvider, string cacheDirectory, Zlibng zlibng, string rootDir)
+        public ManifestService(IFileProvider cue4ParseProvider, string cacheDirectory, Zlibng zlibng, string rootDir,
+            BuildHistoryStore history)
         {
+            _history = history;
             _cue4ParseProvider = cue4ParseProvider;
             _cacheDirectory = cacheDirectory;
             _rootDir = rootDir;
@@ -100,6 +108,40 @@ namespace FortnitePorting
 
         /// <summary>The build version whose content is currently mounted (empty before the first load).</summary>
         public string AppliedBuildVersion => _appliedBuildVersion;
+
+        /// <summary>The build this instance served before the current one (empty until the first update).</summary>
+        public string PreviousBuildVersion => _previousBuildVersion;
+
+        /// <summary>
+        /// Invoked with (previousBuild, currentBuild) once the provider has been rebuilt onto a new
+        /// build. Wired up by <see cref="Services.FileProviderFactory"/> to record the changelist
+        /// between the two builds and apply the retention policy.
+        /// </summary>
+        public Func<string, string, Task>? BuildUpdated { get; set; }
+
+        /// <summary>Invoked at the end of every poll, after the mapping refresh.</summary>
+        public Action? PollCompleted { get; set; }
+
+        private async Task RaiseBuildUpdatedAsync()
+        {
+            var handler = BuildUpdated;
+            var previous = _previousBuildVersion;
+
+            if (handler == null || string.IsNullOrEmpty(previous) ||
+                string.Equals(previous, GameBuild, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            try
+            {
+                await handler(previous, GameBuild);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Recording the changelist {previous} -> {GameBuild} failed: {ex.Message}");
+            }
+        }
 
         /// <summary>The manifest whose content is currently mounted (empty before the first load).</summary>
         public string AppliedManifestId => _appliedManifestId;
@@ -158,6 +200,11 @@ namespace FortnitePorting
                 // Refresh the .usmap so the new build's (possibly changed) types deserialize correctly.
                 // Retries (bounded) on later polls if the matching mapping isn't published yet, then hot-swaps.
                 RefreshMappingsIfNeeded();
+
+                // Keep the archived AES keys of the live build current. Keys for paks that were still
+                // locked at mount time arrive on later polls, and once Fortnite rotates them the live
+                // key APIs stop serving them - archiving here is what keeps old builds decryptable.
+                PollCompleted?.Invoke();
             }
             catch (Exception ex)
             {
@@ -195,6 +242,10 @@ namespace FortnitePorting
                 await ProviderReloader.ReloadAsync(provider, Manifest, GameBuild, RefreshMappingsIfNeeded);
                 _appliedBuildVersion = target;
                 _appliedManifestId = ManifestId;
+
+                // The new build is live now, so record what changed against the build it replaced and
+                // let the retention policy drop whatever is too old to keep.
+                await RaiseBuildUpdatedAsync();
             }
             catch (Exception ex)
             {
@@ -308,16 +359,36 @@ namespace FortnitePorting
             // Parse the manifest
             Manifest = FBuildPatchAppManifest.Deserialize(ManifestBytes, options =>
             {
-                options.ChunkBaseUrl = "http://download.epicgames.com/Builds/Fortnite/CloudDir/";
+                options.ChunkBaseUrl = ChunkBaseUrl;
                 options.Decompressor = ManifestZlibngDotNetDecompressor.Decompress;
                 options.DecompressorState = _zlibng;
                 options.ChunkCacheDirectory = _cacheDirectory;
                 options.CacheChunksAsIs = false;
             });
 
-            // Initialize the information
+            // Initialize the information. The build served before this manifest replaced it is
+            // remembered so the update flow can diff the two and then drop the older one.
+            var previousGameBuild = GameBuild;
             InitInformations(buildInfo);
+            if (!string.IsNullOrEmpty(previousGameBuild) &&
+                !string.Equals(previousGameBuild, GameBuild, StringComparison.OrdinalIgnoreCase))
+            {
+                _previousBuildVersion = previousGameBuild;
+            }
+
             _currentBuildVersion = buildInfo.BuildVersion;
+
+            // Archive the manifest so this build stays readable once the next update replaces it. A
+            // manifest addresses chunks on the Epic CDN, so this ~10 MB file is all that is needed —
+            // no pak content is copied anywhere.
+            try
+            {
+                _history.Archive(GameBuild, ManifestId, ManifestBytes);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Could not archive the manifest for {GameBuild}: {ex.Message}");
+            }
 
             // Clean up memory
             GC.Collect();

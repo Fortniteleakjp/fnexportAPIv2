@@ -28,13 +28,17 @@ public static class LocalizationService
     /// Loads (and caches) the merged localization table for a language. When <paramref name="chunkNo"/>
     /// is supplied, only matching chunk locres files are used (with a language-only fallback).
     /// </summary>
+    /// <param name="scope">
+    /// Cache-key prefix identifying the build <paramref name="provider"/> serves. Empty for the live
+    /// build; without it two builds could share an entry whenever their mount snapshots happen to match.
+    /// </param>
     public static ConcurrentDictionary<string, ConcurrentDictionary<string, string>> Load(
-        IFileProvider provider, string lang, string? chunkNo = null)
+        IFileProvider provider, string lang, string? chunkNo = null, string scope = "")
     {
         var mountSnapshot = GetMountSnapshot(provider);
         var cacheKey = string.IsNullOrEmpty(chunkNo)
-            ? $"{lang}::mount={mountSnapshot}"
-            : $"{lang}::chunk{chunkNo}::mount={mountSnapshot}";
+            ? $"{scope}{lang}::mount={mountSnapshot}"
+            : $"{scope}{lang}::chunk{chunkNo}::mount={mountSnapshot}";
         if (Cache.TryGetValue(cacheKey, out var cached))
         {
             return cached;

@@ -24,10 +24,21 @@ namespace FortnitePorting.Controllers
     /// out of a specific PAK / chunk.
     /// </summary>
     [ApiController]
+    [VersionAware]
     [Route("api/v1/pak")]
     public class CosmeticsController : ControllerBase
     {
-        private readonly IFileProvider _provider;
+        private readonly RequestBuildProvider _build;
+
+        /// <summary>
+        /// The build this request reads from: the live one, or the build named by <c>version</c>.
+        /// Read lazily on purpose — MVC creates the controller before the filter that resolves the
+        /// parameter runs, so a provider captured in the constructor would always be the live one.
+        /// </summary>
+        private IFileProvider _provider => _build.Provider;
+
+        /// <summary>Cache-key prefix that keeps an older build's content out of the live cache.</summary>
+        private string _scope => _build.CacheScope;
         private readonly ILogger<CosmeticsController> _logger;
         private readonly IMemoryCache _cache;
 
@@ -49,9 +60,9 @@ namespace FortnitePorting.Controllers
 
         private sealed record ResultSource(string Path, string AssetKind);
 
-        public CosmeticsController(IFileProvider provider, ILogger<CosmeticsController> logger, IMemoryCache cache)
+        public CosmeticsController(RequestBuildProvider provider, ILogger<CosmeticsController> logger, IMemoryCache cache)
         {
-            _provider = provider;
+            _build = provider;
             _logger = logger;
             _cache = cache;
         }
@@ -122,7 +133,7 @@ namespace FortnitePorting.Controllers
             ConcurrentDictionary<string, ConcurrentDictionary<string, string>>? locData = null;
             if (!string.IsNullOrWhiteSpace(lang) && !lang.Equals("en", StringComparison.OrdinalIgnoreCase))
             {
-                locData = LocalizationService.Load(_provider, lang);
+                locData = LocalizationService.Load(_provider, lang, scope: _scope);
             }
 
             // If this PAK also carries OfferCatalog textures, index them by skin ID (the trailing
@@ -202,7 +213,7 @@ namespace FortnitePorting.Controllers
             ConcurrentDictionary<string, ConcurrentDictionary<string, string>>? locData = null;
             if (!string.IsNullOrWhiteSpace(lang) && !lang.Equals("en", StringComparison.OrdinalIgnoreCase))
             {
-                locData = LocalizationService.Load(_provider, lang);
+                locData = LocalizationService.Load(_provider, lang, scope: _scope);
             }
 
             var offerCatalogIndex = BuildOfferCatalogIndex(vfsProvider.MountedVfs);
@@ -256,7 +267,7 @@ namespace FortnitePorting.Controllers
             ConcurrentDictionary<string, ConcurrentDictionary<string, string>>? locData = null;
             if (!string.IsNullOrWhiteSpace(lang) && !lang.Equals("en", StringComparison.OrdinalIgnoreCase))
             {
-                locData = LocalizationService.Load(_provider, lang);
+                locData = LocalizationService.Load(_provider, lang, scope: _scope);
             }
 
             var offerCatalogIndex = BuildOfferCatalogIndex(vfsProvider.MountedVfs);
@@ -298,7 +309,7 @@ namespace FortnitePorting.Controllers
                 return BadRequest(new { message = "The provider is not a VFS provider." });
             }
 
-            var cacheKey = $"cosmeticicon::{id}::{variant}::vfs={vfsProvider.MountedVfs.Count};files={_provider.Files.Count}";
+            var cacheKey = $"{_scope}cosmeticicon::{id}::{variant}::vfs={vfsProvider.MountedVfs.Count};files={_provider.Files.Count}";
             if (_cache.TryGetValue(cacheKey, out CachedIcon? cachedIcon) && cachedIcon != null)
             {
                 return SendIcon(cachedIcon);

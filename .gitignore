@@ -43,3 +43,6 @@ RADADecoder/shim/*.exp
 /publish-linux/
 /publish-aesfinder*/
 /final/
+
+# Archived build manifests, per-build AES keys and recorded changelists (see /api/v1/versions).
+build_history/
