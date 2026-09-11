@@ -313,6 +313,17 @@ Find and inspect assets whose file name starts with one of
 | `GET /api/v1/items/properties?prefixes={csv}&page={n}&pageSize={n}` | For each matching asset, extract `Properties.ItemName.SourceString`, `DataList → Traits`, and `LargeIcon.AssetPathName` (paginated). |
 | `GET /api/v1/items/properties/single?path={path}` | Same extraction for a single asset path. |
 
+`files` and `properties` also accept exclusion filters (both comma-separated, case-insensitive).
+
+| Parameter | Description |
+|---|---|
+| `excludePrefixes` | Drop files whose name starts with one of these prefixes, even when the name matches `prefixes`. |
+| `excludePaths` | Drop files whose full path contains one of these substrings. |
+
+```
+http://localhost:3849/api/v1/items/files?prefixes=WID_&excludePrefixes=WID_Harvest_&excludePaths=/Juno/
+```
+
 Example response (`/api/v1/items/properties/single`):
 ```json
 {

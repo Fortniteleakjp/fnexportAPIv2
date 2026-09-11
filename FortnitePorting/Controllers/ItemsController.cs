@@ -40,6 +40,8 @@ namespace FortnitePorting.Controllers
         /// Returns a list of file paths whose names start with the specified prefixes.
         /// </summary>
         /// <param name="prefixes">A comma-separated list of target prefixes (defaults to WID_,AGID_,Athena_,Figment_Athena_ when omitted).</param>
+        /// <param name="excludePrefixes">A comma-separated list of file-name prefixes to exclude (e.g., WID_Harvest_). Excluded even when the name matches one of <paramref name="prefixes"/>.</param>
+        /// <param name="excludePaths">A comma-separated list of substrings; a file is excluded when its full path contains any of them (e.g., /Juno/).</param>
         /// <param name="page">The page number (1-based).</param>
         /// <param name="pageSize">The number of items per page (maximum 10000).</param>
         /// <param name="ext">The target file extension (defaults to .uasset only; an empty string matches all extensions).</param>
@@ -47,6 +49,8 @@ namespace FortnitePorting.Controllers
         [HttpGet("files")]
         public IActionResult GetFiles(
             [FromQuery] string? prefixes = null,
+            [FromQuery] string? excludePrefixes = null,
+            [FromQuery] string? excludePaths = null,
             [FromQuery] int page = 1,
             [FromQuery] int pageSize = 1000,
             [FromQuery] string ext = ".uasset")
@@ -55,8 +59,10 @@ namespace FortnitePorting.Controllers
             pageSize = Math.Clamp(pageSize, 1, 10000);
 
             var prefixList = ParsePrefixes(prefixes);
+            var excludePrefixList = ParseList(excludePrefixes);
+            var excludePathList = ParseList(excludePaths);
 
-            var matched = EnumerateMatchingFiles(prefixList, ext)
+            var matched = EnumerateMatchingFiles(prefixList, ext, excludePrefixList, excludePathList)
                 .OrderBy(k => k, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
@@ -67,6 +73,8 @@ namespace FortnitePorting.Controllers
             return Ok(new
             {
                 prefixes = prefixList,
+                excludePrefixes = excludePrefixList,
+                excludePaths = excludePathList,
                 extension = string.IsNullOrEmpty(ext) ? "(all)" : ext,
                 totalFiles = total,
                 totalPages,
@@ -81,12 +89,16 @@ namespace FortnitePorting.Controllers
         /// extracts and returns Properties.ItemName.SourceString / DataList(...).Traits / LargeIcon.AssetPathName.
         /// </summary>
         /// <param name="prefixes">A comma-separated list of target prefixes (defaults to WID_,AGID_,Athena_,Figment_Athena_ when omitted).</param>
+        /// <param name="excludePrefixes">A comma-separated list of file-name prefixes to exclude (e.g., WID_Harvest_). Excluded even when the name matches one of <paramref name="prefixes"/>.</param>
+        /// <param name="excludePaths">A comma-separated list of substrings; a file is excluded when its full path contains any of them (e.g., /Juno/).</param>
         /// <param name="page">The page number (1-based).</param>
         /// <param name="pageSize">The number of items per page (maximum 500; a small value is recommended because asset parsing is expensive).</param>
         /// <returns>The list of extraction results for each file.</returns>
         [HttpGet("properties")]
         public IActionResult GetProperties(
             [FromQuery] string? prefixes = null,
+            [FromQuery] string? excludePrefixes = null,
+            [FromQuery] string? excludePaths = null,
             [FromQuery] int page = 1,
             [FromQuery] int pageSize = 100)
         {
@@ -94,8 +106,10 @@ namespace FortnitePorting.Controllers
             pageSize = Math.Clamp(pageSize, 1, 500);
 
             var prefixList = ParsePrefixes(prefixes);
+            var excludePrefixList = ParseList(excludePrefixes);
+            var excludePathList = ParseList(excludePaths);
 
-            var matched = EnumerateMatchingFiles(prefixList, ".uasset")
+            var matched = EnumerateMatchingFiles(prefixList, ".uasset", excludePrefixList, excludePathList)
                 .OrderBy(k => k, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
@@ -112,6 +126,8 @@ namespace FortnitePorting.Controllers
             var payload = new
             {
                 prefixes = prefixList,
+                excludePrefixes = excludePrefixList,
+                excludePaths = excludePathList,
                 totalFiles = total,
                 totalPages,
                 currentPage = page,
@@ -178,9 +194,26 @@ namespace FortnitePorting.Controllers
         }
 
         /// <summary>
-        /// Filters file keys by prefix (the start of the file name) and by extension.
+        /// Splits a comma-separated query value. Returns an empty array when nothing was specified.
         /// </summary>
-        private IEnumerable<string> EnumerateMatchingFiles(string[] prefixes, string ext)
+        private static string[] ParseList(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return Array.Empty<string>();
+            }
+
+            return value
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+
+        /// <summary>
+        /// Filters file keys by prefix (the start of the file name) and by extension,
+        /// then drops the ones excluded by file-name prefix or by a substring of the full path.
+        /// </summary>
+        private IEnumerable<string> EnumerateMatchingFiles(string[] prefixes, string ext, string[] excludePrefixes, string[] excludePaths)
         {
             var hasExt = !string.IsNullOrEmpty(ext);
             foreach (var key in _provider.Files.Keys)
@@ -190,16 +223,46 @@ namespace FortnitePorting.Controllers
                     continue;
                 }
 
-                var fileName = Path.GetFileName(key);
-                foreach (var prefix in prefixes)
+                if (ContainsAny(key, excludePaths))
                 {
-                    if (fileName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                    {
-                        yield return key;
-                        break;
-                    }
+                    continue;
+                }
+
+                var fileName = Path.GetFileName(key);
+                if (StartsWithAny(fileName, excludePrefixes))
+                {
+                    continue;
+                }
+
+                if (StartsWithAny(fileName, prefixes))
+                {
+                    yield return key;
                 }
             }
+        }
+
+        private static bool StartsWithAny(string fileName, string[] prefixes)
+        {
+            foreach (var prefix in prefixes)
+            {
+                if (fileName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static bool ContainsAny(string path, string[] fragments)
+        {
+            foreach (var fragment in fragments)
+            {
+                if (path.Contains(fragment, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+            return false;
         }
 
         /// <summary>

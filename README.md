@@ -364,6 +364,17 @@ http://localhost:3849/api/v1/export/datatable?path=.../CurveTable.uasset&delimit
 | `GET /api/v1/items/properties?prefixes={csv}&page={n}&pageSize={n}` | 各アセットから `Properties.ItemName.SourceString`、`DataList → Traits`、`LargeIcon.AssetPathName` を抽出（ページング）。 |
 | `GET /api/v1/items/properties/single?path={path}` | 単一アセットに対する同じ抽出。 |
 
+`files` と `properties` は除外フィルターも受け付けます（いずれもCSV・大文字小文字の区別なし）。
+
+| パラメーター | 説明 |
+|---|---|
+| `excludePrefixes` | この接頭辞で始まるファイル名を除外。`prefixes` に一致していても除外されます。 |
+| `excludePaths` | フルパスにこの文字列を含むファイルを除外。 |
+
+```
+http://localhost:3849/api/v1/items/files?prefixes=WID_&excludePrefixes=WID_Harvest_&excludePaths=/Juno/
+```
+
 レスポンス例（`/api/v1/items/properties/single`）:
 ```json
 {
