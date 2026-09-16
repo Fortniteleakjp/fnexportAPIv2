@@ -38,12 +38,13 @@ public sealed class ConfigController : ControllerBase
     public IActionResult GetFiles([FromQuery] string? q = null)
     {
         q = string.IsNullOrWhiteSpace(q) ? null : q.Trim();
-        var files = _provider.Files.Keys
-            .Where(x => x.EndsWith(".ini", StringComparison.OrdinalIgnoreCase) &&
-                        x.Contains("Config/", StringComparison.OrdinalIgnoreCase))
+        // The index keeps the .ini paths in their own bucket (a few thousand of them), so listing them
+        // no longer means walking the build's million paths. They are already distinct and sorted.
+        var index = FileIndex.For(_provider);
+        var files = index.Bucket(".ini")
+            .Select(index.PathAt)
+            .Where(x => x.Contains("Config/", StringComparison.OrdinalIgnoreCase))
             .Where(x => q == null || x.Contains(q, StringComparison.OrdinalIgnoreCase))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
             .Select(x => new { name = Path.GetFileName(x), path = x })
             .ToList();
 
@@ -63,10 +64,29 @@ public sealed class ConfigController : ControllerBase
         }
 
         var fileQuery = file.Trim().Replace('\\', '/');
-        var filePath = _provider.Files.Keys.FirstOrDefault(x =>
-            x.Equals(fileQuery, StringComparison.OrdinalIgnoreCase) ||
-            (Path.GetFileName(x).Equals(fileQuery, StringComparison.OrdinalIgnoreCase) &&
-             x.Contains("Config/", StringComparison.OrdinalIgnoreCase)));
+        var index = FileIndex.For(_provider);
+
+        // An exact virtual path is one hash probe; a bare file name such as Game.ini is looked for in the
+        // bucket of its own extension rather than across every path in the build.
+        string? filePath = index.Contains(fileQuery) ? fileQuery : null;
+        if (filePath == null)
+        {
+            var dot = fileQuery.LastIndexOf('.');
+            var candidates = dot > fileQuery.LastIndexOf('/')
+                ? index.Bucket(fileQuery[dot..])
+                : index.Enumerate(null, null);
+
+            foreach (var i in candidates)
+            {
+                if (!index.NameAt(i).Equals(fileQuery, StringComparison.OrdinalIgnoreCase)) continue;
+
+                var candidate = index.PathAt(i);
+                if (!candidate.Contains("Config/", StringComparison.OrdinalIgnoreCase)) continue;
+
+                filePath = candidate;
+                break;
+            }
+        }
 
         if (filePath == null)
         {

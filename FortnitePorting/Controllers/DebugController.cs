@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using CUE4Parse.FileProvider;
 using CUE4Parse.FileProvider.Vfs;
 using CUE4Parse.UE4.Readers;
+using FortnitePorting.Services;
 using Microsoft.AspNetCore.Mvc;
 using EpicManifestParser;
 using EpicManifestParser.UE;
@@ -96,10 +97,12 @@ namespace FortnitePorting.Controllers
 
             try
             {
-                var allFiles = _provider.Files.Keys.OrderBy(k => k).ToList();
+                // The index already holds the paths sorted, so a page is a slice rather than a fresh
+                // sort of the whole build on every request. The order is case-insensitive now.
+                var allFiles = FileIndex.For(_provider).Keys;
                 var totalFiles = allFiles.Count;
                 var totalPages = (int)Math.Ceiling(totalFiles / (double)pageSize);
-                
+
                 var skip = (page - 1) * pageSize;
                 var pagedFiles = allFiles.Skip(skip).Take(pageSize).ToList();
 
@@ -133,9 +136,9 @@ namespace FortnitePorting.Controllers
 
             try
             {
-                var searchResults = _provider.Files.Keys
+                // Already sorted and distinct in the index, so only the matches are collected.
+                var searchResults = FileIndex.For(_provider).Keys
                     .Where(k => k.Contains(query, StringComparison.OrdinalIgnoreCase))
-                    .OrderBy(k => k)
                     .ToList();
 
                 return Ok(new

@@ -447,7 +447,7 @@ namespace FortnitePorting.Controllers
 
             try
             {
-                if (!_provider.Files.TryGetValue(path, out var gameFile))
+                if (!FileIndex.For(_provider).TryGetFile(path, out var gameFile))
                 {
                     return;
                 }
@@ -491,7 +491,7 @@ namespace FortnitePorting.Controllers
 
             try
             {
-                if (_provider.Files.TryGetValue(assetPath, out var gameFile))
+                if (FileIndex.For(_provider).TryGetFile(assetPath, out var gameFile))
                 {
                     texture = _provider.LoadPackage(gameFile).GetExports().OfType<UTexture2D>().FirstOrDefault();
                     if (texture != null) return true;
@@ -648,7 +648,7 @@ namespace FortnitePorting.Controllers
         {
             try
             {
-                if (!_provider.Files.TryGetValue(path, out var gameFile))
+                if (!FileIndex.For(_provider).TryGetFile(path, out var gameFile))
                 {
                     return new { path, name = Path.GetFileNameWithoutExtension(path), assetKind = CosmeticAssetKind, error = "File not found." };
                 }
@@ -747,7 +747,7 @@ namespace FortnitePorting.Controllers
         {
             try
             {
-                if (!_provider.Files.TryGetValue(path, out var gameFile))
+                if (!FileIndex.For(_provider).TryGetFile(path, out var gameFile))
                 {
                     return new { path, name = Path.GetFileNameWithoutExtension(path), assetKind = OfferCatalogDisplayAssetKind, error = "File not found." };
                 }

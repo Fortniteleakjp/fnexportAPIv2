@@ -272,23 +272,17 @@ namespace FortnitePorting.Controllers
                     _provider.TryLoadPackageObject(fallbackPath, out asset);
                 }
 
-                // Fallback: if loading by package path fails, attempt to load directly from the file path.
-                // Useful for cases such as when a plugin's mount point is not recognized correctly.
+                // Fallback: if loading by package path fails, resolve the request against the path index
+                // and load the file directly. This covers a plugin whose mount point CUE4Parse does not
+                // recognize, and an object path (.../T_Foo.T_Foo) — the object name is not part of any
+                // stored path, so it has to be split off before the file can be looked up at all.
                 if (asset == null)
                 {
-                    var normalizedPath = path.Replace('\\', '/');
-                    // If there is no extension, try to add one
-                    if (!normalizedPath.EndsWith(".uasset", StringComparison.OrdinalIgnoreCase) &&
-                        !normalizedPath.EndsWith(".umap", StringComparison.OrdinalIgnoreCase))
+                    var gameFile = ResolveMountedAsset(path, out var exportName);
+                    if (gameFile != null)
                     {
-                        normalizedPath += ".uasset";
-                    }
-
-                    if (_provider.Files.TryGetValue(normalizedPath, out var gameFile))
-                    {
-                        _logger.LogInformation("Fallback: Found file by direct path '{NormalizedPath}'. Loading package...", normalizedPath);
+                        _logger.LogInformation("Fallback: resolved \"{Path}\" to the mounted file \"{File}\". Loading package...", path, gameFile.Path);
                         var package = _provider.LoadPackage(gameFile);
-                        var exportName = Path.GetFileNameWithoutExtension(normalizedPath);
                         asset = package.GetExportOrNull(exportName, StringComparison.OrdinalIgnoreCase);
 
                         if (asset == null)
@@ -1233,7 +1227,7 @@ namespace FortnitePorting.Controllers
                 normalized += ".uasset";
             }
 
-            if (_provider.Files.TryGetValue(normalized, out var gameFile))
+            if (FileIndex.For(_provider).TryGetFile(normalized, out var gameFile))
             {
                 var package = _provider.LoadPackage(gameFile);
                 asset = package.GetExportOrNull(Path.GetFileNameWithoutExtension(normalized), StringComparison.OrdinalIgnoreCase)
@@ -1241,6 +1235,87 @@ namespace FortnitePorting.Controllers
             }
 
             return asset != null;
+        }
+
+        /// <summary>
+        /// Resolves any of the forms a caller addresses an asset by to the mounted file, through the path
+        /// index: the stored virtual path, that path without its extension, an object path
+        /// (<c>.../T_Foo.T_Foo</c>), and the <c>/Game/...</c> or <c>/PluginName/...</c> package paths.
+        /// <para>
+        /// The package loader above already resolves most of these, but it cannot when a plugin's mount
+        /// point is missing, or when the export it is asked for is not named after its asset. The index
+        /// knows the plugin assets by their stable "/PluginName/Content/..." tail, so the file is found
+        /// regardless of how many feature folders the virtual mount puts in front of the plugin name.
+        /// </para>
+        /// </summary>
+        /// <param name="exportName">The export to prefer once the package is loaded.</param>
+        /// <returns>The mounted file, or null when this build has none of the forms.</returns>
+        private CUE4Parse.FileProvider.Objects.GameFile? ResolveMountedAsset(string requested, out string exportName)
+        {
+            exportName = string.Empty;
+
+            var value = (requested ?? string.Empty).Replace('\\', '/').Trim();
+            if (value.Length == 0) return null;
+
+            var index = FileIndex.For(_provider);
+
+            // Split off a trailing object name: "Package.Object" addresses an export, and the ".Object"
+            // half never appears in a stored path.
+            var lastSlash = value.LastIndexOf('/');
+            var lastDot = value.LastIndexOf('.');
+            if (lastDot > lastSlash + 1 &&
+                !value.EndsWith(".uasset", StringComparison.OrdinalIgnoreCase) &&
+                !value.EndsWith(".umap", StringComparison.OrdinalIgnoreCase))
+            {
+                exportName = value[(lastDot + 1)..];
+                value = value[..lastDot];
+            }
+
+            if (exportName.Length == 0)
+            {
+                exportName = Path.GetFileNameWithoutExtension(value);
+            }
+
+            // The path as it is stored, and the same path with the extension the caller left out.
+            if (TryGetPackageFile(index, value, out var file)) return file;
+
+            if (value.StartsWith("/Game/", StringComparison.OrdinalIgnoreCase))
+            {
+                // /Game/Athena/... is FortniteGame/Content/Athena/...
+                if (TryGetPackageFile(index, "FortniteGame/Content/" + value[6..], out file)) return file;
+            }
+            else if (value.StartsWith('/'))
+            {
+                // /PluginName/Path/Asset — the mount can carry feature folders before the plugin name,
+                // so the asset is looked up by the "/PluginName/Content/Path/Asset" tail it always has.
+                var relative = value[1..];
+                var slash = relative.IndexOf('/');
+                if (slash > 0)
+                {
+                    var tail = $"/{relative[..slash]}/Content/{relative[(slash + 1)..]}";
+                    var resolved = index.TryResolvePluginAsset(tail + ".uasset")
+                                   ?? index.TryResolvePluginAsset(tail + ".umap");
+                    if (resolved != null && index.TryGetFile(resolved, out file)) return file;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>Looks a package path up as stored, then as .uasset and .umap.</summary>
+        private static bool TryGetPackageFile(FileIndex index, string path,
+            out CUE4Parse.FileProvider.Objects.GameFile? file)
+        {
+            if (index.TryGetFile(path, out var found) ||
+                index.TryGetFile(path + ".uasset", out found) ||
+                index.TryGetFile(path + ".umap", out found))
+            {
+                file = found;
+                return true;
+            }
+
+            file = null;
+            return false;
         }
 
         private string ConvertToPackagePath(string filePath)
@@ -1430,8 +1505,11 @@ namespace FortnitePorting.Controllers
             }
 
             var result = new ConcurrentDictionary<string, ConcurrentDictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
-            var locresFiles = _provider.Files.Keys
-                .Where(k => k.EndsWith(".locres", StringComparison.OrdinalIgnoreCase))
+            // The .locres files are their own bucket in the index, so selecting a language's files costs
+            // a few thousand comparisons instead of a walk over every path in the build.
+            var index = FileIndex.For(_provider);
+            var locresFiles = index.Bucket(".locres")
+                .Select(index.PathAt)
                 .Where(k =>
                 {
                     var normalized = k.Replace('\\', '/');
@@ -1453,8 +1531,8 @@ namespace FortnitePorting.Controllers
             if (locresFiles.Count == 0 && !string.IsNullOrEmpty(chunkNo))
             {
                 // Fallback: if nothing is found with the chunk specified, search again by language only
-                locresFiles = _provider.Files.Keys
-                    .Where(k => k.EndsWith(".locres", StringComparison.OrdinalIgnoreCase))
+                locresFiles = index.Bucket(".locres")
+                    .Select(index.PathAt)
                     .Where(k =>
                     {
                         var normalized = k.Replace('\\', '/');

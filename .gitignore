@@ -46,3 +46,5 @@ RADADecoder/shim/*.exp
 
 # Archived build manifests, per-build AES keys and recorded changelists (see /api/v1/versions).
 build_history/
+
+.vscode

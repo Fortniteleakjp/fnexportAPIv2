@@ -186,7 +186,11 @@ namespace FortnitePorting.Controllers
             EnsureBytesCacheVersion();
             if (_contentCacheUsable && BytesCache.TryGetValue(path, out var hit)) return hit;
 
-            if (!_provider.TrySaveAsset(path, out var bytes) || bytes == null) return null;
+            // The paths handed here come from the index, so resolve the file there: the provider's own
+            // path overload sorts its whole archive list up to three times per call, which a parallel
+            // scan over thousands of files feels immediately.
+            if (!FileIndex.For(_provider).TryGetFile(path, out var gameFile)) return null;
+            if (!_provider.TrySaveAsset(gameFile, out var bytes) || bytes == null) return null;
 
             var canCache = _contentCacheUsable &&
                            (ContentCacheUnbounded ||
@@ -281,7 +285,7 @@ namespace FortnitePorting.Controllers
                 return BadRequest(new { message = $"The pattern is too long (max {MaxPatternLength} characters for regex/wildcard/glob)." });
             }
 
-            Func<string, bool> matcher;
+            PathMatcher matcher;
             try
             {
                 matcher = BuildMatcher(needle, mode, caseSensitive);
@@ -326,7 +330,16 @@ namespace FortnitePorting.Controllers
             var stopwatch = Stopwatch.StartNew();
             long seen = 0;
 
-            foreach (var key in _provider.Files.Keys)
+            // A prefix (and its special case, an exact path) is itself a range of the sorted index, so
+            // such a query is answered by a binary search instead of a scan. The matcher still runs, so
+            // a case-sensitive query still rejects what only matches case-insensitively.
+            var pathPrefix = field == "path" && (mode == "prefix" || mode == "exact") ? needle : null;
+
+            // The index applies both filters without touching the rest of the build: the directory is a
+            // contiguous range of the sorted paths, and each extension is a precomputed bucket. What is
+            // left is matched against spans over the path strings, so the scan allocates nothing.
+            var index = FileIndex.For(_provider);
+            foreach (var i in index.Enumerate(dirPrefix, hasExtFilter ? extensions : null, pathPrefix))
             {
                 if (++seen % ScanCheckInterval == 0)
                 {
@@ -338,27 +351,16 @@ namespace FortnitePorting.Controllers
                     }
                 }
 
-                if (dirPrefix != null && !key.StartsWith(dirPrefix, StringComparison.OrdinalIgnoreCase))
+                var matched = field switch
                 {
-                    continue;
-                }
-
-                // Cheap, allocation-free extension filter (the keys are '/'-delimited virtual paths).
-                if (hasExtFilter && !extensions.Any(e => key.EndsWith(e, StringComparison.OrdinalIgnoreCase)))
-                {
-                    continue;
-                }
-
-                var value = field switch
-                {
-                    "name" => GetFileName(key),
-                    "stem" => GetFileStem(key),
-                    _ => key
+                    "name" => matcher(index.NameAt(i)),
+                    "stem" => matcher(index.StemAt(i)),
+                    _ => matcher(index.PathAt(i))
                 };
 
-                if (matcher(value))
+                if (matched)
                 {
-                    matches.Add(key);
+                    matches.Add(index.PathAt(i));
                     if (matches.Count >= MaxCollectedMatches)
                     {
                         truncated = true;
@@ -367,10 +369,9 @@ namespace FortnitePorting.Controllers
                 }
             }
 
-            // The provider can enumerate the same virtual path from multiple mounted archives.
-            IEnumerable<string> ordered = matches
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .OrderBy(k => k, StringComparer.OrdinalIgnoreCase);
+            // The index holds each virtual path once, so only the ordering is left to do (a bucketed
+            // scan yields one extension after another).
+            IEnumerable<string> ordered = matches.OrderBy(k => k, StringComparer.OrdinalIgnoreCase);
 
             if (dedupe)
             {
@@ -470,11 +471,24 @@ namespace FortnitePorting.Controllers
             var explicitSet = new HashSet<string>(explicitExts, StringComparer.OrdinalIgnoreCase);
             var useDefault = !allowAll && explicitSet.Count == 0;
 
-            bool IsAllowed(string keyExt)
+            // The index buckets every path by extension, so the candidate universe is the union of the
+            // allowed buckets rather than the whole build: a default query never even looks at the
+            // extensions it would have rejected one path at a time.
+            var index = FileIndex.For(_provider);
+            var allowedExtensions = allowAll
+                ? index.Extensions.ToList()
+                : useDefault
+                    ? PackageExtensions.Concat(TextExtensions).ToList()
+                    : explicitExts;
+            var allowedPackageExtensions = allowedExtensions.Where(PackageExtensions.Contains).ToList();
+
+            bool IsAllowedPackage(ReadOnlySpan<char> keyExt)
             {
-                if (allowAll) return true;
-                if (useDefault) return PackageExtensions.Contains(keyExt) || TextExtensions.Contains(keyExt);
-                return explicitSet.Contains(keyExt);
+                foreach (var packageExt in allowedPackageExtensions)
+                {
+                    if (keyExt.Equals(packageExt, StringComparison.OrdinalIgnoreCase)) return true;
+                }
+                return false;
             }
 
             // Result cache: an identical query returns instantly. The mounted file count is part of the
@@ -512,24 +526,25 @@ namespace FortnitePorting.Controllers
                 else candidateLimitReached = true;
             }
 
-            // Pass 1: classify every allowed candidate.
-            foreach (var key in _provider.Files.Keys)
+            // Pass 1: classify every allowed candidate. The directory filter is the index range the
+            // sorted paths already provide, and the extension of a bucket is known up front, so nothing
+            // is recomputed per file.
+            var (dirStart, dirEnd) = index.PrefixRange(dirPrefix);
+            foreach (var extension in allowedExtensions)
             {
-                if (dirPrefix != null && !key.StartsWith(dirPrefix, StringComparison.OrdinalIgnoreCase)) continue;
-                if (!string.IsNullOrEmpty(pathContains) && !key.Contains(pathContains, StringComparison.OrdinalIgnoreCase)) continue;
+                var isText = TextExtensions.Contains(extension);
+                foreach (var i in index.Bucket(extension))
+                {
+                    if (i < dirStart || i >= dirEnd) continue;
 
-                var keyExt = GetExtension(key);
-                if (!IsAllowed(keyExt)) continue;
+                    var key = index.PathAt(i);
+                    if (!string.IsNullOrEmpty(pathContains) && !key.Contains(pathContains, StringComparison.OrdinalIgnoreCase)) continue;
 
-                if (key.Contains(needle, StringComparison.OrdinalIgnoreCase)) AddTo(pathBucket, key);
-                else if (TextExtensions.Contains(keyExt)) AddTo(textBucket, key);
-                else AddTo(assetBucket, key);
+                    if (key.Contains(needle, StringComparison.OrdinalIgnoreCase)) AddTo(pathBucket, key);
+                    else if (isText) AddTo(textBucket, key);
+                    else AddTo(assetBucket, key);
+                }
             }
-
-            // The provider can enumerate the same virtual path from multiple mounted archives.
-            pathBucket = pathBucket.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-            textBucket = textBucket.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-            assetBucket = assetBucket.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 
             // Derive "related" scopes (plugin root or parent folder) from the path matches, then do a
             // second pass to collect the package assets under those scopes — this reaches content-only
@@ -546,22 +561,33 @@ namespace FortnitePorting.Controllers
             if (scopes.Count > 0)
             {
                 var inPath = new HashSet<string>(pathBucket, StringComparer.OrdinalIgnoreCase);
-                foreach (var key in _provider.Files.Keys)
+                // A scope is a directory prefix, so the index hands back exactly the paths under it
+                // instead of the build being walked once per query. Overlapping scopes can offer the
+                // same path twice, which the dedupe below removes.
+                var relatedLimitReached = false;
+                foreach (var scope in scopes)
                 {
-                    if (relatedBucket.Count >= MaxContentCandidates) { candidateLimitReached = true; break; }
-
-                    var keyExt = GetExtension(key);
-                    if (!PackageExtensions.Contains(keyExt)) continue;                         // related = assets only
-                    if (!IsAllowed(keyExt)) continue;
-                    if (key.Contains(needle, StringComparison.OrdinalIgnoreCase)) continue;     // already in pathBucket
-                    if (inPath.Contains(key)) continue;
-                    if (dirPrefix != null && !key.StartsWith(dirPrefix, StringComparison.OrdinalIgnoreCase)) continue;
-                    if (!string.IsNullOrEmpty(pathContains) && !key.Contains(pathContains, StringComparison.OrdinalIgnoreCase)) continue;
-
-                    if (scopes.Any(s => key.StartsWith(s, StringComparison.OrdinalIgnoreCase)))
+                    var (scopeStart, scopeEnd) = index.PrefixRange(scope);
+                    for (var i = scopeStart; i < scopeEnd; i++)
                     {
+                        if (relatedBucket.Count >= MaxContentCandidates)
+                        {
+                            candidateLimitReached = relatedLimitReached = true;
+                            break;
+                        }
+
+                        if (i < dirStart || i >= dirEnd) continue;
+                        if (!IsAllowedPackage(index.ExtensionAt(i))) continue;                     // related = assets only
+
+                        var key = index.PathAt(i);
+                        if (key.Contains(needle, StringComparison.OrdinalIgnoreCase)) continue;     // already in pathBucket
+                        if (inPath.Contains(key)) continue;
+                        if (!string.IsNullOrEmpty(pathContains) && !key.Contains(pathContains, StringComparison.OrdinalIgnoreCase)) continue;
+
                         relatedBucket.Add(key);
                     }
+
+                    if (relatedLimitReached) break;
                 }
                 relatedBucket = relatedBucket.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             }
@@ -679,10 +705,16 @@ namespace FortnitePorting.Controllers
         // --- Internal helpers ---
 
         /// <summary>
+        /// Matches one indexed path, or the name/stem slice of it. Takes a span so the scan can run
+        /// straight over the index without cutting a substring per file.
+        /// </summary>
+        private delegate bool PathMatcher(ReadOnlySpan<char> value);
+
+        /// <summary>
         /// Builds a predicate for the requested match mode. Throws <see cref="ArgumentException"/>
         /// for an unknown mode or an invalid regular expression.
         /// </summary>
-        private static Func<string, bool> BuildMatcher(string q, string mode, bool caseSensitive)
+        private static PathMatcher BuildMatcher(string q, string mode, bool caseSensitive)
         {
             var cmp = caseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
             var regexOptions = (caseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase) | RegexOptions.Compiled | RegexOptions.CultureInvariant;
@@ -690,7 +722,7 @@ namespace FortnitePorting.Controllers
             switch (mode)
             {
                 case "contains":
-                    return v => v.Contains(q, cmp);
+                    return v => v.IndexOf(q, cmp) >= 0;
                 case "prefix":
                     return v => v.StartsWith(q, cmp);
                 case "suffix":
@@ -705,7 +737,14 @@ namespace FortnitePorting.Controllers
                     {
                         throw new ArgumentException("The 'q' parameter contains no search tokens.");
                     }
-                    return v => tokens.All(t => v.Contains(t, cmp));
+                    return v =>
+                    {
+                        foreach (var token in tokens)
+                        {
+                            if (v.IndexOf(token, cmp) < 0) return false;
+                        }
+                        return true;
+                    };
                 }
                 case "wildcard":
                 {
@@ -747,7 +786,7 @@ namespace FortnitePorting.Controllers
             }
         }
 
-        private static bool SafeIsMatch(Regex rx, string value)
+        private static bool SafeIsMatch(Regex rx, ReadOnlySpan<char> value)
         {
             try
             {
@@ -992,7 +1031,9 @@ namespace FortnitePorting.Controllers
 
             try
             {
-                if (!_provider.Files.TryGetValue(path, out var gameFile))
+                // Through the index: the provider's own lookup sorts its whole archive list on every call,
+                // which is ruinous when a scan parses thousands of matched assets.
+                if (!FileIndex.For(_provider).TryGetFile(path, out var gameFile))
                 {
                     if (_contentCacheUsable) AssetJsonCache.TryAdd(path, string.Empty);
                     return null;

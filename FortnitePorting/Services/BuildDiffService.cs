@@ -756,7 +756,9 @@ public sealed class BuildDiffService
     /// <summary>Reads one file out of a build as text when it can be, and as bytes otherwise.</summary>
     public static FileSide ReadSide(IFileProvider provider, string path)
     {
-        if (!provider.Files.TryGetValue(path, out var file))
+        // Through the index: a changelist reads this for file after file, and both the provider's own
+        // lookup and its path-based read sort the whole archive list on every call.
+        if (!FileIndex.For(provider).TryGetFile(path, out var file))
         {
             return new FileSide(false, null, null, 0, null, null);
         }
@@ -764,7 +766,7 @@ public sealed class BuildDiffService
         var archive = (file as VfsEntry)?.Vfs.Name;
         try
         {
-            if (!provider.TrySaveAsset(path, out var bytes) || bytes == null)
+            if (!provider.TrySaveAsset(file, out var bytes) || bytes == null)
             {
                 return new FileSide(true, null, null, file.Size, archive, "The file could not be read (its archive may still be locked).");
             }

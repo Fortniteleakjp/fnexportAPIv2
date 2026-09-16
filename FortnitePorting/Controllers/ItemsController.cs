@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using CUE4Parse.FileProvider;
+using FortnitePorting.Services;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
@@ -151,12 +152,13 @@ namespace FortnitePorting.Controllers
                 return BadRequest("The 'path' parameter is required.");
             }
 
+            var index = FileIndex.For(_provider);
             var normalized = path.Replace('\\', '/').Trim();
-            if (!_provider.Files.ContainsKey(normalized))
+            if (!index.Contains(normalized))
             {
                 // Try to complete the file extension
                 if (!normalized.EndsWith(".uasset", StringComparison.OrdinalIgnoreCase) &&
-                    _provider.Files.ContainsKey(normalized + ".uasset"))
+                    index.Contains(normalized + ".uasset"))
                 {
                     normalized += ".uasset";
                 }
@@ -213,22 +215,26 @@ namespace FortnitePorting.Controllers
         /// Filters file keys by prefix (the start of the file name) and by extension,
         /// then drops the ones excluded by file-name prefix or by a substring of the full path.
         /// </summary>
-        private IEnumerable<string> EnumerateMatchingFiles(string[] prefixes, string ext, string[] excludePrefixes, string[] excludePaths)
+        private List<string> EnumerateMatchingFiles(string[] prefixes, string ext, string[] excludePrefixes, string[] excludePaths)
         {
-            var hasExt = !string.IsNullOrEmpty(ext);
-            foreach (var key in _provider.Files.Keys)
-            {
-                if (hasExt && !key.EndsWith(ext, StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
+            // An extension narrows the walk to that extension's bucket in the index (.uasset by default,
+            // so the Athena/WID scan never touches the .uexp/.ubulk half of the build), and the file name
+            // is compared as a span over the path instead of being cut out of it for every file.
+            var index = FileIndex.For(_provider);
+            var extensions = string.IsNullOrEmpty(ext)
+                ? null
+                : new[] { ext.StartsWith('.') ? ext : "." + ext };
 
+            var matched = new List<string>();
+            foreach (var i in index.Enumerate(null, extensions))
+            {
+                var key = index.PathAt(i);
                 if (ContainsAny(key, excludePaths))
                 {
                     continue;
                 }
 
-                var fileName = Path.GetFileName(key);
+                var fileName = index.NameAt(i);
                 if (StartsWithAny(fileName, excludePrefixes))
                 {
                     continue;
@@ -236,12 +242,14 @@ namespace FortnitePorting.Controllers
 
                 if (StartsWithAny(fileName, prefixes))
                 {
-                    yield return key;
+                    matched.Add(key);
                 }
             }
+
+            return matched;
         }
 
-        private static bool StartsWithAny(string fileName, string[] prefixes)
+        private static bool StartsWithAny(ReadOnlySpan<char> fileName, string[] prefixes)
         {
             foreach (var prefix in prefixes)
             {
@@ -272,7 +280,9 @@ namespace FortnitePorting.Controllers
         {
             try
             {
-                if (!_provider.Files.TryGetValue(path, out var gameFile))
+                // Through the index: a page of results resolves a hundred paths, and the provider's own
+                // lookup sorts its whole archive list on each one.
+                if (!FileIndex.For(_provider).TryGetFile(path, out var gameFile))
                 {
                     return new { path, error = "File not found." };
                 }
