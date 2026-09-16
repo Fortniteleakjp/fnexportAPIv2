@@ -45,8 +45,11 @@ public static class LocalizationService
         }
 
         var result = new ConcurrentDictionary<string, ConcurrentDictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
-        var locresFiles = provider.Files.Keys
-            .Where(k => k.EndsWith(".locres", StringComparison.OrdinalIgnoreCase))
+        // The .locres files are their own bucket in the index — a few thousand paths — so picking the
+        // ones for a language no longer walks every path in the build.
+        var index = FileIndex.For(provider);
+        var locresFiles = index.Bucket(".locres")
+            .Select(index.PathAt)
             .Where(k =>
             {
                 var normalized = k.Replace('\\', '/');
@@ -64,8 +67,8 @@ public static class LocalizationService
         if (locresFiles.Count == 0 && !string.IsNullOrEmpty(chunkNo))
         {
             // Fallback: nothing for the chunk -> match by language only.
-            locresFiles = provider.Files.Keys
-                .Where(k => k.EndsWith(".locres", StringComparison.OrdinalIgnoreCase))
+            locresFiles = index.Bucket(".locres")
+                .Select(index.PathAt)
                 .Where(k => IsLocresLangMatch(k.Replace('\\', '/'), lang))
                 .ToList();
             cacheKey = $"{lang}::mount={mountSnapshot}";
@@ -116,8 +119,9 @@ public static class LocalizationService
     /// </summary>
     public static List<string> GetAvailableLanguages(IFileProvider provider)
     {
-        return provider.Files.Keys
-            .Where(k => k.EndsWith(".locres", StringComparison.OrdinalIgnoreCase))
+        var index = FileIndex.For(provider);
+        return index.Bucket(".locres")
+            .Select(index.PathAt)
             .Select(k =>
             {
                 var parts = k.Replace('\\', '/').Split('/');

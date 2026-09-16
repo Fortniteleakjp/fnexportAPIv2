@@ -3,6 +3,7 @@ using System.Linq;
 using CUE4Parse.FileProvider;
 using CUE4Parse.UE4.Assets;
 using CUE4Parse.UE4.Objects.UObject;
+using FortnitePorting.Services;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Newtonsoft.Json;
@@ -308,6 +309,8 @@ public sealed class AssetsController : ControllerBase
         var cleaned = CleanReference(raw);
         if (!LooksLikeAssetReference(cleaned)) return null;
 
+        var index = FileIndex.For(_provider);
+
         var packageName = cleaned!;
         var dot = packageName.LastIndexOf('.');
         if (dot > 0) packageName = packageName[..dot];
@@ -329,18 +332,15 @@ public sealed class AssetsController : ControllerBase
             // The virtual mount can contain feature folders before the plugin name, for example
             // FortniteGame/Plugins/GameFeatures/BRCosmetics/Content/.... Resolve by the stable
             // '/PluginName/Content/...' suffix rather than assuming Plugins/{plugin}/Content/.
-            return _provider.Files.Keys.FirstOrDefault(x =>
-            {
-                var normalized = x.Replace('\\', '/');
-                return normalized.Contains("/Plugins/", StringComparison.OrdinalIgnoreCase) &&
-                       (normalized.EndsWith($"{pluginSuffix}.uasset", StringComparison.OrdinalIgnoreCase) ||
-                        normalized.EndsWith($"{pluginSuffix}.umap", StringComparison.OrdinalIgnoreCase));
-            });
+            // The index keeps those suffixes, so a reference resolves without a scan — dependency
+            // analysis resolves hundreds of them for a single asset.
+            return index.TryResolvePluginAsset($"{pluginSuffix}.uasset")
+                   ?? index.TryResolvePluginAsset($"{pluginSuffix}.umap");
         }
 
-        return _provider.Files.Keys.FirstOrDefault(x =>
-            x.Equals(prefix + ".uasset", StringComparison.OrdinalIgnoreCase) ||
-            x.Equals(prefix + ".umap", StringComparison.OrdinalIgnoreCase));
+        // Returns the stored path (not the constructed one) so the casing stays the build's own.
+        if (index.TryGetFile(prefix + ".uasset", out var package)) return package.Path;
+        return index.TryGetFile(prefix + ".umap", out var map) ? map.Path : null;
     }
 
     private static string NormalizeInputPath(string path)

@@ -130,6 +130,7 @@ var app = builder.Build();
 // Register the caches that hold data derived from the mounted build. They are all cleared whenever the
 // provider is rebuilt for a new build, so a cache hit can never keep serving pre-update content.
 CacheRegistry.Register("response cache", () => (app.Services.GetRequiredService<IMemoryCache>() as MemoryCache)?.Clear());
+CacheRegistry.Register("path index", FileIndex.ClearAll);
 CacheRegistry.Register("search bytes/exports", SearchController.ClearCaches);
 CacheRegistry.Register("export localization", ExportController.ClearCaches);
 CacheRegistry.Register("localization tables", LocalizationService.ClearCache);

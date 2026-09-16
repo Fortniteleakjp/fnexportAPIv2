@@ -32,14 +32,18 @@ public static class VersionedAssetReader
     {
         var normalized = path.Replace('\\', '/').TrimStart('/');
 
-        if (provider.Files.ContainsKey(normalized))
+        // Each candidate is one hash probe against the index: the provider's own ContainsKey walks
+        // every mounted archive, and resolving a path tries up to seven candidates.
+        var index = FileIndex.For(provider);
+
+        if (index.Contains(normalized))
         {
             return normalized;
         }
 
         foreach (var extension in new[] { ".uasset", ".umap", ".uexp", ".ubulk" })
         {
-            if (provider.Files.ContainsKey(normalized + extension))
+            if (index.Contains(normalized + extension))
             {
                 return normalized + extension;
             }
@@ -50,7 +54,7 @@ public static class VersionedAssetReader
         var withoutObject = normalized.Contains('.') ? normalized[..normalized.LastIndexOf('.')] : normalized;
         foreach (var extension in new[] { ".uasset", ".umap" })
         {
-            if (provider.Files.ContainsKey(withoutObject + extension))
+            if (index.Contains(withoutObject + extension))
             {
                 return withoutObject + extension;
             }
@@ -71,13 +75,19 @@ public static class VersionedAssetReader
             return new ReadResult(false, path, "missing", null, null, null, 0, null, null);
         }
 
-        var file = provider.Files[resolved];
+        // ResolvePath only returns paths the index holds, so this cannot miss — but the resolved file is
+        // carried on instead of being looked up again for its bytes and its package.
+        if (!FileIndex.For(provider).TryGetFile(resolved, out var file))
+        {
+            return new ReadResult(false, path, "missing", null, null, null, 0, null, null);
+        }
+
         var archive = (file as VfsEntry)?.Vfs.Name;
 
         byte[]? bytes;
         try
         {
-            if (!provider.TrySaveAsset(resolved, out bytes) || bytes == null)
+            if (!provider.TrySaveAsset(file, out bytes) || bytes == null)
             {
                 return new ReadResult(true, resolved, "unreadable", null, null, null, file.Size, archive,
                     "The file exists in this build but could not be read; its archive may still be locked.");

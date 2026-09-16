@@ -284,7 +284,7 @@ namespace FortnitePorting.Controllers
                         normalizedPath += ".uasset";
                     }
 
-                    if (_provider.Files.TryGetValue(normalizedPath, out var gameFile))
+                    if (FileIndex.For(_provider).TryGetFile(normalizedPath, out var gameFile))
                     {
                         _logger.LogInformation("Fallback: Found file by direct path '{NormalizedPath}'. Loading package...", normalizedPath);
                         var package = _provider.LoadPackage(gameFile);
@@ -1233,7 +1233,7 @@ namespace FortnitePorting.Controllers
                 normalized += ".uasset";
             }
 
-            if (_provider.Files.TryGetValue(normalized, out var gameFile))
+            if (FileIndex.For(_provider).TryGetFile(normalized, out var gameFile))
             {
                 var package = _provider.LoadPackage(gameFile);
                 asset = package.GetExportOrNull(Path.GetFileNameWithoutExtension(normalized), StringComparison.OrdinalIgnoreCase)
@@ -1430,8 +1430,11 @@ namespace FortnitePorting.Controllers
             }
 
             var result = new ConcurrentDictionary<string, ConcurrentDictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
-            var locresFiles = _provider.Files.Keys
-                .Where(k => k.EndsWith(".locres", StringComparison.OrdinalIgnoreCase))
+            // The .locres files are their own bucket in the index, so selecting a language's files costs
+            // a few thousand comparisons instead of a walk over every path in the build.
+            var index = FileIndex.For(_provider);
+            var locresFiles = index.Bucket(".locres")
+                .Select(index.PathAt)
                 .Where(k =>
                 {
                     var normalized = k.Replace('\\', '/');
@@ -1453,8 +1456,8 @@ namespace FortnitePorting.Controllers
             if (locresFiles.Count == 0 && !string.IsNullOrEmpty(chunkNo))
             {
                 // Fallback: if nothing is found with the chunk specified, search again by language only
-                locresFiles = _provider.Files.Keys
-                    .Where(k => k.EndsWith(".locres", StringComparison.OrdinalIgnoreCase))
+                locresFiles = index.Bucket(".locres")
+                    .Select(index.PathAt)
                     .Where(k =>
                     {
                         var normalized = k.Replace('\\', '/');
