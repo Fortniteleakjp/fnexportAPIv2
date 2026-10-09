@@ -1,7 +1,4 @@
-using CUE4Parse.FileProvider;
 using CUE4Parse.FileProvider.Vfs;
-using CUE4Parse.UE4.IO;
-using CUE4Parse.UE4.Pak;
 using CUE4Parse.UE4.VirtualFileSystem;
 using FortnitePorting.Models;
 using FortnitePorting.Services;
@@ -10,44 +7,8 @@ using System.Globalization;
 
 namespace FortnitePorting.Controllers;
 
-/// <summary>
-/// Returns metadata for registered archives and live AES keys for pak files.
-/// </summary>
-[ApiController]
-[Route("api/v1/archives")]
-public sealed class ArchivesController : ControllerBase
+public partial class AesController
 {
-    private readonly IFileProvider _provider;
-    private readonly ManifestService _manifestService;
-
-    public ArchivesController(IFileProvider provider, ManifestService manifestService)
-    {
-        _provider = provider;
-        _manifestService = manifestService;
-    }
-
-    /// <summary>
-    /// Returns metadata for all registered PAK/UTOC archives.
-    /// </summary>
-    [HttpGet]
-    public IActionResult GetArchives()
-    {
-        if (_provider is not AbstractVfsFileProvider vfsProvider)
-        {
-            return StatusCode(500, new { message = "The configured file provider is not a VFS provider." });
-        }
-
-        var archives = GetArchives(vfsProvider)
-            .Select(archive => ToArchiveInfo(archive, vfsProvider))
-            .OrderBy(archive => archive.Name, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        return Ok(archives);
-    }
-
-    /// <summary>
-    /// Returns AES information in the same shape as the Fortnite AES response.
-    /// </summary>
     [HttpGet("keys")]
     public async Task<IActionResult> GetPakKeys(CancellationToken cancellationToken)
     {
@@ -75,7 +36,7 @@ public sealed class ArchivesController : ControllerBase
             });
         }
 
-        var archives = GetArchives(vfsProvider).Where(IsKeychainArchive).ToList();
+        var archives = ArchiveCatalog.All(vfsProvider).Where(IsKeychainArchive).ToList();
         var unloadedPaths = vfsProvider.UnloadedVfs
             .Select(archive => archive.Path)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -126,34 +87,6 @@ public sealed class ArchivesController : ControllerBase
         });
     }
 
-    private static IEnumerable<IAesVfsReader> GetArchives(AbstractVfsFileProvider provider)
-    {
-        return provider.MountedVfs
-            .Concat(provider.UnloadedVfs)
-            .GroupBy(archive => archive.Path, StringComparer.OrdinalIgnoreCase)
-            .Select(group => group.First());
-    }
-
-    private static ArchiveInfo ToArchiveInfo(IAesVfsReader archive, AbstractVfsFileProvider provider)
-    {
-        var loadedKey = GetLoadedKey(provider, archive.EncryptionKeyGuid) ?? string.Empty;
-
-        return new ArchiveInfo
-        {
-            Name = archive.Name,
-            Length = archive.Length,
-            FileCount = archive.FileCount,
-            MountPoint = archive.MountPoint,
-            IsEncrypted = archive.IsEncrypted,
-            IsEnabled = provider.MountedVfs.Any(mounted =>
-                string.Equals(mounted.Path, archive.Path, StringComparison.OrdinalIgnoreCase)),
-            IsLooseFilesContainer = false,
-            Key = loadedKey,
-            Guid = archive.EncryptionKeyGuid.ToString(CUE4Parse.UE4.Objects.Core.Misc.EGuidFormats.UniqueObjectGuid),
-            CompressionMethods = GetCompressionMethods(archive)
-        };
-    }
-
     private static bool IsKeychainArchive(IAesVfsReader archive)
     {
         var isPakOrUtoc = archive.Name.EndsWith(".pak", StringComparison.OrdinalIgnoreCase)
@@ -162,21 +95,7 @@ public sealed class ArchivesController : ControllerBase
         return isPakOrUtoc && !isOnDemandUtoc && archive.EncryptionKeyGuid.IsValid();
     }
 
-    private static IReadOnlyList<string> GetCompressionMethods(IAesVfsReader archive)
-    {
-        return archive switch
-        {
-            PakFileReader pak => pak.Info.CompressionMethods
-                .Select(method => method.ToString())
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToArray(),
-            IoStoreReader ioStore => ioStore.TocResource.CompressionMethods
-                .Select(method => method.ToString())
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToArray(),
-            _ => Array.Empty<string>()
-        };
-    }
+
 
     private static string? GetLoadedKey(AbstractVfsFileProvider provider, CUE4Parse.UE4.Objects.Core.Misc.FGuid guid)
     {

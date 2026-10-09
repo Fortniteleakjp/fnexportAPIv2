@@ -147,7 +147,7 @@ namespace FortnitePorting.Controllers
                         archives = k.ArchiveCount
                     }),
                     unresolvedKeys = build.Keys.Keys.Count(k => k.Key == null),
-                    hint = "POST /api/v1/mappings/dump/local dumps a .usmap from it; DELETE /api/v1/local/mount frees it."
+                    hint = "POST /api/v1/mappings/generate creates a .usmap from installed UEFN DLLs; DELETE /api/v1/local/mount frees it."
                 });
             }
         }

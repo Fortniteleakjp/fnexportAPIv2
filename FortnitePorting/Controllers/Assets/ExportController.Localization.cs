@@ -35,10 +35,7 @@ namespace FortnitePorting.Controllers
     public partial class ExportController
     {
 
-        private List<string> GetAvailableLocresLanguages()
-        {
-            return LocalizationService.GetAvailableLanguages(_provider);
-        }
+
 
         private static bool IsLocresLangMatch(string normalizedPath, string lang)
         {
@@ -277,46 +274,9 @@ namespace FortnitePorting.Controllers
         }
 
 
-        /// <summary>
-        /// Loads all .locres files for the specified language, merges them, and returns the result.
-        /// </summary>
-        /// <param name="lang">Language code (e.g. ja, en)</param>
-        /// <returns>The merged localization data</returns>
-        [HttpGet("locres")]
-        public IActionResult GetLocres([FromQuery] string lang = "ja")
-        {
-            _logger.LogInformation("Received request for all .locres files with language: {Lang}", lang);
 
-            if (string.IsNullOrEmpty(lang))
-            {
-                return BadRequest("Language parameter is required.");
-            }
 
-            var result = LoadLocalizationData(lang);
 
-            if (result.IsEmpty)
-            {
-                return NotFound(new ProblemDetails
-                {
-                    Title = "Localization Not Found",
-                    Detail = $"No localization data found for language '{lang}'.",
-                    Status = StatusCodes.Status404NotFound,
-                    Extensions = { { "availableLanguages", GetAvailableLocresLanguages() } }
-                });
-            }
-
-            return JsonResponse.Result(result);
-        }
-
-        /// <summary>
-        /// Gets the list of available languages.
-        /// </summary>
-        [HttpGet("locres/languages")]
-        public IActionResult GetLocresLanguages()
-        {
-            var languages = GetAvailableLocresLanguages();
-            return Ok(new { languages });
-        }
 
 
         /// <summary>

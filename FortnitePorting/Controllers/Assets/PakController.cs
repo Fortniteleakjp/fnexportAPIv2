@@ -33,7 +33,7 @@ public sealed class PakController : ControllerBase
     /// <param name="page">1-based page number.</param>
     /// <param name="pageSize">Number of archives per page, from 1 to 200.</param>
     [HttpGet]
-    public IActionResult GetPaks([FromQuery] string? q = null, [FromQuery] int page = 1, [FromQuery] int pageSize = 50)
+    public IActionResult GetPaks([FromQuery] string? q = null, [FromQuery] int page = 1, [FromQuery] int pageSize = 50, [FromQuery] string state = "mounted")
     {
         if (_provider is not AbstractVfsFileProvider vfsProvider)
         {
@@ -44,17 +44,27 @@ public sealed class PakController : ControllerBase
         pageSize = Math.Clamp(pageSize, 1, 200);
         q = string.IsNullOrWhiteSpace(q) ? null : q.Trim();
 
-        var all = vfsProvider.MountedVfs
-            .Where(x => q == null || x.Name.Contains(q, StringComparison.OrdinalIgnoreCase) ||
-                        x.Path.Contains(q, StringComparison.OrdinalIgnoreCase))
-            .Select(x => new
+        state = (state ?? "mounted").Trim().ToLowerInvariant();
+        IEnumerable<CUE4Parse.UE4.VirtualFileSystem.IAesVfsReader> readers = state switch
+        {
+            "mounted" => vfsProvider.MountedVfs,
+            "unloaded" => vfsProvider.UnloadedVfs,
+            "all" => ArchiveCatalog.All(vfsProvider),
+            _ => []
+        };
+        if (state is not ("mounted" or "unloaded" or "all"))
+            return BadRequest(new { message = "state must be mounted, unloaded or all." });
+        var mountedPaths = vfsProvider.MountedVfs.Select(reader => reader.Path).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var all = ArchiveCatalog.Match(readers, q).Select(reader =>
+        {
+            var metadata = ArchiveCatalog.Metadata(reader, vfsProvider, mountedPaths.Contains(reader.Path));
+            return new
             {
-                name = x.Name,
-                fileCount = x.FileCount,
-                path = x.Path
-            })
-            .OrderBy(x => x.name, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+                name = reader.Name, fileCount = reader.FileCount, path = reader.Path,
+                metadata.Length, metadata.MountPoint, metadata.IsEncrypted, metadata.IsEnabled,
+                metadata.IsLooseFilesContainer, metadata.Key, metadata.Guid, metadata.CompressionMethods
+            };
+        }).OrderBy(reader => reader.name, StringComparer.OrdinalIgnoreCase).ToList();
 
         var total = all.Count;
         var totalPages = (int)Math.Ceiling(total / (double)pageSize);
@@ -63,6 +73,7 @@ public sealed class PakController : ControllerBase
         return Ok(new
         {
             query = q,
+            state,
             totalPaks = total,
             totalPages,
             currentPage = page,
@@ -72,7 +83,7 @@ public sealed class PakController : ControllerBase
     }
 
     /// <summary>Lists files contained in one mounted PAK/UTOC archive.</summary>
-    /// <param name="pakName">Archive name, file name without extension, or an unambiguous name fragment.</param>
+    /// <param name="pakName">Archive name, file stem, name fragment, or chunk number.</param>
     /// <param name="page">1-based page number.</param>
     /// <param name="pageSize">Number of files per page, from 1 to 10000.</param>
     [HttpGet("{pakName}/files")]
@@ -92,12 +103,7 @@ public sealed class PakController : ControllerBase
         pageSize = Math.Clamp(pageSize, 1, 10000);
         var query = pakName.Trim();
 
-        var readers = vfsProvider.MountedVfs
-            .Where(x => string.Equals(x.Name, query, StringComparison.OrdinalIgnoreCase) ||
-                        string.Equals(Path.GetFileNameWithoutExtension(x.Name), query, StringComparison.OrdinalIgnoreCase) ||
-                        x.Name.Contains(query, StringComparison.OrdinalIgnoreCase) ||
-                        x.Path.Contains(query, StringComparison.OrdinalIgnoreCase))
-            .ToList();
+        var readers = ArchiveCatalog.Match(vfsProvider.MountedVfs, query).ToList();
 
         if (readers.Count == 0)
         {

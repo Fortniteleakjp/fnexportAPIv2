@@ -201,61 +201,7 @@ namespace FortnitePorting.Controllers
         }
 
 
-        /// <summary>
-        /// Gets the list of file paths within the specified PAK/Chunk.
-        /// Example: api/v1/export/filepath/1051
-        /// </summary>
-        /// <param name="pakName">PAK name or Chunk number (e.g. 1051)</param>
-        [HttpGet("filepath/{pakName}")]
-        public IActionResult GetFilePathsInPak(string pakName)
-        {
-            if (string.IsNullOrWhiteSpace(pakName))
-            {
-                return BadRequest("pakName is required.");
-            }
 
-            if (_provider is not AbstractVfsFileProvider vfsProvider)
-            {
-                return BadRequest("The provider is not a VFS provider.");
-            }
-
-            var normalizedInput = pakName.Trim();
-            var chunkNeedle = $"chunk{normalizedInput}";
-
-            var matchedReaders = vfsProvider.MountedVfs
-                .Where(x =>
-                    string.Equals(x.Name, normalizedInput, StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(Path.GetFileNameWithoutExtension(x.Name), normalizedInput, StringComparison.OrdinalIgnoreCase) ||
-                    x.Name.Contains(normalizedInput, StringComparison.OrdinalIgnoreCase) ||
-                    x.Name.Contains(chunkNeedle, StringComparison.OrdinalIgnoreCase) ||
-                    x.Path.Contains(normalizedInput, StringComparison.OrdinalIgnoreCase) ||
-                    x.Path.Contains(chunkNeedle, StringComparison.OrdinalIgnoreCase))
-                .ToList();
-
-            if (matchedReaders.Count == 0)
-            {
-                return NotFound(new ProblemDetails
-                {
-                    Title = "Pak Not Found",
-                    Detail = $"The specified PAK/Chunk '{pakName}' could not be found.",
-                    Status = StatusCodes.Status404NotFound
-                });
-            }
-
-            var files = matchedReaders
-                .SelectMany(reader => reader.Files.Keys)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .OrderBy(k => k)
-                .ToList();
-
-            return Ok(new
-            {
-                query = pakName,
-                matchedPaks = matchedReaders.Select(x => x.Name).OrderBy(x => x).ToList(),
-                totalFiles = files.Count,
-                files
-            });
-        }
 
 
         private string GetMountSnapshot()

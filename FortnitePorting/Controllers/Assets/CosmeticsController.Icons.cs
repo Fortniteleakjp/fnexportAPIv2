@@ -28,7 +28,7 @@ namespace FortnitePorting.Controllers
         /// <param name="id">Cosmetic ID or asset name.</param>
         /// <param name="variant">large (default) uses LargeIcon, small uses Icon, offercatalog uses the
         /// OfferCatalog texture. large and small fall back to the other icon and then to OfferCatalog.</param>
-        [HttpGet("~/api/v1/cosmetics/{id}/icon")]
+        [HttpGet("{id}/icon")]
         public IActionResult GetCosmeticIcon(string id, [FromQuery] string variant = "large")
         {
             if (string.IsNullOrWhiteSpace(id))

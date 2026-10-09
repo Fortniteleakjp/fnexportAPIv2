@@ -21,11 +21,11 @@ namespace FortnitePorting.Controllers
 {
     /// <summary>
     /// Endpoints that read cosmetic item definitions and related offer display assets
-    /// out of a specific PAK / chunk.
+    /// from the mounted build, optionally restricted to a PAK / chunk.
     /// </summary>
     [ApiController]
     [VersionAware]
-    [Route("api/v1/pak")]
+    [Route("api/v1/cosmetics")]
     public partial class CosmeticsController : ControllerBase
     {
         private readonly RequestBuildProvider _build;
@@ -63,167 +63,64 @@ namespace FortnitePorting.Controllers
         }
 
 
-        /// <summary>
-        /// For the given PAK / chunk, scans every cosmetic under
-        /// FortniteGame/Plugins/GameFeatures/BRCosmetics/Content/Athena/Items/Cosmetics plus
-        /// FortniteGame/Plugins/GameFeatures/OfferCatalog/Content/DisplayAssets and returns
-        /// cosmetic definitions together with bundle offer display data.
-        /// </summary>
-        /// <param name="pakName">PAK name or chunk number (e.g. 1051).</param>
-        /// <param name="page">Page number (1-based).</param>
-        /// <param name="pageSize">Items per page (max 200; parsing is expensive).</param>
-        /// <param name="lang">Localization language code (e.g. ja). The ItemName/Description/ShortDescription
-        /// localization Keys are resolved to this language; omit or use en for the English source text.</param>
-        [HttpGet("{pakName}/cosmetics")]
-        public IActionResult GetCosmetics(string pakName, [FromQuery] int page = 1, [FromQuery] int pageSize = 50, [FromQuery] string? lang = null)
-        {
-            if (string.IsNullOrWhiteSpace(pakName))
-            {
-                return BadRequest("pakName is required.");
-            }
 
-            if (_provider is not AbstractVfsFileProvider vfsProvider)
-            {
-                return BadRequest("The provider is not a VFS provider.");
-            }
-
-            if (page < 1) page = 1;
-            pageSize = Math.Clamp(pageSize, 1, 200);
-
-            var normalizedInput = pakName.Trim();
-            var chunkNeedle = $"chunk{normalizedInput}";
-
-            var matchedReaders = vfsProvider.MountedVfs
-                .Where(x =>
-                    string.Equals(x.Name, normalizedInput, StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(Path.GetFileNameWithoutExtension(x.Name), normalizedInput, StringComparison.OrdinalIgnoreCase) ||
-                    x.Name.Contains(normalizedInput, StringComparison.OrdinalIgnoreCase) ||
-                    x.Name.Contains(chunkNeedle, StringComparison.OrdinalIgnoreCase) ||
-                    x.Path.Contains(normalizedInput, StringComparison.OrdinalIgnoreCase) ||
-                    x.Path.Contains(chunkNeedle, StringComparison.OrdinalIgnoreCase))
-                .ToList();
-
-            if (matchedReaders.Count == 0)
-            {
-                return NotFound(new ProblemDetails
-                {
-                    Title = "Pak Not Found",
-                    Detail = $"No PAK/chunk matched '{pakName}'.",
-                    Status = StatusCodes.Status404NotFound
-                });
-            }
-
-            var cosmeticFiles = EnumerateUassetFiles(matchedReaders, CosmeticsDir);
-            var displayAssetFiles = EnumerateUassetFiles(matchedReaders, OfferCatalogDisplayAssetsDir);
-            var resultSources = cosmeticFiles
-                .Select(path => new ResultSource(path, CosmeticAssetKind))
-                .Concat(displayAssetFiles.Select(path => new ResultSource(path, OfferCatalogDisplayAssetKind)))
-                .OrderBy(x => x.Path, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-
-            var total = resultSources.Count;
-            var totalPages = (int)Math.Ceiling(total / (double)pageSize);
-            var pagedSources = PageSlice.From(resultSources, page, pageSize);
-
-            // Load localization data once when a non-English language is requested.
-            ConcurrentDictionary<string, ConcurrentDictionary<string, string>>? locData = null;
-            if (!string.IsNullOrWhiteSpace(lang) && !lang.Equals("en", StringComparison.OrdinalIgnoreCase))
-            {
-                locData = LocalizationService.Load(_provider, lang, scope: _scope);
-            }
-
-            // If this PAK also carries OfferCatalog textures, index them by skin ID (the trailing
-            // segment of the texture name) so each cosmetic can be matched to its image.
-            var offerCatalogIndex = BuildOfferCatalogIndex(matchedReaders);
-
-            var results = new List<object>(pagedSources.Count);
-            foreach (var source in pagedSources)
-            {
-                results.Add(source.AssetKind == OfferCatalogDisplayAssetKind
-                    ? ExtractOfferCatalogDisplayAsset(source.Path, locData)
-                    : ExtractCosmetic(source.Path, locData, offerCatalogIndex));
-            }
-
-            var payload = new
-            {
-                query = pakName,
-                matchedPaks = matchedReaders.Select(x => x.Name).OrderBy(x => x).ToList(),
-                directories = new[] { CosmeticsDir, OfferCatalogDisplayAssetsDir },
-                lang = string.IsNullOrWhiteSpace(lang) ? "en" : lang,
-                totalCosmetics = total,
-                totalBRCosmetics = cosmeticFiles.Count,
-                totalOfferCatalogDisplayAssets = displayAssetFiles.Count,
-                totalResults = total,
-                totalPages,
-                currentPage = page,
-                pageSize,
-                results
-            };
-
-            return JsonResponse.Result(payload);
-        }
 
         /// <summary>
-        /// Searches cosmetic definitions across every currently mounted PAK/chunk. Unlike the
-        /// PAK-scoped endpoint, callers do not need to know which archive contains the cosmetic.
+        /// Lists cosmetic definitions, optionally filtering the ID, category or source archive.
         /// </summary>
         /// <param name="q">Optional ID or asset-name fragment, for example HonestWasp.</param>
         /// <param name="category">Optional category prefix, for example Character, Backpack, or Pickaxe.</param>
         /// <param name="page">Page number (1-based).</param>
         /// <param name="pageSize">Items per page (maximum 200).</param>
         /// <param name="lang">Localization language code, for example ja.</param>
-        [HttpGet("~/api/v1/cosmetics/search")]
+        /// <param name="pakName">Optional archive name or chunk number.</param>
+        /// <param name="includeOffers">Includes bundle display assets in the collection.</param>
+        [HttpGet]
         public IActionResult SearchCosmetics(
             [FromQuery] string? q = null,
             [FromQuery] string? category = null,
             [FromQuery] int page = 1,
             [FromQuery] int pageSize = 50,
-            [FromQuery] string? lang = null)
+            [FromQuery] string? lang = null,
+            [FromQuery] string? pakName = null,
+            [FromQuery] bool includeOffers = false)
         {
             if (_provider is not AbstractVfsFileProvider vfsProvider)
-            {
                 return BadRequest(new { message = "The provider is not a VFS provider." });
-            }
-
             page = Math.Max(1, page);
             pageSize = Math.Clamp(pageSize, 1, 200);
             q = string.IsNullOrWhiteSpace(q) ? null : q.Trim();
             category = string.IsNullOrWhiteSpace(category) ? null : category.Trim();
-
-            var allCosmetics = EnumerateUassetFiles(vfsProvider.MountedVfs, CosmeticsDir)
-                .Where(path =>
-                {
-                    var name = Path.GetFileNameWithoutExtension(path);
-                    var separator = name.IndexOf('_');
-                    var prefix = separator > 0 ? name[..separator] : name;
-                    return (category == null || prefix.Equals(category, StringComparison.OrdinalIgnoreCase)) &&
-                           (q == null || name.Contains(q, StringComparison.OrdinalIgnoreCase));
-                })
-                .ToList();
-
-            var total = allCosmetics.Count;
-            var totalPages = (int)Math.Ceiling(total / (double)pageSize);
-            var pagePaths = PageSlice.From(allCosmetics, page, pageSize);
-
+            pakName = string.IsNullOrWhiteSpace(pakName) ? null : pakName.Trim();
+            var readers = ArchiveCatalog.Match(vfsProvider.MountedVfs, pakName).ToList();
+            if (pakName != null && readers.Count == 0)
+                return NotFound(new ProblemDetails { Title = "PAKが見つかりません", Status = 404 });
+            bool Matches(string path)
+            {
+                var name = Path.GetFileNameWithoutExtension(path);
+                var separator = name.IndexOf('_');
+                var prefix = separator > 0 ? name[..separator] : name;
+                return (category == null || prefix.Equals(category, StringComparison.OrdinalIgnoreCase)) &&
+                       (q == null || name.Contains(q, StringComparison.OrdinalIgnoreCase));
+            }
+            var cosmetics = EnumerateUassetFiles(readers, CosmeticsDir).Where(Matches).ToList();
+            var offers = includeOffers ? EnumerateUassetFiles(readers, OfferCatalogDisplayAssetsDir).Where(Matches).ToList() : [];
+            var sources = cosmetics.Select(path => new ResultSource(path, CosmeticAssetKind))
+                .Concat(offers.Select(path => new ResultSource(path, OfferCatalogDisplayAssetKind)))
+                .OrderBy(source => source.Path, StringComparer.OrdinalIgnoreCase).ToList();
             ConcurrentDictionary<string, ConcurrentDictionary<string, string>>? locData = null;
             if (!string.IsNullOrWhiteSpace(lang) && !lang.Equals("en", StringComparison.OrdinalIgnoreCase))
-            {
                 locData = LocalizationService.Load(_provider, lang, scope: _scope);
-            }
-
-            var offerCatalogIndex = BuildOfferCatalogIndex(vfsProvider.MountedVfs);
-            var results = pagePaths.Select(path => ExtractCosmetic(path, locData, offerCatalogIndex)).ToList();
-
-            return Ok(new
+            var icons = BuildOfferCatalogIndex(readers);
+            var results = PageSlice.From(sources, page, pageSize).Select(source => source.AssetKind == OfferCatalogDisplayAssetKind
+                ? ExtractOfferCatalogDisplayAsset(source.Path, locData) : ExtractCosmetic(source.Path, locData, icons)).ToList();
+            return JsonResponse.Result(new
             {
-                query = q,
-                category,
+                query = q, category, pakName, includeOffers,
+                matchedPaks = readers.Select(reader => reader.Name).Order(StringComparer.OrdinalIgnoreCase).ToArray(),
                 lang = string.IsNullOrWhiteSpace(lang) ? "en" : lang,
-                total,
-                totalPages,
-                currentPage = page,
-                pageSize,
-                results
+                total = sources.Count, totalCosmetics = cosmetics.Count, totalOfferCatalogDisplayAssets = offers.Count,
+                totalPages = (int)Math.Ceiling(sources.Count / (double)pageSize), currentPage = page, pageSize, results
             });
         }
 
@@ -234,7 +131,7 @@ namespace FortnitePorting.Controllers
         /// </summary>
         /// <param name="id">Cosmetic ID or asset name.</param>
         /// <param name="lang">Localization language code, for example ja.</param>
-        [HttpGet("~/api/v1/cosmetics/{id}")]
+        [HttpGet("{id}")]
         public IActionResult GetCosmeticById(string id, [FromQuery] string? lang = null)
         {
             if (string.IsNullOrWhiteSpace(id))

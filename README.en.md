@@ -1,5 +1,7 @@
 # fnexportAPI
 
+Duplicate routes have been consolidated from 68 to 53 HTTP operations. Retired URLs are removed; see the [migration table](docs/endpoint-migration.md) and [endpoint catalog](docs/endpoints.md) (Japanese).
+
 [日本語](README.md) | **English**
 
 A Fortnite asset-export Web API built on **CUE4Parse**. It keeps itself up to date from
@@ -125,14 +127,14 @@ docker run -p 3849:3849 \
 | `LOAD_ALL_VFS` | `false` | Mount every VFS file instead of a curated subset. |
 | `SEARCH_THREADS` | (CPU count) | Content-search scan parallelism. Defaults to the logical CPU count (use every core). |
 | `CONTENT_CACHE_MB` | `unlimited` | Cache decompressed bytes read during content search. Unlimited by default until the mounted PAK state changes; set `0` to disable or a positive value to impose an MB limit. |
-| `SEARCH_CONTENT_CACHE_MINUTES` | `1440` (24h) | Sliding lifetime, in minutes, of a cached content-search response (`/api/v1/search/content`). `0` disables the cache. |
+| `SEARCH_CONTENT_CACHE_MINUTES` | `1440` (24h) | Sliding lifetime, in minutes, of a cached content-search response (`/api/v1/search?target=content`). `0` disables the cache. |
 | `SEARCH_PATH_CACHE_MINUTES` | `1440` (24h) | Sliding lifetime, in minutes, of a cached path-search response (`/api/v1/search`). `0` disables the cache. |
 | `SEARCH_CACHE_MAX_MINUTES` | `10080` (7d) | Absolute ceiling on a cached search response, so a repeatedly hit query cannot pin its memory indefinitely. |
 | `HOTFIX_CLOUDSTORAGE_URL` | `https://api.fljpapi.jp/api/v2/cloudstorage` | Cloudstorage listing read when `hotfix=true`; each file is fetched from `{URL}/{uniqueFilename}`. |
 | `HOTFIX_CACHE_MINUTES` | `10` | Minutes before the hotfix listing is checked again. |
 | `HOTFIX_CACHE_DIR` | `<PROJECT_ROOT>/hotfix_cache` | Where downloaded hotfix config files are stored; reused across restarts. |
 | `HOTFIX_DISK_CACHE` | `true` | Set to `false` to disable the disk cache and download every time. |
-| `AESFINDER_PATH` | `D:\AesFinder-main\...\AesFinder.exe` | Path to the external AesFinder tool used by `/aes` (a `.exe`, a `.dll`, or a directory containing it). |
+| `AESFINDER_PATH` | `D:\AesFinder-main\...\AesFinder.exe` | Path to the external AesFinder tool used by `/api/v1/aes` (a `.exe`, a `.dll`, or a directory containing it). |
 | `AESFINDER_AUTO` | `true` | Background auto-extraction/submission of the MainAES key via AesFinder (**only acts while the main key is missing**; set `false` to disable). |
 | `BUILD_HISTORY_KEEP` | `2` | How many builds keep their manifest archived. The default `2` is "the current build plus the previous one"; anything older has its data deleted automatically on the next update (recorded changelists are kept). |
 | `HISTORICAL_BUILDS_MAX` | `1` | How many archived builds may be mounted at once. A mounted build costs a few GB, so the least recently used one is dropped when this is exceeded. |
@@ -149,7 +151,7 @@ docker run -p 3849:3849 \
 
 > **Mapping (.usmap) behavior**: by default the `.usmap` mapping is loaded. If `USMAP_PATH` is set and the file exists it is used; **otherwise (unset, or the file is missing) the latest mapping is auto-downloaded** (falling back to an existing local file). Only if none can be obtained is it skipped instead of failing startup (some assets cannot deserialize without mappings). Set `SKIP_MAPPING=true` to disable it explicitly.
 
-> **Auto-update (no restart)**:<br>・**New decryption keys**: every ~30s the monitor reads the local `/api/v1/archives/keys` endpoint and submits any still-required keys **by GUID**, auto-mounting the matching paks (no dependency on pak names). That endpoint aggregates the current archives and external keychain data.<br>・**New builds**: build info is polled every ~30s; when the build or the manifest id changes the manifest is re-fetched and **every VFS archive of the previous build is dropped and re-registered/mounted from the new manifest** (exactly what a restart used to do). An update rewrites the existing `pakchunk*.utoc/.ucas` under the same names, so mounting only the archives that are *new* would keep serving the previous build's content. The other endpoints answer `503` (`Retry-After: 30`) while the rebuild runs, and every cache derived from the old build (responses, search, localization) is cleared afterwards. Newly-encrypted paks mount once their key arrives (via the AES monitor above).<br>・**Mappings (.usmap)**: when a new build is detected the **latest .usmap for that build is re-downloaded and hot-swapped** (a pinned `USMAP_PATH` file is kept as-is).<br>All of this happens without restarting the process (until the external APIs publish the new build's keys/mapping, only that build's new content is unavailable — it appears automatically once they do).
+> **Auto-update (no restart)**:<br>・**New decryption keys**: every ~30s the monitor reads the local `/api/v1/aes/keys` endpoint and submits any still-required keys **by GUID**, auto-mounting the matching paks (no dependency on pak names). That endpoint aggregates the current archives and external keychain data.<br>・**New builds**: build info is polled every ~30s; when the build or the manifest id changes the manifest is re-fetched and **every VFS archive of the previous build is dropped and re-registered/mounted from the new manifest** (exactly what a restart used to do). An update rewrites the existing `pakchunk*.utoc/.ucas` under the same names, so mounting only the archives that are *new* would keep serving the previous build's content. The other endpoints answer `503` (`Retry-After: 30`) while the rebuild runs, and every cache derived from the old build (responses, search, localization) is cleared afterwards. Newly-encrypted paks mount once their key arrives (via the AES monitor above).<br>・**Mappings (.usmap)**: when a new build is detected the **latest .usmap for that build is re-downloaded and hot-swapped** (a pinned `USMAP_PATH` file is kept as-is).<br>All of this happens without restarting the process (until the external APIs publish the new build's keys/mapping, only that build's new content is unavailable — it appears automatically once they do).
 
 > **When the build info cannot be fetched at startup**: a transient failure (a `503`, a connection
 > error) is retried up to five times a few seconds apart. If it still cannot be read, startup does not
@@ -176,9 +178,6 @@ Base URL: `http://localhost:3849`
 | `GET /api/v1/export?path={path}&image={bool}&audio={bool}&lang={code}&hotfix={bool}` | Export an asset. JSON is returned by default, with all package exports in the `jsonOutput` array. Normal Unreal property names preserve their original casing; only localized-text keys follow FortniteAPI's `namespace`, `key`, `sourceString`, and `localizedString` casing. `hash` is the SHA-256 of that array's UTF-8 JSON, `entries` is its count, and `bytes` is its byte length. `image=true` returns PNG for textures; `audio=true` returns audio for sounds; `lang` applies localization (e.g. `ja`); `hotfix=true` returns the [hotfixed content](#hotfixed-content--hotfixtrue). **If `image=true` but the asset is not a texture, JSON is returned automatically.** |
 | `GET /api/v1/export/audioinfo?path={path}` | Report a sound asset's format and whether it can be decoded to WAV, without downloading the binary. |
 | `GET /api/v1/export/datatable?path={path}&format={csv\|json}&rows={csv}&delimiter={d}&flatten={bool}&bom={bool}&download={bool}&hotfix={bool}` | Export a DataTable / CurveTable [as CSV](#datatable--curvetable-as-csv). |
-| `GET /api/v1/export/locres?lang={code}` | Merged localization table for a language. |
-| `GET /api/v1/export/locres/languages` | List available localization languages. |
-| `GET /api/v1/export/filepath/{pakName}` | List file paths inside a given pak / chunk number. |
 
 #### Hotfixed content — `hotfix=true`
 
@@ -314,16 +313,18 @@ http://localhost:3849/api/v1/export/datatable?path=FortniteGame/Content/Balance/
 http://localhost:3849/api/v1/export/datatable?path=.../CurveTable.uasset&delimiter=tab&download=false
 ```
 
-### Item lookup — `/api/v1/items`
+### Files and item properties
+
+`GET /api/v1/files` defaults to all files and extensions. To retain the old item-only listing, specify `prefixes=WID_,AGID_,Athena_,Figment_Athena_&ext=.uasset`. Use `/api/v1/items/properties` for extraction, with `path` to select one asset.
 
 Find and inspect assets whose file name starts with one of
 `WID_`, `AGID_`, `Athena_`, `Figment_Athena_` (override with `prefixes`).
 
 | Method & path | Description |
 |---|---|
-| `GET /api/v1/items/files?prefixes={csv}&page={n}&pageSize={n}&ext={ext}` | Paths of files matching the prefixes (defaults to `.uasset`). |
+| `GET /api/v1/files?prefixes={csv}&page={n}&pageSize={n}&ext={ext}` | Paths of files matching the prefixes (omitted: every extension). |
 | `GET /api/v1/items/properties?prefixes={csv}&page={n}&pageSize={n}` | For each matching asset, extract `Properties.ItemName.SourceString`, `DataList → Traits`, and `LargeIcon.AssetPathName` (paginated). |
-| `GET /api/v1/items/properties/single?path={path}` | Same extraction for a single asset path. |
+| `GET /api/v1/items/properties?path={path}` | Same extraction for a single asset path. |
 
 `files` and `properties` also accept exclusion filters (both comma-separated, case-insensitive).
 
@@ -333,10 +334,10 @@ Find and inspect assets whose file name starts with one of
 | `excludePaths` | Drop files whose full path contains one of these substrings. |
 
 ```
-http://localhost:3849/api/v1/items/files?prefixes=WID_&excludePrefixes=WID_Harvest_&excludePaths=/Juno/
+http://localhost:3849/api/v1/files?prefixes=WID_&ext=.uasset&excludePrefixes=WID_Harvest_&excludePaths=/Juno/
 ```
 
-Example response (`/api/v1/items/properties/single`):
+Example response (`/api/v1/items/properties?path=...`):
 ```json
 {
   "path": "FortniteGame/Content/Athena/Items/Consumables/AppleSun/WID_Athena_AppleSun.uasset",
@@ -356,7 +357,7 @@ path/name search plus a bounded full-text search inside asset contents (properti
 | Method & path | Description |
 |---|---|
 | `GET /api/v1/search?q={text}&mode={mode}&field={field}&ext={csv}&dir={dir}&dedupe={bool}&caseSensitive={bool}&page={n}&pageSize={n}` | Search the paths/names of all files. Returns matching files (`path`/`name`/`ext`) with a total count (paginated, max 10000/page). |
-| `GET /api/v1/search/content?q={text}&dir={dir}&pathContains={text}&ext={csv}&maxScan={n}&maxResults={n}&snippetsPerFile={n}&caseSensitive={bool}` | Search the string inside file **contents**. Assets (`.uasset`/`.umap`) are parsed and their exports serialized to JSON; config/text/binary files (`.ini`/`.bin`/`.json`, etc.) are decoded from raw bytes. Returns matching files and snippet lines. The default set is assets + text/config; `ext=*` searches every file, `ext=.ini` restricts. **Scans every file (~1.65M, ~11 GB) by default in about 40 s** (allocation-free byte scan, parallel across cores). Scan order: **(1) path contains the query, (2) neighbour assets (same plugin/folder), (3) text/config, (4) other assets**. Pass a smaller `maxScan` for a faster partial scan. |
+| `GET /api/v1/search?target=content&q={text}&dir={dir}&pathContains={text}&ext={csv}&maxScan={n}&maxResults={n}&snippetsPerFile={n}&caseSensitive={bool}` | Search the string inside file **contents**. Assets (`.uasset`/`.umap`) are parsed and their exports serialized to JSON; config/text/binary files (`.ini`/`.bin`/`.json`, etc.) are decoded from raw bytes. Returns matching files and snippet lines. The default set is assets + text/config; `ext=*` searches every file, `ext=.ini` restricts. **Scans every file (~1.65M, ~11 GB) by default in about 40 s** (allocation-free byte scan, parallel across cores). Scan order: **(1) path contains the query, (2) neighbour assets (same plugin/folder), (3) text/config, (4) other assets**. Pass a smaller `maxScan` for a faster partial scan. |
 
 **`mode`**: `contains` (default) / `prefix` / `suffix` / `exact` / `wildcard` (flat `*` `?`) / `glob` (path-aware) / `regex` / `tokens` (AND of whitespace-separated words)
 
@@ -403,14 +404,14 @@ Example response (`/api/v1/search`):
 >
 > **Path index**: the mounted paths are **indexed once per build** and shared by every later search and listing request (sorted paths, a bucket per extension, and a direct path-to-file lookup). A `dir` filter is therefore a **binary search** and an `ext` filter a **bucket lookup**, so a narrowed search never walks the whole build (`mode=prefix` / `exact` with `field=path` become range lookups too). Single-file reads — item extraction, dependency analysis, change diffs — resolve through one hash probe on the index. The index is **rebuilt automatically whenever the mounted file count changes** and is dropped with the other caches when the provider is rebuilt for a new build. At about a million paths it takes ~2.3 s and ~50 MB, built on the first request that needs it.
 
-### AES key extraction — `/aes`
+### AES key extraction — `/api/v1/aes`
 
 | Method & path | Description |
 |---|---|
-| `GET /aes` | Downloads `UnrealEditorFortnite-Common-Win64-Shipping.dll` from the live **Fortnite_Studio (UEFN)** manifest and runs the external **AesFinder** tool on it to **extract the MainAES key** (no game launch, no injection), then **submits the key to the provider and mounts** matching paks. Returns `{ mainKey, version, build, fullVersion, submitted, mountedNewFiles, totalFiles, ... }`. |
-| `GET /aes?submit=false` | Return the key only; do not submit/mount (default is `submit=true`). |
-| `GET /aes?noApi=true` | Don't consult fortnite-api; take the **highest-entropy candidate** straight from the binary. |
-| `GET /aes?force=true` | Ignore the cache and re-download the Common DLL. |
+| `GET /api/v1/aes` | Downloads `UnrealEditorFortnite-Common-Win64-Shipping.dll` from the live **Fortnite_Studio (UEFN)** manifest and runs the external **AesFinder** tool on it to **extract the MainAES key** (no game launch, no injection), then **submits the key to the provider and mounts** matching paks. Returns `{ mainKey, version, build, fullVersion, submitted, mountedNewFiles, totalFiles, ... }`. |
+| `GET /api/v1/aes?submit=false` | Return the key only; do not submit/mount (default is `submit=true`). |
+| `GET /api/v1/aes?noApi=true` | Don't consult fortnite-api; take the **highest-entropy candidate** straight from the binary. |
+| `GET /api/v1/aes?force=true` | Ignore the cache and re-download the Common DLL. |
 | `GET /api/v1/aes/local?dir={path}` | **Produce the keys of an installation already on this machine**, one per encryption GUID, with no download and no dependency on the live build. See [Local installations](#local-installations--apiv1local). |
 
 > The MainAES key lives in the Common DLL in plaintext as `mov [rbp+d], imm32` instruction immediates (the AESDumpster pattern) — it is neither a contiguous 32-byte blob nor a key schedule, so a naive byte search or schedule scan won't find it. This endpoint extracts it with the external AesFinder tool (set via `AESFINDER_PATH`). The Common DLL is downloaded once and cached, and **a new build is fetched automatically when detected**.
@@ -582,11 +583,11 @@ relative to this one.
 
 | Method & path | Description |
 |---|---|
-| `GET /api/v1/backup/fbkp?includePayloads={bool}&compress={bool}` | Downloads the `.fbkp`. The file is named after the **mounted build** (for example `FortniteGame_42_00.fbkp`). |
+| `GET /api/v1/backup?format=fbkp&includePayloads={bool}&compress={bool}` | Downloads the `.fbkp`. The file is named after the **mounted build** (for example `FortniteGame_42_00.fbkp`). |
 | `GET /api/v1/backup?includePayloads={bool}` | Reports the entry count, version, suggested file name, and current build without generating the file. |
 
 ```
-curl -OJ http://localhost:3849/api/v1/backup/fbkp
+curl -OJ http://localhost:3849/api/v1/backup?format=fbkp
 ```
 
 > **Format**: an LZ4 frame wrapping the magic `FBKP` (`0x504B4246`), backup version `2` (`PerfectPath`),
@@ -657,7 +658,7 @@ nothing leaves the machine.
 | `GET /api/v1/aes/local?dir={path}&key={hex}&scan={bool}&deep={bool}&binary={name}&binaries={n}&api={bool}&mount={bool}&submit={bool}&save={bool}` | Produce that installation's AES keys, one per GUID its containers ask for. `save=true` writes `aes.local.json`, `submit=true` also submits them to this API's own provider, `mount=true` leaves the build mounted. |
 | `POST /api/v1/local/mount?dir={path}&key={hex}&scan={bool}&deep={bool}&api={bool}` | Mount the installation and keep it loaded, ready to dump from. The keys are worked out exactly as above. |
 | `DELETE /api/v1/local/mount?dir={path}` | Free a mount; every one of them when `dir` is omitted. A build still being read is dropped once that read finishes. |
-| `POST /api/v1/mappings/dump/local?dir={path}&...` | Generate from the specified UEFN DLLs; accepts the same parameters as `/api/v1/mappings/generate` and does not mount paks. |
+| `POST /api/v1/mappings/generate?dir={path}&...` | Generate from the specified UEFN DLLs; accepts the same parameters as `/api/v1/mappings/generate` and does not mount paks. |
 
 ```bash
 # what is on this machine
@@ -670,7 +671,7 @@ curl "http://localhost:3849/api/v1/aes/local?dir=C:/Program Files/Epic Games/For
 curl "http://localhost:3849/api/v1/aes/local?key=0x1234...&scan=false&api=false"
 
 # dump a .usmap from it
-curl -OJ -X POST "http://localhost:3849/api/v1/mappings/dump/local?compression=zstd"
+curl -OJ -X POST "http://localhost:3849/api/v1/mappings/generate?compression=zstd"
 
 # free the mount when you are done (a few GB)
 curl -X DELETE "http://localhost:3849/api/v1/local/mount"
@@ -743,30 +744,24 @@ curl http://localhost:3849/api/v1/update
 > <br>- **A version that failed to apply**: if the process comes back up still on the old version, it is
 > not retried automatically (that would loop). `POST /api/v1/update?force=true` clears the guard.
 
-### Debug — `/api/v1/debug`
+### PAK inventory — `/api/v1/paks`
 
 | Method & path | Description |
 |---|---|
-| `GET /api/v1/debug/stats?page={n}` | All loaded file paths (paginated, 1000 per page). |
-| `GET /api/v1/debug/search?query={text}` | Search loaded file paths by substring. |
-| `GET /api/v1/debug/paks` | List mounted pak / utoc files. |
-| `GET /api/v1/debug/paks/{pakName}/files` | List files inside a mounted pak. |
+| `GET /api/v1/paks?state={mounted\|unloaded\|all}&q={text}&page={n}&pageSize={n}` | Paginated archive metadata. state defaults to mounted; all includes unmounted archives. |
+| `GET /api/v1/paks/{pakName}/files?page={n}&pageSize={n}` | Paginated files from mounted archives matching a name or chunk number. |
+| `GET /api/v1/aes/keys` | Live AES response containing version, mainKey, dynamicKeys and unloaded archives. |
 
-### Archive information and AES — `/api/v1/archives`
+File listing is now `/api/v1/files`; path matching is `/api/v1/search?q=...`.
 
-| Endpoint | Description |
-|---|---|
-| `GET /api/v1/archives` | Returns metadata for registered `.pak` / `.utoc` archives, including name, size, file count, mount point, encryption state, GUID, and compression methods. |
-| `GET /api/v1/archives/keys` | Returns an AES response with `version`, `mainKey`, `dynamicKeys`, and `unloaded`, including GUIDs, AES keys, keychain strings, file counts, and sizes. GUIDs are matched against the live mapping from `https://fljpapi.jp/api/v2/keychain?rou=false`; the provider's loaded key is used for Main AES and other missing entries. |
-
-### Cosmetics extraction — `/api/v1/pak`
+### Cosmetics extraction — `/api/v1/cosmetics`
 
 | Method & path | Description |
 |---|---|
 | `GET /api/v1/cosmetics/{id}?lang={code}` | **Get one cosmetic by ID**, without naming a PAK. `id` may be the asset name (`CID_028_Athena_Commando_F`, `Character_HonestWasp`, `EID_Floss`) or just the skin ID (`HonestWasp`). Matching runs exact name, then `Prefix_ID`, then substring; the first tier that matches returns its candidates in `matches` and the chosen one in `result`. |
 | `GET /api/v1/cosmetics/{id}/icon?variant={large\|small\|offercatalog}` | **Get the cosmetic's icon as PNG**. `large` (default) uses `LargeIcon`, `small` uses `Icon`, `offercatalog` uses the OfferCatalog texture. `large` and `small` fall back to the other icon and then to OfferCatalog. The texture actually used is reported in `X-Icon-Source` / `X-Icon-Name`. |
-| `GET /api/v1/cosmetics/search?q={text}&category={prefix}&page={n}&pageSize={n}&lang={code}` | Search cosmetics across every mounted PAK (`category` is a prefix such as `Character` or `Backpack`). |
-| `GET /api/v1/pak/{pakName}/cosmetics?page={n}&pageSize={n}&lang={code}` | For the given PAK/chunk (number accepted), extracts each cosmetic under `FortniteGame/Plugins/GameFeatures/BRCosmetics/Content/Athena/Items/Cosmetics` and each bundle/display asset under `FortniteGame/Plugins/GameFeatures/OfferCatalog/Content/DisplayAssets` (paginated, max 200/page). Cosmetic entries include ItemName/Description keys, icons, tags, and matched OfferCatalog texture paths; display asset entries include serialized exports such as `FortMtxOfferData` bundle data. |
+| `GET /api/v1/cosmetics?q={text}&category={prefix}&page={n}&pageSize={n}&lang={code}` | Search cosmetics across every mounted PAK (`category` is a prefix such as `Character` or `Backpack`). |
+| `GET /api/v1/cosmetics?pakName={pakName}&includeOffers=true&page={n}&pageSize={n}&lang={code}` | For the given PAK/chunk (number accepted), extracts each cosmetic under `FortniteGame/Plugins/GameFeatures/BRCosmetics/Content/Athena/Items/Cosmetics` and each bundle/display asset under `FortniteGame/Plugins/GameFeatures/OfferCatalog/Content/DisplayAssets` (paginated, max 200/page). Cosmetic entries include ItemName/Description keys, icons, tags, and matched OfferCatalog texture paths; display asset entries include serialized exports such as `FortMtxOfferData` bundle data. |
 
 Example (by ID, Japanese):
 ```
@@ -776,7 +771,7 @@ http://localhost:3849/api/v1/cosmetics/HonestWasp/icon
 
 Example (chunk number 30, Japanese):
 ```
-http://localhost:3849/api/v1/pak/30/cosmetics?pageSize=50&lang=ja
+http://localhost:3849/api/v1/cosmetics?pakName=30&includeOffers=true&pageSize=50&lang=ja
 ```
 Example response (one item, `lang=ja`):
 ```json
@@ -802,15 +797,16 @@ When the PAK also contains `FortniteGame/Plugins/GameFeatures/OfferCatalog/Conte
 
 Looks up single entries in the mounted build's `.locres` tables: **resolve a key into every
 language**, or **find the `namespace`/`key` behind a string you can see in game**. Where
-`/api/v1/export/locres` dumps a whole language, this searches one entry at a time.
+Omit key and text to retrieve the merged table for lang (ja by default).
 
 | Method & path | Description |
 |---|---|
+| `GET /api/v1/localization?lang={code}` | Merged namespace/key/value table for one language. |
 | `GET /api/v1/localization/languages` | The language codes this build ships `.locres` files for. |
-| `GET /api/v1/localization/lookup?key={key}&namespace={ns}&langs={csv}` | **Forward lookup.** Resolves the key in every language (the default) and groups the translations by the namespace it was found in. |
-| `GET /api/v1/localization/lookup?text={text}&mode={mode}&lang={code}&withTranslations={bool}&maxResults={n}` | **Reverse lookup.** Returns the `namespace`, `key`, `lang`, and `value` of every entry whose translation matches. |
+| `GET /api/v1/localization?key={key}&namespace={ns}&langs={csv}` | **Forward lookup.** Resolves the key in every language (the default) and groups the translations by the namespace it was found in. |
+| `GET /api/v1/localization?text={text}&mode={mode}&lang={code}&withTranslations={bool}&maxResults={n}` | **Reverse lookup.** Returns the `namespace`, `key`, `lang`, and `value` of every entry whose translation matches. |
 
-- Pass either `key` or `text`, never both (both, or neither, answers `400`).
+- Do not combine `key` and `text` (`400`). Omitting both returns the table for `lang`; `langs` is only supported for lookups.
 - Languages come from `lang` (one) or `langs` (comma-separated; `all` / `*` for every language).
   **The default is every available language.**
 - `mode` (reverse lookup): `contains` (default) / `exact` / `prefix` / `suffix` / `regex`. Add
@@ -822,8 +818,8 @@ language**, or **find the `namespace`/`key` behind a string you can see in game*
 
 Examples:
 ```
-http://localhost:3849/api/v1/localization/lookup?key=62B77828400008FD63C782B57223217D
-http://localhost:3849/api/v1/localization/lookup?text=Metal%20Gear&lang=en&withTranslations=true
+http://localhost:3849/api/v1/localization?key=62B77828400008FD63C782B57223217D
+http://localhost:3849/api/v1/localization?text=Metal%20Gear&lang=en&withTranslations=true
 ```
 Example response (forward lookup):
 ```json

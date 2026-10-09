@@ -24,7 +24,7 @@ namespace FortnitePorting.Controllers
     /// </summary>
     [ApiController]
     [Route("api/v1/aes")]
-    public class AesController : ControllerBase
+    public partial class AesController : ControllerBase
     {
         // The exe download can take a while; allow plenty of time for the manifest fetch.
         private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMinutes(10) };
@@ -32,12 +32,14 @@ namespace FortnitePorting.Controllers
         private static readonly FGuid ZeroGuid = new(0, 0, 0, 0);
 
         private readonly IFileProvider _provider;
+        private readonly ManifestService _manifestService;
         private readonly LocalBuildService _localBuilds;
         private readonly ILogger<AesController> _logger;
 
-        public AesController(IFileProvider provider, LocalBuildService localBuilds, ILogger<AesController> logger)
+        public AesController(IFileProvider provider, LocalBuildService localBuilds, ILogger<AesController> logger, ManifestService manifestService)
         {
             _provider = provider;
+            _manifestService = manifestService;
             _localBuilds = localBuilds;
             _logger = logger;
         }
@@ -57,7 +59,7 @@ namespace FortnitePorting.Controllers
         /// <param name="force">Re-download the Common DLL even if a cached copy exists (default false).</param>
         /// <param name="noApi">Pass --no-api to the external AesFinder tool (skip its fortnite-api lookup).</param>
         /// <param name="submit">Submit the verified key to the provider (zero GUID) and mount matching paks (default true).</param>
-        [HttpGet("/aes")]
+        [HttpGet]
         public async Task<IActionResult> Aes(
             [FromQuery] bool force = false,
             [FromQuery] bool noApi = false,

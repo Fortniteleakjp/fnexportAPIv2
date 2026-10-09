@@ -10,9 +10,6 @@ namespace FortnitePorting.Controllers;
 public class MappingsController(ManifestService manifestService, ILogger<MappingsController> logger) : ControllerBase
 {
     [HttpPost("generate")]
-    [HttpPost("dump")]
-    [HttpPost("dump/uefn")]
-    [HttpPost("dump/local")]
     public async Task<IActionResult> Generate(
         [FromQuery] string? dir = null,
         [FromQuery] string compression = "zstd",

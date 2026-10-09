@@ -37,51 +37,7 @@ namespace FortnitePorting.Controllers
             _logger = logger;
         }
 
-        /// <summary>
-        /// Returns a list of file paths whose names start with the specified prefixes.
-        /// </summary>
-        /// <param name="prefixes">A comma-separated list of target prefixes (defaults to WID_,AGID_,Athena_,Figment_Athena_ when omitted).</param>
-        /// <param name="excludePrefixes">A comma-separated list of file-name prefixes to exclude (e.g., WID_Harvest_). Excluded even when the name matches one of <paramref name="prefixes"/>.</param>
-        /// <param name="excludePaths">A comma-separated list of substrings; a file is excluded when its full path contains any of them (e.g., /Juno/).</param>
-        /// <param name="page">The page number (1-based).</param>
-        /// <param name="pageSize">The number of items per page (maximum 10000).</param>
-        /// <param name="ext">The target file extension (defaults to .uasset only; an empty string matches all extensions).</param>
-        /// <returns>The list of matching file paths and the total count.</returns>
-        [HttpGet("files")]
-        public IActionResult GetFiles(
-            [FromQuery] string? prefixes = null,
-            [FromQuery] string? excludePrefixes = null,
-            [FromQuery] string? excludePaths = null,
-            [FromQuery] int page = 1,
-            [FromQuery] int pageSize = 1000,
-            [FromQuery] string ext = ".uasset")
-        {
-            if (page < 1) page = 1;
-            pageSize = Math.Clamp(pageSize, 1, 10000);
 
-            var prefixList = ParsePrefixes(prefixes);
-            var excludePrefixList = ParseList(excludePrefixes);
-            var excludePathList = ParseList(excludePaths);
-
-            var matched = EnumerateMatchingFiles(prefixList, ext, excludePrefixList, excludePathList);
-
-            var total = matched.Count;
-            var totalPages = (int)Math.Ceiling(total / (double)pageSize);
-            var paged = PageSlice.From(matched, page, pageSize);
-
-            return Ok(new
-            {
-                prefixes = prefixList,
-                excludePrefixes = excludePrefixList,
-                excludePaths = excludePathList,
-                extension = string.IsNullOrEmpty(ext) ? "(all)" : ext,
-                totalFiles = total,
-                totalPages,
-                currentPage = page,
-                pageSize,
-                files = paged
-            });
-        }
 
         /// <summary>
         /// Loads files whose names start with the specified prefixes and, for each asset,
@@ -93,14 +49,17 @@ namespace FortnitePorting.Controllers
         /// <param name="page">The page number (1-based).</param>
         /// <param name="pageSize">The number of items per page (maximum 500; a small value is recommended because asset parsing is expensive).</param>
         /// <returns>The list of extraction results for each file.</returns>
+        /// <param name="path">Selects a single file instead of the filtered list.</param>
         [HttpGet("properties")]
         public IActionResult GetProperties(
             [FromQuery] string? prefixes = null,
             [FromQuery] string? excludePrefixes = null,
             [FromQuery] string? excludePaths = null,
             [FromQuery] int page = 1,
-            [FromQuery] int pageSize = 100)
+            [FromQuery] int pageSize = 100,
+            [FromQuery] string? path = null)
         {
+            if (path != null) return GetSingleProperties(path);
             if (page < 1) page = 1;
             pageSize = Math.Clamp(pageSize, 1, 500);
 
@@ -115,9 +74,9 @@ namespace FortnitePorting.Controllers
             var pagedPaths = PageSlice.From(matched, page, pageSize);
 
             var results = new List<object>(pagedPaths.Count);
-            foreach (var path in pagedPaths)
+            foreach (var filePath in pagedPaths)
             {
-                results.Add(ExtractFromFile(path));
+                results.Add(ExtractFromFile(filePath));
             }
 
             var payload = new
@@ -139,8 +98,7 @@ namespace FortnitePorting.Controllers
         /// Extracts ItemName / Traits / LargeIcon for a single file specified by its path.
         /// </summary>
         /// <param name="path">The path of the target asset (e.g., FortniteGame/Content/.../WID_xxx.uasset).</param>
-        [HttpGet("properties/single")]
-        public IActionResult GetSingleProperties([FromQuery] string path)
+        private IActionResult GetSingleProperties(string path)
         {
             if (string.IsNullOrWhiteSpace(path))
             {

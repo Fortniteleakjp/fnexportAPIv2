@@ -217,6 +217,7 @@ public sealed class FileIndex
 
     public IReadOnlyList<string> MatchingNames(string[] prefixes, string extension, string[] excludedPrefixes, string[] excludedPaths)
     {
+        if (prefixes.Length == 0 && excludedPrefixes.Length == 0 && excludedPaths.Length == 0 && string.IsNullOrEmpty(extension)) return _keys;
         var key = System.Text.Json.JsonSerializer.Serialize(new { prefixes, extension, excludedPrefixes, excludedPaths });
         lock (_nameQueries)
         {
@@ -231,7 +232,7 @@ public sealed class FileIndex
             var path = PathAt(i);
             if (excludedPaths.Any(fragment => path.Contains(fragment, StringComparison.OrdinalIgnoreCase))) continue;
             var name = NameAt(i);
-            if (StartsWithAny(name, excludedPrefixes) || !StartsWithAny(name, prefixes)) continue;
+            if (StartsWithAny(name, excludedPrefixes) || (prefixes.Length > 0 && !StartsWithAny(name, prefixes))) continue;
             matches.Add(path);
         }
         // One extension bucket, and the unfiltered index, already use the display order.

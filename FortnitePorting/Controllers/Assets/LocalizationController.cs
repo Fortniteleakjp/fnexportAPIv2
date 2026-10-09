@@ -59,7 +59,7 @@ public sealed class LocalizationController : ControllerBase
     /// <param name="caseSensitive">Match the text case-sensitively (default false).</param>
     /// <param name="withTranslations">For a reverse lookup, also resolve each hit into every available language.</param>
     /// <param name="maxResults">Maximum reverse-lookup entries to return (default 50, max 500).</param>
-    [HttpGet("lookup")]
+    [HttpGet]
     public IActionResult Lookup(
         [FromQuery] string? key = null,
         [FromQuery(Name = "namespace")] string? ns = null,
@@ -78,7 +78,14 @@ public sealed class LocalizationController : ControllerBase
 
         if (key == null && text == null)
         {
-            return BadRequest(new { message = "Either 'key' (forward lookup) or 'text' (reverse lookup) is required." });
+            if (!string.IsNullOrWhiteSpace(langs))
+                return BadRequest(new { message = "Use lang for a merged table, or key/text with langs for a lookup." });
+            var table = LocalizationService.Load(_provider, string.IsNullOrWhiteSpace(lang) ? "ja" : lang.Trim(), scope: _scope);
+            return table.IsEmpty ? NotFound(new ProblemDetails
+            {
+                Title = "Localization Not Found", Status = StatusCodes.Status404NotFound,
+                Extensions = { { "availableLanguages", LocalizationService.GetAvailableLanguages(_provider) } }
+            }) : JsonResponse.Result(table);
         }
 
         if (key != null && text != null)

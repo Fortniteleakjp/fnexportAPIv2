@@ -29,7 +29,7 @@ public class AesKeyMonitorService : BackgroundService
         _logger = logger;
 
         var port = Environment.GetEnvironmentVariable("PORT") ?? "3849";
-        _archiveKeysUrl = $"http://127.0.0.1:{port}/api/v1/archives/keys";
+        _archiveKeysUrl = $"http://127.0.0.1:{port}/api/v1/aes/keys";
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -96,7 +96,7 @@ public class AesKeyMonitorService : BackgroundService
         {
             var mounted = provider.SubmitKeys(toSubmit);
             _logger.LogInformation(
-                "Submitted {KeyCount} required AES key(s) by GUID (source: /api/v1/archives/keys); newly mounted {Mounted} VFS file(s). Total files: {Total}",
+                "Submitted {KeyCount} required AES key(s) by GUID (source: /api/v1/aes/keys); newly mounted {Mounted} VFS file(s). Total files: {Total}",
                 toSubmit.Count, mounted, provider.Files.Count);
         }
         else

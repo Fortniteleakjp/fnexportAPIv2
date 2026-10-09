@@ -1,6 +1,6 @@
 # fnexportAPI
 
-処理の配置と全ルートは [エンドポイント一覧](docs/endpoints.md)、検証方法と測定結果は [応答処理の検証](docs/response-performance.md) にまとめています。
+重複ルートを削除し、68から53のHTTP操作に統合しました。[旧URLの移行先](docs/endpoint-migration.md)、[エンドポイント一覧](docs/endpoints.md)、[検証方法と測定結果](docs/response-performance.md)を参照してください。
 
 **Fortnite のアセットを HTTP API として取得・検索・エクスポートする Web API**
 
@@ -163,14 +163,14 @@ docker run -p 3849:3849 \
 | `LOAD_ALL_VFS` | `false` | 厳選サブセットではなく全 VFS ファイルをマウント。 |
 | `SEARCH_THREADS` | (CPU数) | 内容検索の並列スキャン数。既定は論理 CPU 数（全コア活用）。 |
 | `CONTENT_CACHE_MB` | `unlimited`（無制限） | 内容検索で読み込んだ解凍バイトをキャッシュ。既定は無制限で、PAK状態が変わるまで保持。`0` で無効化、正の値でMB上限を指定可能。 |
-| `SEARCH_CONTENT_CACHE_MINUTES` | `1440`（24時間） | 内容検索（`/api/v1/search/content`）の同一クエリ結果を保持する分数（スライディング）。`0` でキャッシュ無効。 |
+| `SEARCH_CONTENT_CACHE_MINUTES` | `1440`（24時間） | 内容検索（`/api/v1/search?target=content`）の同一クエリ結果を保持する分数（スライディング）。`0` でキャッシュ無効。 |
 | `SEARCH_PATH_CACHE_MINUTES` | `1440`（24時間） | パス検索（`/api/v1/search`）の同一クエリ結果を保持する分数（スライディング）。`0` でキャッシュ無効。 |
 | `SEARCH_CACHE_MAX_MINUTES` | `10080`（7日） | 検索結果キャッシュの絶対上限。連続ヒットしても、この時間を超えたエントリは破棄されます。 |
 | `HOTFIX_CLOUDSTORAGE_URL` | `https://api.fljpapi.jp/api/v2/cloudstorage` | `hotfix=true` で読み込む cloudstorage 一覧のURL。各ファイルは `{URL}/{uniqueFilename}` から取得します。 |
 | `HOTFIX_CACHE_MINUTES` | `10` | ホットフィックスの一覧を確認し直すまでの分数。 |
 | `HOTFIX_CACHE_DIR` | `<PROJECT_ROOT>/hotfix_cache` | ダウンロードしたホットフィックス設定ファイルの保存先。再起動後も再利用します。 |
 | `HOTFIX_DISK_CACHE` | `true` | `false` でディスクキャッシュを無効化（毎回ダウンロード）。 |
-| `AESFINDER_PATH` | `D:\AesFinder-main\...\AesFinder.exe` | `/aes` で使う外部 AesFinder ツールのパス（`.exe`／`.dll`／それを含むディレクトリ可）。 |
+| `AESFINDER_PATH` | `D:\AesFinder-main\...\AesFinder.exe` | `/api/v1/aes` で使う外部 AesFinder ツールのパス（`.exe`／`.dll`／それを含むディレクトリ可）。 |
 | `AESFINDER_AUTO` | `true` | バックグラウンドで AesFinder により MainAES を自動抽出・投入（**main 鍵が未適用の時のみ**動作。`false` で無効）。 |
 | `BUILD_HISTORY_KEEP` | `2` | マニフェストを保管しておくビルド数。既定の `2` は「現在のビルド + 1つ前」で、これを超えた古いビルドのデータはアップデート時に自動削除されます（記録済みの変更リストは残ります）。 |
 | `HISTORICAL_BUILDS_MAX` | `1` | 旧ビルドを同時にマウントできる数。1ビルド分のマウントは数GBのメモリを使うため、超過分は最終利用が古いものから解放されます。 |
@@ -187,7 +187,7 @@ docker run -p 3849:3849 \
 
 > **マッピング（.usmap）の挙動**: 既定では `.usmap` マッピングを読み込みます。`USMAP_PATH` 指定時かつファイルが存在すればそれを使用し、**それ以外（未指定／指定ファイルが無い）の場合は最新版を自動ダウンロード**します（取得失敗時は既存のローカルファイルにフォールバック）。どうしても入手できない場合のみ、起動を失敗させずにスキップします（マッピング無しでは一部アセットがデシリアライズできません）。`SKIP_MAPPING=true` で明示的に無効化できます。
 
-> **自動更新（再起動不要）**:<br>・**新しい復号鍵**: 約30秒ごとにローカルの `/api/v1/archives/keys` を取得し、**GUID 一致**で必要な鍵を投入 → 対応する pak を自動マウントします（pak名に依存しません）。このエンドポイントが現在のアーカイブと外部キー情報を集約します。<br>・**新しいビルド**: 約30秒ごとにビルド情報をポーリングし、ビルド／マニフェストの変化を検出するとマニフェストを再取得したうえで、**旧ビルドの VFS をすべて破棄し、新マニフェストから全 VFS（utoc/pak）を登録・マウントし直します**（再起動と同じ処理）。アップデートでは既存の `pakchunk*.utoc/.ucas` が同名のまま中身ごと差し替わるため、追加分だけをマウントすると旧ビルドの内容を配信し続けてしまいます。再構築中は他のエンドポイントが `503`（`Retry-After: 30`）を返し、完了後は旧ビルド由来のキャッシュ（レスポンス／検索／ローカライズ）も全消去されます。新規の暗号化 pak は鍵が届いた時点で上記のAES監視によりマウントされます。<br>・**マッピング(.usmap)**: 新ビルド検出時に**新ビルド用の最新 .usmap を自動再取得し、ホットスワップ**します（`USMAP_PATH` でファイルを固定している場合はそれを維持）。<br>これらはすべてプロセスの自動再起動なしで行われます（外部APIが新ビルドの鍵・マッピングを配信するまでの間は、その新規コンテンツのみ未対応となり、配信され次第自動で反映されます）。
+> **自動更新（再起動不要）**:<br>・**新しい復号鍵**: 約30秒ごとにローカルの `/api/v1/aes/keys` を取得し、**GUID 一致**で必要な鍵を投入 → 対応する pak を自動マウントします（pak名に依存しません）。このエンドポイントが現在のアーカイブと外部キー情報を集約します。<br>・**新しいビルド**: 約30秒ごとにビルド情報をポーリングし、ビルド／マニフェストの変化を検出するとマニフェストを再取得したうえで、**旧ビルドの VFS をすべて破棄し、新マニフェストから全 VFS（utoc/pak）を登録・マウントし直します**（再起動と同じ処理）。アップデートでは既存の `pakchunk*.utoc/.ucas` が同名のまま中身ごと差し替わるため、追加分だけをマウントすると旧ビルドの内容を配信し続けてしまいます。再構築中は他のエンドポイントが `503`（`Retry-After: 30`）を返し、完了後は旧ビルド由来のキャッシュ（レスポンス／検索／ローカライズ）も全消去されます。新規の暗号化 pak は鍵が届いた時点で上記のAES監視によりマウントされます。<br>・**マッピング(.usmap)**: 新ビルド検出時に**新ビルド用の最新 .usmap を自動再取得し、ホットスワップ**します（`USMAP_PATH` でファイルを固定している場合はそれを維持）。<br>これらはすべてプロセスの自動再起動なしで行われます（外部APIが新ビルドの鍵・マッピングを配信するまでの間は、その新規コンテンツのみ未対応となり、配信され次第自動で反映されます）。
 
 > **起動時にビルド情報が取れないとき**: ビルド API が一時的に落ちている（`503` など）場合は数秒おきに5回まで再試行します。
 > それでも取れない場合は**起動を諦めず、`build_history/` に残っている最新のビルドをマウントして起動します**
@@ -201,23 +201,25 @@ docker run -p 3849:3849 \
 
 ### エンドポイント一覧
 
-| 用途 | エンドポイント |
+| 用途 | 入口 |
 |---|---|
-| アセットの JSON／画像／音声エクスポート | [`/api/v1/export`](#アセットエクスポート--apiv1export) |
-| アイテムの検索・プロパティ抽出 | [`/api/v1/items`](#アイテム検索--apiv1items) |
-| ファイル名・アセット内容の全文検索 | [`/api/v1/search`](#文字列検索--apiv1search) |
-| ローカライズの Key 解決・表示文字列の逆引き | [`/api/v1/localization`](#ローカライズ検索--apiv1localization) |
-| AES 鍵の取得・投入 | [`/aes`](#aes鍵取得-aes) |
-| デバッグ情報・マウント済みファイルの確認 | [`/api/v1/debug`](#デバッグ--apiv1debug) |
-| アーカイブ情報・AES 情報 | [`/api/v1/archives`](#アーカイブ情報aes--apiv1archives) |
-| コスメ・表示アセットの抽出 | [`/api/v1/pak`](#コスメ抽出--apiv1pak) |
-| 配信中ビルドの確認・最新ビルドへの再読み込み | [`/api/v1/build`](#ビルド状態--apiv1build) |
-| FModel 用バックアップ（`.fbkp`）の配信 | [`/api/v1/backup`](#fmodel-バックアップ--apiv1backup) |
-| マッピング（`.usmap`）のダンプ・配信 | [`/api/v1/mappings`](#マッピング--apiv1mappings) |
-| 更新状況の確認・最新リリースへの更新 | [`/api/v1/update`](#自動アップデート--apiv1update) |
-| 旧ビルドの一覧・取り込み・読み込み・削除 | [`/api/v1/versions`](#ビルドアーカイブ--apiv1versions) |
-| ビルド間の正確な変更リスト（ファイルパスと変わった行） | [`/api/v1/changes`](#変更リスト--apiv1changes) |
-| ローカルのインストールを指定した AES 鍵・マッピングの生成 | [`/api/v1/local`](#ローカルのインストール--apiv1local) |
+| 仮想ファイル一覧 | `/api/v1/files` |
+| パス・内容検索 | `/api/v1/search`（`target=path` または `content`） |
+| アセット出力・一括出力・音声情報・表データ | `/api/v1/export` |
+| アイテムのプロパティ | `/api/v1/items/properties`（`path` で1件を指定） |
+| コスメ一覧・検索・ID取得・アイコン | `/api/v1/cosmetics` |
+| PAK情報・PAK内ファイル | `/api/v1/paks` |
+| INI一覧・設定値 | `/api/v1/config` |
+| ローカライズ | `/api/v1/localization` |
+| AES取得・投入・抽出 | `/api/v1/aes` |
+| マッピング生成・管理 | `/api/v1/mappings` |
+| ビルド状態・再読み込み | `/api/v1/build` |
+| 履歴ビルド・ローカルインストール | `/api/v1/versions`、`/api/v1/local` |
+| 差分・計算ジョブ | `/api/v1/changes` |
+| バックアップ | `/api/v1/backup`（`format=json` または `fbkp`） |
+| 更新状態・更新 | `/api/v1/update` |
+
+全53操作のHTTPメソッド・パス・ソースは [エンドポイント一覧](docs/endpoints.md) に記載しています。
 
 > **CORS**: すべてのオリジンからの呼び出しを許可しています（任意のオリジン／メソッド／ヘッダ）。
 > 音声診断ヘッダ（`X-Audio-Format` / `X-Audio-Decoded` / `X-Rada-Native-Decoder`）と
@@ -232,9 +234,6 @@ docker run -p 3849:3849 \
 | `GET /api/v1/export?path={path}&image={bool}&audio={bool}&lang={code}&hotfix={bool}` | アセットをエクスポート。既定は JSON で、全エクスポートを `jsonOutput` 配列に返します。Unrealの通常プロパティ名は元の大文字・小文字を保持し、ローカライズ文字列のキーのみ FortniteAPI と同じ `namespace`・`key`・`sourceString`・`localizedString` にします。`hash` はその配列の UTF-8 JSON の SHA-256、`entries` は件数、`bytes` は同JSONのバイト数です。`image=true` でテクスチャを PNG、`audio=true` でサウンドを音声、`lang` でローカライズ（例: `ja`）、`hotfix=true` で[ホットフィックス適用済みの内容](#ホットフィックス適用--hotfixtrue)を返します。**`image=true` でも対象がテクスチャでない場合は自動的に JSON を返します。** |
 | `GET /api/v1/export/audioinfo?path={path}` | サウンドアセットの形式や WAV 変換可否を、バイナリを返さずに報告。 |
 | `GET /api/v1/export/datatable?path={path}&format={csv\|json}&rows={csv}&delimiter={d}&flatten={bool}&bom={bool}&download={bool}&hotfix={bool}` | DataTable／CurveTable を[CSV として取得](#datatablecurvetable-の-csv-出力)。 |
-| `GET /api/v1/export/locres?lang={code}` | 指定言語の結合済みローカライズテーブル。 |
-| `GET /api/v1/export/locres/languages` | 利用可能なローカライズ言語の一覧。 |
-| `GET /api/v1/export/filepath/{pakName}` | 指定 pak／チャンク番号内のファイルパス一覧。 |
 
 #### ホットフィックス適用 — `hotfix=true`
 
@@ -373,11 +372,11 @@ http://localhost:3849/api/v1/export/datatable?path=.../CurveTable.uasset&delimit
 
 | メソッド & パス | 説明 |
 |---|---|
-| `GET /api/v1/items/files?prefixes={csv}&page={n}&pageSize={n}&ext={ext}` | 接頭辞に一致するファイルのパス（既定の拡張子は `.uasset`）。 |
+| `GET /api/v1/files?prefixes={csv}&page={n}&pageSize={n}&ext={ext}` | ファイルのパス一覧。prefixes省略時は全ファイル、ext省略時は全拡張子。アイテムだけならprefixesとext=.uassetを指定します。 |
 | `GET /api/v1/items/properties?prefixes={csv}&page={n}&pageSize={n}` | 各アセットから `Properties.ItemName.SourceString`、`DataList → Traits`、`LargeIcon.AssetPathName` を抽出（ページング）。 |
-| `GET /api/v1/items/properties/single?path={path}` | 単一アセットに対する同じ抽出。 |
+| `GET /api/v1/items/properties?path={path}` | 単一アセットに対する同じ抽出。 |
 
-`files` と `properties` は除外フィルターも受け付けます（いずれもCSV・大文字小文字の区別なし）。
+`/files` と `/items/properties` は除外フィルターも受け付けます（いずれもCSV・大文字小文字の区別なし）。
 
 | パラメーター | 説明 |
 |---|---|
@@ -385,10 +384,10 @@ http://localhost:3849/api/v1/export/datatable?path=.../CurveTable.uasset&delimit
 | `excludePaths` | フルパスにこの文字列を含むファイルを除外。 |
 
 ```
-http://localhost:3849/api/v1/items/files?prefixes=WID_&excludePrefixes=WID_Harvest_&excludePaths=/Juno/
+http://localhost:3849/api/v1/files?prefixes=WID_&ext=.uasset&excludePrefixes=WID_Harvest_&excludePaths=/Juno/
 ```
 
-レスポンス例（`/api/v1/items/properties/single`）:
+レスポンス例（`/api/v1/items/properties?path=...`）:
 ```json
 {
   "path": "FortniteGame/Content/Athena/Items/Consumables/AppleSun/WID_Athena_AppleSun.uasset",
@@ -408,7 +407,7 @@ http://localhost:3849/api/v1/items/files?prefixes=WID_&excludePrefixes=WID_Harve
 | メソッド & パス | 説明 |
 |---|---|
 | `GET /api/v1/search?q={text}&mode={mode}&field={field}&ext={csv}&dir={dir}&dedupe={bool}&caseSensitive={bool}&page={n}&pageSize={n}` | 全ファイルのパス／名を検索。一致ファイルの `path`／`name`／`ext` を総数つきで返す（ページング、最大 10000/頁）。 |
-| `GET /api/v1/search/content?q={text}&dir={dir}&pathContains={text}&ext={csv}&maxScan={n}&maxResults={n}&snippetsPerFile={n}&caseSensitive={bool}` | ファイルの**内容**に含まれる文字列を検索。アセット（`.uasset`/`.umap`）はエクスポートを JSON 化、設定/テキスト/バイナリ（`.ini`/`.bin`/`.json` 等）は生バイトを復号して検索。一致ファイルと該当箇所スニペットを返す。既定の対象は「アセット＋設定/テキスト」、`ext=*` で全ファイル、`ext=.ini` 等で限定。**既定で全ファイル（約165万件・約11GB）を約40秒で走査**（バイト走査＋マルチコア並列）。走査順は **(1) パスにクエリを含む → (2) 近傍アセット → (3) 設定/テキスト → (4) その他アセット**。速度優先時は `maxScan` に小さい値を指定。 |
+| `GET /api/v1/search?target=content&q={text}&dir={dir}&pathContains={text}&ext={csv}&maxScan={n}&maxResults={n}&snippetsPerFile={n}&caseSensitive={bool}` | ファイルの**内容**に含まれる文字列を検索。アセット（`.uasset`/`.umap`）はエクスポートを JSON 化、設定/テキスト/バイナリ（`.ini`/`.bin`/`.json` 等）は生バイトを復号して検索。一致ファイルと該当箇所スニペットを返す。既定の対象は「アセット＋設定/テキスト」、`ext=*` で全ファイル、`ext=.ini` 等で限定。**既定で全ファイル（約165万件・約11GB）を約40秒で走査**（バイト走査＋マルチコア並列）。走査順は **(1) パスにクエリを含む → (2) 近傍アセット → (3) 設定/テキスト → (4) その他アセット**。速度優先時は `maxScan` に小さい値を指定。 |
 
 **`mode`（照合方法）**: `contains`（部分一致・既定）／`prefix`（前方一致）／`suffix`（後方一致）／`exact`（完全一致）／`wildcard`（`*` `?` の単純ワイルドカード）／`glob`（パス構造を意識したグロブ）／`regex`（正規表現）／`tokens`（空白区切りの全語 AND 一致）
 
@@ -456,14 +455,14 @@ http://localhost:3849/api/v1/search?q={CID,EID}_*&mode=glob&field=stem
 >
 > **パスインデックス**: 読み込み済みのパスは**ビルドごとに一度だけ索引化**され、以降の検索・一覧系リクエストはその索引を共有します（ソート済みパス・拡張子ごとのバケット・パス→ファイルの直接引き）。そのため `dir` 指定は**二分探索**、`ext` 指定は**拡張子バケットの参照**になり、絞り込んだ検索は全件走査をしません（`mode=prefix`／`exact` の `field=path` も同様に範囲検索になります）。1件ずつのファイル取得（アイテム抽出・依存関係解析・差分表示など）も索引経由の1回のハッシュ参照で解決します。索引は**マウント済みファイル数が変わると自動で作り直され**、新ビルド検出時のプロバイダー再構築では他のキャッシュと同様に破棄されます。約100万パスで構築は約2.3秒・約50MBです（初回リクエスト時にのみ構築）。
 
-### AES鍵取得 — `/aes`
+### AES鍵取得 — `/api/v1/aes`
 
 | メソッド & パス | 説明 |
 |---|---|
-| `GET /aes` | ライブの **Fortnite_Studio（UEFN）** マニフェストから `UnrealEditorFortnite-Common-Win64-Shipping.dll` を**ダウンロード**し、外部 **AesFinder** ツールで **MainAES 鍵を抽出**して返します（**ゲーム起動・注入なし**）。抽出鍵は**そのまま provider に投入してマウント**します。`{ mainKey, version, build, fullVersion, submitted, mountedNewFiles, totalFiles, ... }` を返却。 |
-| `GET /aes?submit=false` | 鍵を返すだけで provider への投入・マウントは行いません（既定は `submit=true`）。 |
-| `GET /aes?noApi=true` | fortnite-api を参照せず、バイナリ内の**最高エントロピー候補**を採用（純粋にバイナリから抽出）。 |
-| `GET /aes?force=true` | キャッシュを無視して Common DLL を再ダウンロード。 |
+| `GET /api/v1/aes` | ライブの **Fortnite_Studio（UEFN）** マニフェストから `UnrealEditorFortnite-Common-Win64-Shipping.dll` を**ダウンロード**し、外部 **AesFinder** ツールで **MainAES 鍵を抽出**して返します（**ゲーム起動・注入なし**）。抽出鍵は**そのまま provider に投入してマウント**します。`{ mainKey, version, build, fullVersion, submitted, mountedNewFiles, totalFiles, ... }` を返却。 |
+| `GET /api/v1/aes?submit=false` | 鍵を返すだけで provider への投入・マウントは行いません（既定は `submit=true`）。 |
+| `GET /api/v1/aes?noApi=true` | fortnite-api を参照せず、バイナリ内の**最高エントロピー候補**を採用（純粋にバイナリから抽出）。 |
+| `GET /api/v1/aes?force=true` | キャッシュを無視して Common DLL を再ダウンロード。 |
 | `GET /api/v1/aes/local?dir={path}` | **このPCにインストール済みのビルドから鍵を作ります。** ダウンロードもライブビルドも不要で、GUID ごとに1本ずつ返します。詳細は[ローカルのインストール](#ローカルのインストール--apiv1local)。 |
 
 > MainAES 鍵は Common DLL 内に `mov [rbp+d], imm32` 命令の即値（AESDumpster パターン）として**平文**で格納されています（連続した32バイトでもスケジュールでもないため、単純なバイト検索やスケジュール走査では見つかりません）。本エンドポイントは外部 AesFinder ツール（`AESFINDER_PATH` で指定）でこれを抽出します。Common DLL は初回のみダウンロードし、以降はキャッシュを再利用、**新ビルド検出時は自動で新しい DLL を取得**します。
@@ -613,11 +612,11 @@ FModel の「Load → All But New／All But Modified」に読み込ませるこ�
 
 | メソッド & パス | 説明 |
 |---|---|
-| `GET /api/v1/backup/fbkp?includePayloads={bool}&compress={bool}` | `.fbkp` をダウンロード。ファイル名は**マウント中のビルド**から決まります（例: `FortniteGame_42_00.fbkp`）。 |
+| `GET /api/v1/backup?format=fbkp&includePayloads={bool}&compress={bool}` | `.fbkp` をダウンロード。ファイル名は**マウント中のビルド**から決まります（例: `FortniteGame_42_00.fbkp`）。 |
 | `GET /api/v1/backup?includePayloads={bool}` | 生成せずに、収録件数・バージョン・想定ファイル名・現在のビルドを返します。 |
 
 ```
-curl -OJ http://localhost:3849/api/v1/backup/fbkp
+curl -OJ http://localhost:3849/api/v1/backup?format=fbkp
 ```
 
 > **形式**: LZ4 フレームの中に、マジック `FBKP`（`0x504B4246`）、バックアップバージョン `2`（`PerfectPath`）、件数（int32）、
@@ -685,7 +684,7 @@ Epic のマニフェストから配信中のビルドを読む通常の経路と
 | `GET /api/v1/aes/local?dir={path}&key={hex}&scan={bool}&deep={bool}&binary={name}&binaries={n}&api={bool}&mount={bool}&submit={bool}&save={bool}` | 指定したインストールの AES 鍵を、コンテナが要求する GUID ごとに1本ずつ返します。`save=true` で `aes.local.json` に書き出し、`submit=true` でこの API 自身の provider にも投入、`mount=true` でそのままマウントしたまま残します。 |
 | `POST /api/v1/local/mount?dir={path}&key={hex}&scan={bool}&deep={bool}&api={bool}` | アセットを読み取れる状態までマウントし、保持します。鍵の決め方は `GET /api/v1/aes/local` と同じです。 |
 | `DELETE /api/v1/local/mount?dir={path}` | マウントを解放します。`dir` 省略で全解放。読み取り中のものは、その読み取りが終わってから解放されます。 |
-| `POST /api/v1/mappings/dump/local?dir={path}&...` | 指定したUEFNのDLLから生成します。生成パラメーターは `/api/v1/mappings/generate` と共通で、pakのマウントは不要です。 |
+| `POST /api/v1/mappings/generate?dir={path}&...` | 指定したUEFNのDLLから生成します。生成パラメーターは `/api/v1/mappings/generate` と共通で、pakのマウントは不要です。 |
 
 ```bash
 # 何が見つかるか
@@ -698,7 +697,7 @@ curl "http://localhost:3849/api/v1/aes/local?dir=C:/Program Files/Epic Games/For
 curl "http://localhost:3849/api/v1/aes/local?key=0x1234...&scan=false&api=false"
 
 # そのインストールから .usmap をダンプ
-curl -OJ -X POST "http://localhost:3849/api/v1/mappings/dump/local?compression=zstd"
+curl -OJ -X POST "http://localhost:3849/api/v1/mappings/generate?compression=zstd"
 
 # 使い終わったら解放（数GB戻ります）
 curl -X DELETE "http://localhost:3849/api/v1/local/mount"
@@ -767,30 +766,24 @@ curl http://localhost:3849/api/v1/update
 > <br>・**適用に失敗したバージョンの再試行**: 一度差し替えたのに古いままで起動した場合、無限ループを避けるため
 > 自動での再試行はしません（`POST /api/v1/update?force=true` で解除できます）。
 
-### デバッグ — `/api/v1/debug`
+### PAK情報 — `/api/v1/paks`
 
 | メソッド & パス | 説明 |
 |---|---|
-| `GET /api/v1/debug/stats?page={n}` | 読み込み済み全ファイルパス（1000 件ずつページング）。 |
-| `GET /api/v1/debug/search?query={text}` | 読み込み済みファイルパスを部分一致検索。 |
-| `GET /api/v1/debug/paks` | マウント済み pak／utoc ファイル一覧。 |
-| `GET /api/v1/debug/paks/{pakName}/files` | マウント済み pak 内のファイル一覧。 |
+| `GET /api/v1/paks?state={mounted\|unloaded\|all}&q={text}&page={n}&pageSize={n}` | PAK/UTOCのメタデータをページングして取得します。stateの既定はmounted。サイズ、ファイル数、マウントポイント、暗号化状態、GUID、圧縮方式を含みます。 |
+| `GET /api/v1/paks/{pakName}/files?page={n}&pageSize={n}` | PAK名またはチャンク番号に一致するマウント済みアーカイブのファイルを取得します。 |
+| `GET /api/v1/aes/keys` | 現行ビルドのversion、mainKey、dynamicKeys、unloadedを返します。キーとkeychain文字列は従来と同じ形式です。 |
 
-### アーカイブ情報・AES — `/api/v1/archives`
+ファイル一覧は `/api/v1/files`、パス検索は `/api/v1/search?q={text}` に統合しました。
 
-| エンドポイント | 説明 |
-|---|---|
-| `GET /api/v1/archives` | 登録済みの `.pak`／`.utoc` アーカイブについて、名前、サイズ、ファイル数、マウントポイント、暗号化状態、GUID、圧縮方式などを返します。 |
-| `GET /api/v1/archives/keys` | `version`、`mainKey`、`dynamicKeys`、`unloaded` を持つAESレスポンスを返します。GUID、AESキー、keychain文字列、ファイル数、サイズを含みます。GUID→AESは `https://fljpapi.jp/api/v2/keychain?rou=false` と照合し、Main AESなどはプロバイダーのキーを使用します。 |
-
-### コスメ抽出 — `/api/v1/pak`
+### コスメ抽出 — `/api/v1/cosmetics`
 
 | メソッド & パス | 説明 |
 |---|---|
 | `GET /api/v1/cosmetics/{id}?lang={code}` | **コスメを ID で 1 件取得**。PAK を指定する必要はありません。`id` はアセット名（`CID_028_Athena_Commando_F`、`Character_HonestWasp`、`EID_Floss`）でも、スキンID だけ（`HonestWasp`）でも構いません。照合は「完全一致 → `接頭辞_ID` 一致 → 部分一致」の順で、最初に当たった段階の候補を `matches` に、採用した 1 件を `result` に返します。 |
 | `GET /api/v1/cosmetics/{id}/icon?variant={large\|small\|offercatalog}` | **コスメのアイコンを PNG で取得**。`large`（既定）は `LargeIcon`、`small` は `Icon`、`offercatalog` は OfferCatalog テクスチャです。`large`／`small` は他方 → OfferCatalog の順にフォールバックします。実際に使ったテクスチャは `X-Icon-Source`／`X-Icon-Name` ヘッダでわかります。 |
-| `GET /api/v1/cosmetics/search?q={text}&category={prefix}&page={n}&pageSize={n}&lang={code}` | マウント中の全 PAK からコスメを検索（`category` は `Character`／`Backpack` などの接頭辞）。 |
-| `GET /api/v1/pak/{pakName}/cosmetics?page={n}&pageSize={n}&lang={code}` | 指定 PAK／チャンク（番号可）内の `FortniteGame/Plugins/GameFeatures/BRCosmetics/Content/Athena/Items/Cosmetics` 配下の各コスメと、`FortniteGame/Plugins/GameFeatures/OfferCatalog/Content/DisplayAssets` 配下のバンドル／表示アセットを抽出（ページング、最大 200/頁）。コスメ結果には名称 Key、アイコン、Tags、OfferCatalog テクスチャを含み、表示アセット結果には `FortMtxOfferData` などの export データを含みます。 |
+| `GET /api/v1/cosmetics?q={text}&category={prefix}&page={n}&pageSize={n}&lang={code}` | マウント中の全 PAK からコスメを検索（`category` は `Character`／`Backpack` などの接頭辞）。 |
+| `GET /api/v1/cosmetics?pakName={pakName}&includeOffers=true&page={n}&pageSize={n}&lang={code}` | 指定 PAK／チャンク（番号可）内の `FortniteGame/Plugins/GameFeatures/BRCosmetics/Content/Athena/Items/Cosmetics` 配下の各コスメと、`FortniteGame/Plugins/GameFeatures/OfferCatalog/Content/DisplayAssets` 配下のバンドル／表示アセットを抽出（ページング、最大 200/頁）。コスメ結果には名称 Key、アイコン、Tags、OfferCatalog テクスチャを含み、表示アセット結果には `FortMtxOfferData` などの export データを含みます。 |
 
 例（ID 直指定、日本語）:
 ```
@@ -800,7 +793,7 @@ http://localhost:3849/api/v1/cosmetics/HonestWasp/icon
 
 例（チャンク番号 30、日本語）:
 ```
-http://localhost:3849/api/v1/pak/30/cosmetics?pageSize=50&lang=ja
+http://localhost:3849/api/v1/cosmetics?pakName=30&includeOffers=true&pageSize=50&lang=ja
 ```
 レスポンス例（1件、`lang=ja`）:
 ```json
@@ -826,16 +819,16 @@ http://localhost:3849/api/v1/pak/30/cosmetics?pageSize=50&lang=ja
 ### ローカライズ検索 — `/api/v1/localization`
 
 マウント中のビルドの `.locres` を対象に、**Key から全言語の対訳を引く**ことと、**ゲーム内で見えている
-文字列から `namespace`／`key` を逆引きする**ことができます。`/api/v1/export/locres` が言語ごとの一括
-ダンプなのに対し、こちらは 1 エントリ単位の検索です。
+文字列から `namespace`／`key` を逆引きする**ことができます。keyとtextを省略すると、langの統合テーブルを返します（既定ja）。
 
 | メソッド & パス | 説明 |
 |---|---|
+| `GET /api/v1/localization?lang={code}` | 指定言語のnamespace/key/value統合テーブル。 |
 | `GET /api/v1/localization/languages` | このビルドが `.locres` を持つ言語コードの一覧。 |
-| `GET /api/v1/localization/lookup?key={key}&namespace={ns}&langs={csv}` | **順引き**。Key を全言語（既定）で解決し、見つかった `namespace` ごとに対訳をまとめて返します。 |
-| `GET /api/v1/localization/lookup?text={text}&mode={mode}&lang={code}&withTranslations={bool}&maxResults={n}` | **逆引き**。表示文字列に一致するエントリの `namespace`／`key`／`lang`／`value` を返します。 |
+| `GET /api/v1/localization?key={key}&namespace={ns}&langs={csv}` | **順引き**。Key を全言語（既定）で解決し、見つかった `namespace` ごとに対訳をまとめて返します。 |
+| `GET /api/v1/localization?text={text}&mode={mode}&lang={code}&withTranslations={bool}&maxResults={n}` | **逆引き**。表示文字列に一致するエントリの `namespace`／`key`／`lang`／`value` を返します。 |
 
-- `key` と `text` はどちらか一方のみ指定します（両方または両方省略は `400`）。
+- `key` と `text` は併用できません（`400`）。両方省略すると `lang` の統合テーブルを返します。テーブルでは `langs` は使えません。
 - 言語は `lang`（1つ）または `langs`（カンマ区切り、`all` / `*` で全言語）で指定します。**既定は全言語**です。
 - `mode`（逆引きの一致方法）: `contains`（既定）／`exact`／`prefix`／`suffix`／`regex`。`caseSensitive=true`
   で大文字小文字を区別します。`regex` にはタイムアウト（250ミリ秒）とパターン長制限が掛かります。
@@ -845,8 +838,8 @@ http://localhost:3849/api/v1/pak/30/cosmetics?pageSize=50&lang=ja
 
 例:
 ```
-http://localhost:3849/api/v1/localization/lookup?key=62B77828400008FD63C782B57223217D
-http://localhost:3849/api/v1/localization/lookup?text=メタルギア&lang=ja&withTranslations=true
+http://localhost:3849/api/v1/localization?key=62B77828400008FD63C782B57223217D
+http://localhost:3849/api/v1/localization?text=メタルギア&lang=ja&withTranslations=true
 ```
 レスポンス例（順引き）:
 ```json

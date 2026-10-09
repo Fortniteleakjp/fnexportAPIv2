@@ -1,1333 +1,436 @@
 {
-  "routes": [
+  "endpoints": [
     {
+      "route": "api/v1/aes",
       "controller": "Aes",
       "action": "Aes",
-      "route": "aes",
-      "parameters": [
-        {
-          "Name": "force",
-          "type": "System.Boolean"
-        },
-        {
-          "Name": "noApi",
-          "type": "System.Boolean"
-        },
-        {
-          "Name": "submit",
-          "type": "System.Boolean"
-        },
-        {
-          "Name": "ct",
-          "type": "System.Threading.CancellationToken"
-        }
+      "methods": [
+        "GET"
       ]
     },
     {
+      "route": "api/v1/aes/binaries",
       "controller": "Aes",
       "action": "Binaries",
-      "route": "api/v1/aes/binaries",
-      "parameters": [
-        {
-          "Name": "ct",
-          "type": "System.Threading.CancellationToken"
-        }
+      "methods": [
+        "GET"
       ]
     },
     {
+      "route": "api/v1/aes/extract",
       "controller": "Aes",
       "action": "Extract",
-      "route": "api/v1/aes/extract",
-      "parameters": [
-        {
-          "Name": "verify",
-          "type": "System.Boolean"
-        },
-        {
-          "Name": "force",
-          "type": "System.Boolean"
-        },
-        {
-          "Name": "file",
-          "type": "System.String"
-        },
-        {
-          "Name": "ct",
-          "type": "System.Threading.CancellationToken"
-        }
+      "methods": [
+        "GET"
       ]
     },
     {
+      "route": "api/v1/aes/finder/selftest",
       "controller": "Aes",
       "action": "SelfTest",
-      "route": "api/v1/aes/finder/selftest",
-      "parameters": []
+      "methods": [
+        "GET"
+      ]
     },
     {
+      "route": "api/v1/aes/keys",
+      "controller": "Aes",
+      "action": "GetPakKeys",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "route": "api/v1/aes/local",
       "controller": "Aes",
       "action": "Local",
-      "route": "api/v1/aes/local",
-      "parameters": [
-        {
-          "Name": "dir",
-          "type": "System.String"
-        },
-        {
-          "Name": "key",
-          "type": "System.String[]"
-        },
-        {
-          "Name": "scan",
-          "type": "System.Boolean"
-        },
-        {
-          "Name": "deep",
-          "type": "System.Boolean"
-        },
-        {
-          "Name": "binary",
-          "type": "System.String"
-        },
-        {
-          "Name": "binaries",
-          "type": "System.Int32"
-        },
-        {
-          "Name": "api",
-          "type": "System.Boolean"
-        },
-        {
-          "Name": "mount",
-          "type": "System.Boolean"
-        },
-        {
-          "Name": "submit",
-          "type": "System.Boolean"
-        },
-        {
-          "Name": "save",
-          "type": "System.Boolean"
-        },
-        {
-          "Name": "ct",
-          "type": "System.Threading.CancellationToken"
-        }
+      "methods": [
+        "GET"
       ]
     },
     {
+      "route": "api/v1/aes/scan/local",
       "controller": "Aes",
       "action": "ScanLocal",
-      "route": "api/v1/aes/scan/local",
-      "parameters": [
-        {
-          "Name": "path",
-          "type": "System.String"
-        },
-        {
-          "Name": "dir",
-          "type": "System.String"
-        },
-        {
-          "Name": "verify",
-          "type": "System.Boolean"
-        },
-        {
-          "Name": "ct",
-          "type": "System.Threading.CancellationToken"
-        }
+      "methods": [
+        "GET"
       ]
     },
     {
-      "controller": "Archives",
-      "action": "GetArchives",
-      "route": "api/v1/archives",
-      "parameters": []
-    },
-    {
-      "controller": "Archives",
-      "action": "GetPakKeys",
-      "route": "api/v1/archives/keys",
-      "parameters": [
-        {
-          "Name": "cancellationToken",
-          "type": "System.Threading.CancellationToken"
-        }
-      ]
-    },
-    {
+      "route": "api/v1/assets/dependencies",
       "controller": "Assets",
       "action": "GetDependencies",
-      "route": "api/v1/assets/dependencies",
-      "parameters": [
-        {
-          "Name": "path",
-          "type": "System.String"
-        },
-        {
-          "Name": "depth",
-          "type": "System.Int32"
-        },
-        {
-          "Name": "limit",
-          "type": "System.Int32"
-        },
-        {
-          "Name": "cancellationToken",
-          "type": "System.Threading.CancellationToken"
-        }
+      "methods": [
+        "GET"
       ]
     },
     {
-      "controller": "Backup",
-      "action": "GetInfo",
       "route": "api/v1/backup",
-      "parameters": [
-        {
-          "Name": "includePayloads",
-          "type": "System.Boolean"
-        }
-      ]
-    },
-    {
       "controller": "Backup",
-      "action": "Download",
-      "route": "api/v1/backup/fbkp",
-      "parameters": [
-        {
-          "Name": "includePayloads",
-          "type": "System.Boolean"
-        },
-        {
-          "Name": "compress",
-          "type": "System.Boolean"
-        },
-        {
-          "Name": "cancellationToken",
-          "type": "System.Threading.CancellationToken"
-        }
+      "action": "Get",
+      "methods": [
+        "GET"
       ]
     },
     {
+      "route": "api/v1/build",
       "controller": "Build",
       "action": "GetBuild",
-      "route": "api/v1/build",
-      "parameters": []
+      "methods": [
+        "GET"
+      ]
     },
     {
+      "route": "api/v1/build/reload",
       "controller": "Build",
       "action": "Reload",
-      "route": "api/v1/build/reload",
-      "parameters": []
-    },
-    {
-      "controller": "Changes",
-      "action": "DeleteChangelist",
-      "route": "api/v1/changes",
-      "parameters": [
-        {
-          "Name": "from",
-          "type": "System.String"
-        },
-        {
-          "Name": "to",
-          "type": "System.String"
-        }
+      "methods": [
+        "POST"
       ]
     },
     {
+      "route": "api/v1/changes",
       "controller": "Changes",
       "action": "GetRecorded",
-      "route": "api/v1/changes",
-      "parameters": []
+      "methods": [
+        "GET"
+      ]
     },
     {
+      "route": "api/v1/changes",
+      "controller": "Changes",
+      "action": "DeleteChangelist",
+      "methods": [
+        "DELETE"
+      ]
+    },
+    {
+      "route": "api/v1/changes/compute",
       "controller": "Changes",
       "action": "Compute",
-      "route": "api/v1/changes/compute",
-      "parameters": [
-        {
-          "Name": "from",
-          "type": "System.String"
-        },
-        {
-          "Name": "to",
-          "type": "System.String"
-        },
-        {
-          "Name": "mode",
-          "type": "System.String"
-        },
-        {
-          "Name": "pathFilter",
-          "type": "System.String"
-        },
-        {
-          "Name": "maxEntries",
-          "type": "System.Int32"
-        },
-        {
-          "Name": "maxHashFiles",
-          "type": "System.Int32"
-        },
-        {
-          "Name": "unloadWhenDone",
-          "type": "System.Boolean"
-        },
-        {
-          "Name": "force",
-          "type": "System.Boolean"
-        }
+      "methods": [
+        "POST"
       ]
     },
     {
+      "route": "api/v1/changes/file",
       "controller": "Changes",
       "action": "GetFileChanges",
-      "route": "api/v1/changes/file",
-      "parameters": [
-        {
-          "Name": "from",
-          "type": "System.String"
-        },
-        {
-          "Name": "path",
-          "type": "System.String"
-        },
-        {
-          "Name": "to",
-          "type": "System.String"
-        },
-        {
-          "Name": "format",
-          "type": "System.String"
-        },
-        {
-          "Name": "context",
-          "type": "System.Int32"
-        },
-        {
-          "Name": "load",
-          "type": "System.Boolean"
-        },
-        {
-          "Name": "cancellationToken",
-          "type": "System.Threading.CancellationToken"
-        }
+      "methods": [
+        "GET"
       ]
     },
     {
+      "route": "api/v1/changes/jobs",
       "controller": "Changes",
       "action": "GetJobs",
-      "route": "api/v1/changes/jobs",
-      "parameters": []
-    },
-    {
-      "controller": "Changes",
-      "action": "CancelJob",
-      "route": "api/v1/changes/jobs/{id}",
-      "parameters": [
-        {
-          "Name": "id",
-          "type": "System.String"
-        }
+      "methods": [
+        "GET"
       ]
     },
     {
+      "route": "api/v1/changes/jobs/{id}",
       "controller": "Changes",
       "action": "GetJob",
-      "route": "api/v1/changes/jobs/{id}",
-      "parameters": [
-        {
-          "Name": "id",
-          "type": "System.String"
-        }
+      "methods": [
+        "GET"
       ]
     },
     {
+      "route": "api/v1/changes/jobs/{id}",
+      "controller": "Changes",
+      "action": "CancelJob",
+      "methods": [
+        "DELETE"
+      ]
+    },
+    {
+      "route": "api/v1/changes/list",
       "controller": "Changes",
       "action": "GetChangelist",
-      "route": "api/v1/changes/list",
-      "parameters": [
-        {
-          "Name": "from",
-          "type": "System.String"
-        },
-        {
-          "Name": "to",
-          "type": "System.String"
-        },
-        {
-          "Name": "kind",
-          "type": "System.String"
-        },
-        {
-          "Name": "pathFilter",
-          "type": "System.String"
-        },
-        {
-          "Name": "page",
-          "type": "System.Int32"
-        },
-        {
-          "Name": "pageSize",
-          "type": "System.Int32"
-        },
-        {
-          "Name": "force",
-          "type": "System.Boolean"
-        }
+      "methods": [
+        "GET"
       ]
     },
     {
+      "route": "api/v1/changes/modified",
       "controller": "Changes",
       "action": "GetModifiedPaths",
-      "route": "api/v1/changes/modified",
-      "parameters": [
-        {
-          "Name": "from",
-          "type": "System.String"
-        },
-        {
-          "Name": "to",
-          "type": "System.String"
-        },
-        {
-          "Name": "pathFilter",
-          "type": "System.String"
-        },
-        {
-          "Name": "verifiedOnly",
-          "type": "System.Boolean"
-        },
-        {
-          "Name": "format",
-          "type": "System.String"
-        },
-        {
-          "Name": "download",
-          "type": "System.Boolean"
-        },
-        {
-          "Name": "force",
-          "type": "System.Boolean"
-        }
+      "methods": [
+        "GET"
       ]
     },
     {
+      "route": "api/v1/config/files",
       "controller": "Config",
       "action": "GetFiles",
-      "route": "api/v1/config/files",
-      "parameters": [
-        {
-          "Name": "q",
-          "type": "System.String"
-        }
+      "methods": [
+        "GET"
       ]
     },
     {
+      "route": "api/v1/config/query",
       "controller": "Config",
       "action": "Query",
-      "route": "api/v1/config/query",
-      "parameters": [
-        {
-          "Name": "file",
-          "type": "System.String"
-        },
-        {
-          "Name": "section",
-          "type": "System.String"
-        },
-        {
-          "Name": "key",
-          "type": "System.String"
-        }
+      "methods": [
+        "GET"
       ]
     },
     {
+      "route": "api/v1/cosmetics",
       "controller": "Cosmetics",
       "action": "SearchCosmetics",
-      "route": "api/v1/cosmetics/search",
-      "parameters": [
-        {
-          "Name": "q",
-          "type": "System.String"
-        },
-        {
-          "Name": "category",
-          "type": "System.String"
-        },
-        {
-          "Name": "page",
-          "type": "System.Int32"
-        },
-        {
-          "Name": "pageSize",
-          "type": "System.Int32"
-        },
-        {
-          "Name": "lang",
-          "type": "System.String"
-        }
+      "methods": [
+        "GET"
       ]
     },
     {
+      "route": "api/v1/cosmetics/{id}",
       "controller": "Cosmetics",
       "action": "GetCosmeticById",
-      "route": "api/v1/cosmetics/{id}",
-      "parameters": [
-        {
-          "Name": "id",
-          "type": "System.String"
-        },
-        {
-          "Name": "lang",
-          "type": "System.String"
-        }
+      "methods": [
+        "GET"
       ]
     },
     {
+      "route": "api/v1/cosmetics/{id}/icon",
       "controller": "Cosmetics",
       "action": "GetCosmeticIcon",
-      "route": "api/v1/cosmetics/{id}/icon",
-      "parameters": [
-        {
-          "Name": "id",
-          "type": "System.String"
-        },
-        {
-          "Name": "variant",
-          "type": "System.String"
-        }
+      "methods": [
+        "GET"
       ]
     },
     {
-      "controller": "Debug",
-      "action": "GetMountedPaks",
-      "route": "api/v1/debug/paks",
-      "parameters": []
-    },
-    {
-      "controller": "Debug",
-      "action": "GetFilesInPak",
-      "route": "api/v1/debug/paks/{pakName}/files",
-      "parameters": [
-        {
-          "Name": "pakName",
-          "type": "System.String"
-        }
-      ]
-    },
-    {
-      "controller": "Debug",
-      "action": "SearchFiles",
-      "route": "api/v1/debug/search",
-      "parameters": [
-        {
-          "Name": "query",
-          "type": "System.String"
-        }
-      ]
-    },
-    {
-      "controller": "Debug",
-      "action": "GetStats",
-      "route": "api/v1/debug/stats",
-      "parameters": [
-        {
-          "Name": "page",
-          "type": "System.Int32"
-        }
-      ]
-    },
-    {
+      "route": "api/v1/export",
       "controller": "Export",
       "action": "Get",
-      "route": "api/v1/export",
-      "parameters": [
-        {
-          "Name": "path",
-          "type": "System.String"
-        },
-        {
-          "Name": "image",
-          "type": "System.Boolean"
-        },
-        {
-          "Name": "audio",
-          "type": "System.Boolean"
-        },
-        {
-          "Name": "lang",
-          "type": "System.String"
-        },
-        {
-          "Name": "hotfix",
-          "type": "System.Boolean"
-        }
+      "methods": [
+        "GET"
       ]
     },
     {
+      "route": "api/v1/export/audioinfo",
       "controller": "Export",
       "action": "GetAudioInfo",
-      "route": "api/v1/export/audioinfo",
-      "parameters": [
-        {
-          "Name": "path",
-          "type": "System.String"
-        }
+      "methods": [
+        "GET"
       ]
     },
     {
+      "route": "api/v1/export/batch",
       "controller": "Export",
       "action": "Batch",
-      "route": "api/v1/export/batch",
-      "parameters": [
-        {
-          "Name": "request",
-          "type": "FortnitePorting.Models.ExportBatchRequest"
-        },
-        {
-          "Name": "cancellationToken",
-          "type": "System.Threading.CancellationToken"
-        }
+      "methods": [
+        "POST"
       ]
     },
     {
+      "route": "api/v1/export/datatable",
       "controller": "Export",
       "action": "GetDataTable",
-      "route": "api/v1/export/datatable",
-      "parameters": [
-        {
-          "Name": "path",
-          "type": "System.String"
-        },
-        {
-          "Name": "format",
-          "type": "System.String"
-        },
-        {
-          "Name": "rows",
-          "type": "System.String"
-        },
-        {
-          "Name": "delimiter",
-          "type": "System.String"
-        },
-        {
-          "Name": "flatten",
-          "type": "System.Boolean"
-        },
-        {
-          "Name": "bom",
-          "type": "System.Boolean"
-        },
-        {
-          "Name": "download",
-          "type": "System.Boolean"
-        },
-        {
-          "Name": "hotfix",
-          "type": "System.Boolean"
-        }
+      "methods": [
+        "GET"
       ]
     },
     {
-      "controller": "Export",
-      "action": "GetFilePathsInPak",
-      "route": "api/v1/export/filepath/{pakName}",
-      "parameters": [
-        {
-          "Name": "pakName",
-          "type": "System.String"
-        }
-      ]
-    },
-    {
-      "controller": "Export",
-      "action": "GetLocres",
-      "route": "api/v1/export/locres",
-      "parameters": [
-        {
-          "Name": "lang",
-          "type": "System.String"
-        }
-      ]
-    },
-    {
-      "controller": "Export",
-      "action": "GetLocresLanguages",
-      "route": "api/v1/export/locres/languages",
-      "parameters": []
-    },
-    {
-      "controller": "Items",
+      "route": "api/v1/files",
+      "controller": "Files",
       "action": "GetFiles",
-      "route": "api/v1/items/files",
-      "parameters": [
-        {
-          "Name": "prefixes",
-          "type": "System.String"
-        },
-        {
-          "Name": "excludePrefixes",
-          "type": "System.String"
-        },
-        {
-          "Name": "excludePaths",
-          "type": "System.String"
-        },
-        {
-          "Name": "page",
-          "type": "System.Int32"
-        },
-        {
-          "Name": "pageSize",
-          "type": "System.Int32"
-        },
-        {
-          "Name": "ext",
-          "type": "System.String"
-        }
+      "methods": [
+        "GET"
       ]
     },
     {
+      "route": "api/v1/items/properties",
       "controller": "Items",
       "action": "GetProperties",
-      "route": "api/v1/items/properties",
-      "parameters": [
-        {
-          "Name": "prefixes",
-          "type": "System.String"
-        },
-        {
-          "Name": "excludePrefixes",
-          "type": "System.String"
-        },
-        {
-          "Name": "excludePaths",
-          "type": "System.String"
-        },
-        {
-          "Name": "page",
-          "type": "System.Int32"
-        },
-        {
-          "Name": "pageSize",
-          "type": "System.Int32"
-        }
+      "methods": [
+        "GET"
       ]
     },
     {
-      "controller": "Items",
-      "action": "GetSingleProperties",
-      "route": "api/v1/items/properties/single",
-      "parameters": [
-        {
-          "Name": "path",
-          "type": "System.String"
-        }
-      ]
-    },
-    {
+      "route": "api/v1/local",
       "controller": "Local",
       "action": "Status",
-      "route": "api/v1/local",
-      "parameters": []
+      "methods": [
+        "GET"
+      ]
     },
     {
+      "route": "api/v1/local/mount",
       "controller": "Local",
       "action": "Mount",
-      "route": "api/v1/local/mount",
-      "parameters": [
-        {
-          "Name": "dir",
-          "type": "System.String"
-        },
-        {
-          "Name": "key",
-          "type": "System.String[]"
-        },
-        {
-          "Name": "scan",
-          "type": "System.Boolean"
-        },
-        {
-          "Name": "deep",
-          "type": "System.Boolean"
-        },
-        {
-          "Name": "api",
-          "type": "System.Boolean"
-        },
-        {
-          "Name": "cancellationToken",
-          "type": "System.Threading.CancellationToken"
-        }
+      "methods": [
+        "POST"
       ]
     },
     {
+      "route": "api/v1/local/mount",
       "controller": "Local",
       "action": "Unmount",
-      "route": "api/v1/local/mount",
-      "parameters": [
-        {
-          "Name": "dir",
-          "type": "System.String"
-        }
+      "methods": [
+        "DELETE"
       ]
     },
     {
-      "controller": "Localization",
-      "action": "GetLanguages",
-      "route": "api/v1/localization/languages",
-      "parameters": []
-    },
-    {
+      "route": "api/v1/localization",
       "controller": "Localization",
       "action": "Lookup",
-      "route": "api/v1/localization/lookup",
-      "parameters": [
-        {
-          "Name": "key",
-          "type": "System.String"
-        },
-        {
-          "Name": "ns",
-          "type": "System.String"
-        },
-        {
-          "Name": "text",
-          "type": "System.String"
-        },
-        {
-          "Name": "mode",
-          "type": "System.String"
-        },
-        {
-          "Name": "lang",
-          "type": "System.String"
-        },
-        {
-          "Name": "langs",
-          "type": "System.String"
-        },
-        {
-          "Name": "caseSensitive",
-          "type": "System.Boolean"
-        },
-        {
-          "Name": "withTranslations",
-          "type": "System.Boolean"
-        },
-        {
-          "Name": "maxResults",
-          "type": "System.Int32"
-        }
+      "methods": [
+        "GET"
       ]
     },
     {
+      "route": "api/v1/localization/languages",
+      "controller": "Localization",
+      "action": "GetLanguages",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "route": "api/v1/mappings",
       "controller": "Mappings",
       "action": "ListMappings",
-      "route": "api/v1/mappings",
-      "parameters": []
-    },
-    {
-      "controller": "Mappings",
-      "action": "Generate",
-      "route": "api/v1/mappings/dump",
-      "parameters": [
-        {
-          "Name": "dir",
-          "type": "System.String"
-        },
-        {
-          "Name": "compression",
-          "type": "System.String"
-        },
-        {
-          "Name": "level",
-          "type": "System.Nullable`1[[System.Int32, System.Private.CoreLib, Version=10.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]"
-        },
-        {
-          "Name": "oodle",
-          "type": "System.String"
-        },
-        {
-          "Name": "fileName",
-          "type": "System.String"
-        },
-        {
-          "Name": "timeoutSeconds",
-          "type": "System.Int32"
-        },
-        {
-          "Name": "load",
-          "type": "System.Boolean"
-        },
-        {
-          "Name": "download",
-          "type": "System.Boolean"
-        },
-        {
-          "Name": "cancellationToken",
-          "type": "System.Threading.CancellationToken"
-        }
+      "methods": [
+        "GET"
       ]
     },
     {
-      "controller": "Mappings",
-      "action": "Generate",
-      "route": "api/v1/mappings/dump/local",
-      "parameters": [
-        {
-          "Name": "dir",
-          "type": "System.String"
-        },
-        {
-          "Name": "compression",
-          "type": "System.String"
-        },
-        {
-          "Name": "level",
-          "type": "System.Nullable`1[[System.Int32, System.Private.CoreLib, Version=10.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]"
-        },
-        {
-          "Name": "oodle",
-          "type": "System.String"
-        },
-        {
-          "Name": "fileName",
-          "type": "System.String"
-        },
-        {
-          "Name": "timeoutSeconds",
-          "type": "System.Int32"
-        },
-        {
-          "Name": "load",
-          "type": "System.Boolean"
-        },
-        {
-          "Name": "download",
-          "type": "System.Boolean"
-        },
-        {
-          "Name": "cancellationToken",
-          "type": "System.Threading.CancellationToken"
-        }
-      ]
-    },
-    {
-      "controller": "Mappings",
-      "action": "Generate",
-      "route": "api/v1/mappings/dump/uefn",
-      "parameters": [
-        {
-          "Name": "dir",
-          "type": "System.String"
-        },
-        {
-          "Name": "compression",
-          "type": "System.String"
-        },
-        {
-          "Name": "level",
-          "type": "System.Nullable`1[[System.Int32, System.Private.CoreLib, Version=10.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]"
-        },
-        {
-          "Name": "oodle",
-          "type": "System.String"
-        },
-        {
-          "Name": "fileName",
-          "type": "System.String"
-        },
-        {
-          "Name": "timeoutSeconds",
-          "type": "System.Int32"
-        },
-        {
-          "Name": "load",
-          "type": "System.Boolean"
-        },
-        {
-          "Name": "download",
-          "type": "System.Boolean"
-        },
-        {
-          "Name": "cancellationToken",
-          "type": "System.Threading.CancellationToken"
-        }
-      ]
-    },
-    {
-      "controller": "Mappings",
-      "action": "Generate",
       "route": "api/v1/mappings/generate",
-      "parameters": [
-        {
-          "Name": "dir",
-          "type": "System.String"
-        },
-        {
-          "Name": "compression",
-          "type": "System.String"
-        },
-        {
-          "Name": "level",
-          "type": "System.Nullable`1[[System.Int32, System.Private.CoreLib, Version=10.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]"
-        },
-        {
-          "Name": "oodle",
-          "type": "System.String"
-        },
-        {
-          "Name": "fileName",
-          "type": "System.String"
-        },
-        {
-          "Name": "timeoutSeconds",
-          "type": "System.Int32"
-        },
-        {
-          "Name": "load",
-          "type": "System.Boolean"
-        },
-        {
-          "Name": "download",
-          "type": "System.Boolean"
-        },
-        {
-          "Name": "cancellationToken",
-          "type": "System.Threading.CancellationToken"
-        }
+      "controller": "Mappings",
+      "action": "Generate",
+      "methods": [
+        "POST"
       ]
     },
     {
+      "route": "api/v1/mappings/import",
       "controller": "Mappings",
       "action": "Import",
-      "route": "api/v1/mappings/import",
-      "parameters": [
-        {
-          "Name": "path",
-          "type": "System.String"
-        },
-        {
-          "Name": "fileName",
-          "type": "System.String"
-        },
-        {
-          "Name": "load",
-          "type": "System.Boolean"
-        },
-        {
-          "Name": "download",
-          "type": "System.Boolean"
-        },
-        {
-          "Name": "cancellationToken",
-          "type": "System.Threading.CancellationToken"
-        }
+      "methods": [
+        "POST"
       ]
     },
     {
+      "route": "api/v1/mappings/uefn",
       "controller": "Mappings",
       "action": "GetUefnStatus",
-      "route": "api/v1/mappings/uefn",
-      "parameters": [
-        {
-          "Name": "dir",
-          "type": "System.String"
-        }
+      "methods": [
+        "GET"
       ]
     },
     {
+      "route": "api/v1/mappings/{fileName}",
       "controller": "Mappings",
       "action": "DownloadMapping",
-      "route": "api/v1/mappings/{fileName}",
-      "parameters": [
-        {
-          "Name": "fileName",
-          "type": "System.String"
-        }
+      "methods": [
+        "GET"
       ]
     },
     {
-      "controller": "Cosmetics",
-      "action": "GetCosmetics",
-      "route": "api/v1/pak/{pakName}/cosmetics",
-      "parameters": [
-        {
-          "Name": "pakName",
-          "type": "System.String"
-        },
-        {
-          "Name": "page",
-          "type": "System.Int32"
-        },
-        {
-          "Name": "pageSize",
-          "type": "System.Int32"
-        },
-        {
-          "Name": "lang",
-          "type": "System.String"
-        }
-      ]
-    },
-    {
+      "route": "api/v1/paks",
       "controller": "Pak",
       "action": "GetPaks",
-      "route": "api/v1/paks",
-      "parameters": [
-        {
-          "Name": "q",
-          "type": "System.String"
-        },
-        {
-          "Name": "page",
-          "type": "System.Int32"
-        },
-        {
-          "Name": "pageSize",
-          "type": "System.Int32"
-        }
+      "methods": [
+        "GET"
       ]
     },
     {
+      "route": "api/v1/paks/{pakName}/files",
       "controller": "Pak",
       "action": "GetFilesInPak",
-      "route": "api/v1/paks/{pakName}/files",
-      "parameters": [
-        {
-          "Name": "pakName",
-          "type": "System.String"
-        },
-        {
-          "Name": "page",
-          "type": "System.Int32"
-        },
-        {
-          "Name": "pageSize",
-          "type": "System.Int32"
-        }
+      "methods": [
+        "GET"
       ]
     },
     {
+      "route": "api/v1/search",
       "controller": "Search",
       "action": "Search",
-      "route": "api/v1/search",
-      "parameters": [
-        {
-          "Name": "q",
-          "type": "System.String"
-        },
-        {
-          "Name": "mode",
-          "type": "System.String"
-        },
-        {
-          "Name": "field",
-          "type": "System.String"
-        },
-        {
-          "Name": "caseSensitive",
-          "type": "System.Boolean"
-        },
-        {
-          "Name": "ext",
-          "type": "System.String"
-        },
-        {
-          "Name": "dir",
-          "type": "System.String"
-        },
-        {
-          "Name": "dedupe",
-          "type": "System.Boolean"
-        },
-        {
-          "Name": "page",
-          "type": "System.Int32"
-        },
-        {
-          "Name": "pageSize",
-          "type": "System.Int32"
-        },
-        {
-          "Name": "cancellationToken",
-          "type": "System.Threading.CancellationToken"
-        }
+      "methods": [
+        "GET"
       ]
     },
     {
-      "controller": "Search",
-      "action": "SearchContent",
-      "route": "api/v1/search/content",
-      "parameters": [
-        {
-          "Name": "q",
-          "type": "System.String"
-        },
-        {
-          "Name": "dir",
-          "type": "System.String"
-        },
-        {
-          "Name": "pathContains",
-          "type": "System.String"
-        },
-        {
-          "Name": "ext",
-          "type": "System.String"
-        },
-        {
-          "Name": "caseSensitive",
-          "type": "System.Boolean"
-        },
-        {
-          "Name": "maxScan",
-          "type": "System.Int32"
-        },
-        {
-          "Name": "maxResults",
-          "type": "System.Int32"
-        },
-        {
-          "Name": "snippetsPerFile",
-          "type": "System.Int32"
-        },
-        {
-          "Name": "cancellationToken",
-          "type": "System.Threading.CancellationToken"
-        }
-      ]
-    },
-    {
-      "controller": "Update",
-      "action": "Apply",
       "route": "api/v1/update",
-      "parameters": [
-        {
-          "Name": "force",
-          "type": "System.Boolean"
-        },
-        {
-          "Name": "cancellationToken",
-          "type": "System.Threading.CancellationToken"
-        }
-      ]
-    },
-    {
       "controller": "Update",
       "action": "GetStatus",
-      "route": "api/v1/update",
-      "parameters": [
-        {
-          "Name": "cancellationToken",
-          "type": "System.Threading.CancellationToken"
-        }
+      "methods": [
+        "GET"
       ]
     },
     {
+      "route": "api/v1/update",
+      "controller": "Update",
+      "action": "Apply",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "route": "api/v1/versions",
       "controller": "Versions",
       "action": "GetVersions",
-      "route": "api/v1/versions",
-      "parameters": []
+      "methods": [
+        "GET"
+      ]
     },
     {
+      "route": "api/v1/versions/data",
       "controller": "Versions",
       "action": "DeleteData",
-      "route": "api/v1/versions/data",
-      "parameters": [
-        {
-          "Name": "version",
-          "type": "System.String"
-        }
+      "methods": [
+        "DELETE"
       ]
     },
     {
+      "route": "api/v1/versions/import",
       "controller": "Versions",
       "action": "Import",
-      "route": "api/v1/versions/import",
-      "parameters": [
-        {
-          "Name": "file",
-          "type": "Microsoft.AspNetCore.Http.IFormFile"
-        },
-        {
-          "Name": "path",
-          "type": "System.String"
-        },
-        {
-          "Name": "cancellationToken",
-          "type": "System.Threading.CancellationToken"
-        }
+      "methods": [
+        "POST"
       ]
     },
     {
+      "route": "api/v1/versions/keys",
       "controller": "Versions",
       "action": "GetKeys",
-      "route": "api/v1/versions/keys",
-      "parameters": [
-        {
-          "Name": "version",
-          "type": "System.String"
-        }
+      "methods": [
+        "GET"
       ]
     },
     {
+      "route": "api/v1/versions/keys",
       "controller": "Versions",
       "action": "SetKeys",
-      "route": "api/v1/versions/keys",
-      "parameters": [
-        {
-          "Name": "version",
-          "type": "System.String"
-        },
-        {
-          "Name": "request",
-          "type": "FortnitePorting.Models.ArchivedKeysRequest"
-        },
-        {
-          "Name": "merge",
-          "type": "System.Boolean"
-        }
+      "methods": [
+        "POST"
       ]
     },
     {
+      "route": "api/v1/versions/load",
       "controller": "Versions",
       "action": "Load",
-      "route": "api/v1/versions/load",
-      "parameters": [
-        {
-          "Name": "version",
-          "type": "System.String"
-        },
-        {
-          "Name": "cancellationToken",
-          "type": "System.Threading.CancellationToken"
-        }
+      "methods": [
+        "POST"
       ]
     },
     {
+      "route": "api/v1/versions/unload",
       "controller": "Versions",
       "action": "Unload",
-      "route": "api/v1/versions/unload",
-      "parameters": [
-        {
-          "Name": "version",
-          "type": "System.String"
-        }
+      "methods": [
+        "DELETE"
       ]
     }
   ],
   "responses": {
-    "/api/v1/items/files?prefixes=WID_&page=2&pageSize=100": "8C25B5C6F17B1FFB902EF8BFEA12D892E196303347FB85482241F5F0F0C90BAF",
-    "/api/v1/items/files?excludePrefixes=WID_&pageSize=20": "AE0DAF9797802127AE113656EBB0A120754E7B75ADAE24B9F96DB82C3423F6B5",
-    "/api/v1/items/files?excludePaths=Group000&ext=&pageSize=20": "26DE1A94895F512738DD47FA23FCA34AD968C3E38BC9DF3EC88D8F524CBB77E0",
+    "/api/v1/files?prefixes=WID_&ext=.uasset&page=2&pageSize=100": "8C25B5C6F17B1FFB902EF8BFEA12D892E196303347FB85482241F5F0F0C90BAF",
+    "/api/v1/files?prefixes=WID_,AGID_,Athena_,Figment_Athena_&ext=.uasset&excludePrefixes=WID_&pageSize=20": "AE0DAF9797802127AE113656EBB0A120754E7B75ADAE24B9F96DB82C3423F6B5",
+    "/api/v1/files?prefixes=WID_,AGID_,Athena_,Figment_Athena_&ext=.uasset&excludePaths=Group000&pageSize=20": "26DE1A94895F512738DD47FA23FCA34AD968C3E38BC9DF3EC88D8F524CBB77E0",
     "/api/v1/search?q=Item&field=name&ext=uasset&pageSize=5000": "F1BD0D6671A88E8119A83A8662E562D58FFF43FD6B115B578ADC55FEC13A1372",
     "/api/v1/search?q=FortniteGame/Content/Group050/&mode=prefix&field=path&ext=uasset": "2DB24F55BE925A50735D4DD4AD6DB696BDAE513D420564DB83B3C410501AA783",
-    "/api/v1/config/query?file=Game.ini&section=Section&key=Value": "F7D03358278DAE40DFE9478195FCFB176B0A94C09741A6016A833AE1C7747738",
-    "/api/v1/debug/stats?page=2": "24446AC3F09211DF72B41CE629409FF7B001A7A6A997A8CAD94117442C2EFF0A"
+    "/api/v1/config/query?file=Game.ini&section=Section&key=Value": "F7D03358278DAE40DFE9478195FCFB176B0A94C09741A6016A833AE1C7747738"
   }
 }

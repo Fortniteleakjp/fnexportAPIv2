@@ -8,7 +8,7 @@
 dotnet run --project tests/ApiResponses.Tests -c Release
 ```
 
-52項目を検証します。68ルートとアクション引数の契約、変更前の7件のHTTP応答、ページングの境界、UTF-8 JSONの互換性、gzip/Brotliの内容とサイズ、日英Swagger、再読み込み中の503/CORS、例外時のゲート解放、索引更新、マッピング更新時のキャッシュ破棄が対象です。UEFN状態を含む9件のHTTP応答を取得しますが、実行環境に依存するUEFN状態は固定値で比較しません。
+97項目を検証します。53ルートとHTTPメソッドの契約、移行先で変更前と一致する6件のHTTP応答、ページングの境界、UTF-8 JSONの互換性、gzip/Brotliの内容とサイズ、日英Swagger、再読み込み中の503/CORS、例外時のゲート解放、索引更新、マッピング更新時のキャッシュ破棄、統合先のPAK・コスメ・ローカライズ・バックアップ、旧URLの削除、AES監視の内部呼び出し先が対象です。UEFN状態を含む9件のHTTP応答を取得しますが、実行環境に依存するUEFN状態は固定値で比較しません。
 
 マッピング生成はWindowsの実DLLを使う別テストです。生成ツールをビルドし、UEFNをインストールするか `UEFN_BINARIES_DIR` を指定します。
 
@@ -20,6 +20,8 @@ dotnet run --project tests/MappingsGenerator.Tests -c Release
 こちらは圧縮・保存・読み込み・入力不正など35項目を検証します。
 
 ## 測定
+
+以下は初回の整理・高速化（コミット2b1dfb6）で測定した結果です。エンドポイント統合後も同じ合成ファイルでベンチマークを実行できます。
 
 2026-10-09、同一Windows環境・Release構成。メモリー上の20万件のuassetパス、INI1件、バイナリ1件を用い、ウォームアップ3回後の同一処理を反復しました。時間は1回あたりの平均、割り当ては実行スレッド上の1回あたりのバイト数です。索引の初回構築時間やHTTP転送時間は表に含みません。
 
@@ -38,4 +40,4 @@ dotnet run --project tests/MappingsGenerator.Tests -c Release
 dotnet run --project tests/ApiResponses.Tests -c Release -- response-report.json
 ```
 
-`contract.json` は整理前のルート・アクション引数と、同じ合成ファイルを使用した応答のハッシュを保持しています。極端に大きいページ番号で先頭ページが返る旧動作は整数オーバーフローの不具合として修正し、空のページを返すことを別に検証しています。
+`contract.json` は現在の53ルート・HTTPメソッドと、同じ合成ファイルを使用した移行前の応答ハッシュを保持しています。旧URLは [移行先一覧](endpoint-migration.md) に記録しています。極端に大きいページ番号で先頭ページが返る旧動作は整数オーバーフローの不具合として修正し、空のページを返すことを別に検証しています。

@@ -107,9 +107,8 @@ using (var cancellation = new CancellationTokenSource())
 
 foreach (var alias in new[] { "dump", "dump/uefn", "dump/local" })
 {
-    using var response = await Post(alias + "?compression=none&download=false", HttpStatusCode.OK);
-    using var result = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-    Check(result.RootElement.GetProperty("build").GetString() == build, alias + ": uses installed DLLs");
+    using var response = await client.PostAsync("/api/v1/mappings/" + alias, null);
+    Check(response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed, alias + ": duplicate route removed");
 }
 
 typeof(ManifestService).GetField("_appliedBuildVersion", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(manifest, build + "-Windows");

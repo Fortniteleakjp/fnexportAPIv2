@@ -33,16 +33,15 @@ namespace FortnitePorting.Controllers
         /// <param name="maxResults">Maximum number of matching files to return (default 50, max 500).</param>
         /// <param name="snippetsPerFile">Number of snippet lines returned per file (default 3, max 20).</param>
         /// <returns>The matching files and their snippet lines.</returns>
-        [HttpGet("content")]
-        public IActionResult SearchContent(
-            [FromQuery] string? q = null,
-            [FromQuery] string? dir = null,
-            [FromQuery] string? pathContains = null,
-            [FromQuery] string ext = "",
-            [FromQuery] bool caseSensitive = false,
-            [FromQuery] int maxScan = 3_000_000,
-            [FromQuery] int maxResults = 50,
-            [FromQuery] int snippetsPerFile = 3,
+        private IActionResult SearchContent(
+            string? q = null,
+            string? dir = null,
+            string? pathContains = null,
+            string ext = "",
+            bool caseSensitive = false,
+            int maxScan = 3_000_000,
+            int maxResults = 50,
+            int snippetsPerFile = 3,
             CancellationToken cancellationToken = default)
         {
             if (string.IsNullOrWhiteSpace(q))

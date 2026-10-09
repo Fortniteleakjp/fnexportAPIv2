@@ -30,12 +30,22 @@ public sealed class BackupController : ControllerBase
         _logger = logger;
     }
 
+    /// <summary>Returns backup metadata as JSON, or the generated file with format=fbkp.</summary>
+    [HttpGet]
+    public Task<IActionResult> Get([FromQuery] string format = "json", [FromQuery] bool includePayloads = false,
+        [FromQuery] bool compress = true, CancellationToken cancellationToken = default)
+        => (format ?? "json").Trim().ToLowerInvariant() switch
+        {
+            "json" => Task.FromResult(GetInfo(includePayloads)),
+            "fbkp" => Download(includePayloads, compress, cancellationToken),
+            _ => Task.FromResult<IActionResult>(BadRequest(new { message = "format must be json or fbkp." }))
+        };
+
     /// <summary>
     /// Reports what the generated backup would contain, without producing it.
     /// </summary>
     /// <param name="includePayloads">Include payload files (.uexp/.ubulk/.uptnl); FModel excludes them.</param>
-    [HttpGet]
-    public IActionResult GetInfo([FromQuery] bool includePayloads = false)
+    private IActionResult GetInfo(bool includePayloads)
     {
         var entries = CollectEntries(includePayloads);
         return Ok(new
@@ -47,7 +57,7 @@ public sealed class BackupController : ControllerBase
             entryCount = entries.Count,
             totalFiles = _provider.Files.Count,
             build = MountedBuild(),
-            downloadUrl = Url.Action(nameof(Download), "Backup", new { includePayloads })
+            downloadUrl = Url.Action(nameof(Get), "Backup", new { format = "fbkp", includePayloads })
         });
     }
 
@@ -59,10 +69,9 @@ public sealed class BackupController : ControllerBase
     /// <param name="compress">Write the LZ4 frame FModel produces (default). False writes the plain body,
     /// which FModel also accepts because it sniffs the LZ4 magic before decoding.</param>
     /// <param name="cancellationToken">Request cancellation state.</param>
-    [HttpGet("fbkp")]
-    public async Task<IActionResult> Download(
-        [FromQuery] bool includePayloads = false,
-        [FromQuery] bool compress = true,
+    private async Task<IActionResult> Download(
+        bool includePayloads = false,
+        bool compress = true,
         CancellationToken cancellationToken = default)
     {
         var entries = CollectEntries(includePayloads);

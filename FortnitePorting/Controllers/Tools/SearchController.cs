@@ -134,6 +134,11 @@ namespace FortnitePorting.Controllers
         /// <param name="page">The page number (1-based).</param>
         /// <param name="pageSize">The number of items per page (maximum 10000).</param>
         /// <returns>The matching files (path / name / ext) and the total count.</returns>
+        /// <param name="target">path for path matching, or content for full-text content search.</param>
+        /// <param name="pathContains">Additional path-fragment filter for content candidates.</param>
+        /// <param name="maxScan">Maximum candidates scanned during content search.</param>
+        /// <param name="maxResults">Maximum files returned by content search.</param>
+        /// <param name="snippetsPerFile">Maximum snippets per matching content file.</param>
         [HttpGet]
         public IActionResult Search(
             [FromQuery] string? q = null,
@@ -145,8 +150,17 @@ namespace FortnitePorting.Controllers
             [FromQuery] bool dedupe = false,
             [FromQuery] int page = 1,
             [FromQuery] int pageSize = 100,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default,
+            [FromQuery] string target = "path",
+            [FromQuery] string? pathContains = null,
+            [FromQuery] int maxScan = 3_000_000,
+            [FromQuery] int maxResults = 50,
+            [FromQuery] int snippetsPerFile = 3)
         {
+            target = (target ?? "path").Trim().ToLowerInvariant();
+            if (target == "content")
+                return SearchContent(q, dir, pathContains, ext ?? "", caseSensitive, maxScan, maxResults, snippetsPerFile, cancellationToken);
+            if (target != "path") return BadRequest(new { message = "target must be path or content." });
             if (string.IsNullOrWhiteSpace(q))
             {
                 return BadRequest(new { message = "The 'q' parameter is required." });
