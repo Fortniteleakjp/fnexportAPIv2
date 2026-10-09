@@ -394,6 +394,7 @@ namespace FortnitePorting
         public void ApplyMapping(string usmapPath)
         {
             _cue4ParseProvider.MappingsContainer = new FileUsmapTypeMappingsProvider(usmapPath);
+            CacheRegistry.ClearAll();
             _mappedBuildVersion = _currentBuildVersion;
             _mappingAttempts = 0;
             Console.WriteLine($"✓ Applied the mapping {Path.GetFileName(usmapPath)} for {GameBuild}");

@@ -8,6 +8,8 @@ namespace FortnitePorting.Services;
 public static class CacheRegistry
 {
     private static readonly List<(string Name, Action Clear)> Entries = new();
+    private static int _generation;
+    public static int Generation => Volatile.Read(ref _generation);
 
     /// <summary>Registers a cache-clearing action (called once at startup from Program.cs).</summary>
     public static void Register(string name, Action clear)
@@ -21,6 +23,7 @@ public static class CacheRegistry
     /// <summary>Clears every registered cache. Never throws: a failing cache must not abort a reload.</summary>
     public static void ClearAll()
     {
+        Interlocked.Increment(ref _generation);
         (string Name, Action Clear)[] entries;
         lock (Entries)
         {

@@ -771,10 +771,7 @@ public sealed class BuildDiffService
                 return new FileSide(true, null, null, file.Size, archive, "The file could not be read (its archive may still be locked).");
             }
 
-            var extension = path.Contains('.') ? path[(path.LastIndexOf('.') + 1)..] : string.Empty;
-            var text = TextExtensions.Contains(extension) || LooksLikeText(bytes)
-                ? DecodeText(bytes)
-                : null;
+            var text = DecodeText(path, bytes);
 
             return new FileSide(true, text, bytes, bytes.LongLength, archive, null);
         }
@@ -788,6 +785,12 @@ public sealed class BuildDiffService
     /// Treats the content as text when the first few KB decode as UTF-8/UTF-16 with no NUL bytes.
     /// Assets are binary and fail this, which is why the endpoints diff their JSON export instead.
     /// </summary>
+    internal static string? DecodeText(string path, byte[] bytes)
+    {
+        var extension = System.IO.Path.GetExtension(path).TrimStart('.');
+        return TextExtensions.Contains(extension) || LooksLikeText(bytes) ? DecodeText(bytes) : null;
+    }
+
     private static bool LooksLikeText(byte[] bytes)
     {
         if (bytes.Length == 0)

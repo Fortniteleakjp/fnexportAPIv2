@@ -1,5 +1,7 @@
 # fnexportAPI
 
+処理の配置と全ルートは [エンドポイント一覧](docs/endpoints.md)、検証方法と測定結果は [応答処理の検証](docs/response-performance.md) にまとめています。
+
 **Fortnite のアセットを HTTP API として取得・検索・エクスポートする Web API**
 
 **日本語** | [English](README.en.md)

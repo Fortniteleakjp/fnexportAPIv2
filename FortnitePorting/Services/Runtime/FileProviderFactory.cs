@@ -14,6 +14,15 @@ namespace FortnitePorting.Services;
 /// </summary>
 public static class FileProviderFactory
 {
+    private sealed class MappingState
+    {
+        public string? Path;
+        public long Length;
+        public DateTime ModifiedUtc;
+        public object? Container;
+    }
+
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<IFileProvider, MappingState> LoadedMappings = new();
     public sealed class InitializationResult
     {
         public required DefaultFileProvider FileProvider { get; init; }
@@ -55,11 +64,11 @@ public static class FileProviderFactory
         // 5. Initialize the FileProvider
         var tempDir = Path.Combine(Path.GetTempPath(), "fortnite_manifest_dummy");
         Directory.CreateDirectory(tempDir);
-        
+
         var provider = new DefaultFileProvider(
-            tempDir, 
-            SearchOption.TopDirectoryOnly, 
-            versions: new VersionContainer(EGame.GAME_UE6_0), 
+            tempDir,
+            SearchOption.TopDirectoryOnly,
+            versions: new VersionContainer(EGame.GAME_UE6_0),
             pathComparer: StringComparer.OrdinalIgnoreCase);
 
         // 6. Initialize the ManifestService. The build history store is created first because the
@@ -220,32 +229,45 @@ public static class FileProviderFactory
             return null;
         }
 
-        try
+        var state = LoadedMappings.GetOrCreateValue(provider);
+        lock (state)
         {
-            // Free memory before loading the mappings
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-            GC.Collect();
+            try
+            {
+                var file = new FileInfo(usmapPath);
+                if (state.Path == file.FullName && state.Length == file.Length &&
+                    state.ModifiedUtc == file.LastWriteTimeUtc && ReferenceEquals(state.Container, provider.MappingsContainer))
+                    return usmapPath;
+                // Free memory before loading the mappings
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                GC.Collect();
 
-            provider.MappingsContainer = new FileUsmapTypeMappingsProvider(usmapPath);
-            Console.WriteLine($"✓ Loaded the mapping file: {usmapPath}\n");
+                provider.MappingsContainer = new FileUsmapTypeMappingsProvider(usmapPath);
+                state.Path = file.FullName;
+                state.Length = file.Length;
+                state.ModifiedUtc = file.LastWriteTimeUtc;
+                state.Container = provider.MappingsContainer;
+                CacheRegistry.ClearAll();
+                Console.WriteLine($"✓ Loaded the mapping file: {usmapPath}\n");
 
-            // Free memory after loading as well
-            GC.Collect();
-            return usmapPath;
-        }
-        catch (OutOfMemoryException)
-        {
-            Console.WriteLine($"✗ Failed to load the mapping file: out of memory");
-            Console.WriteLine("Warning: some assets cannot be deserialized without mappings");
-            Console.WriteLine("Hint: increase memory or exclude unnecessary VFS files\n");
-            return null;
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"✗ Failed to load the mapping file: {ex.Message}");
-            Console.WriteLine("Warning: some assets cannot be deserialized without mappings\n");
-            return null;
+                // Free memory after loading as well
+                GC.Collect();
+                return usmapPath;
+            }
+            catch (OutOfMemoryException)
+            {
+                Console.WriteLine($"✗ Failed to load the mapping file: out of memory");
+                Console.WriteLine("Warning: some assets cannot be deserialized without mappings");
+                Console.WriteLine("Hint: increase memory or exclude unnecessary VFS files\n");
+                return null;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"✗ Failed to load the mapping file: {ex.Message}");
+                Console.WriteLine("Warning: some assets cannot be deserialized without mappings\n");
+                return null;
+            }
         }
     }
 

@@ -5,120 +5,41 @@ using FortnitePorting.Controllers;
 using FortnitePorting.Services;
 using Microsoft.Extensions.Caching.Memory;
 
-// Configuration for the Docker container environment
 var builder = WebApplication.CreateBuilder(args);
 
-// Disable file watching (workaround for inotify limits in Docker containers)
 builder.Configuration.Sources.Clear();
 builder.Configuration.AddEnvironmentVariables();
 if (args != null) builder.Configuration.AddCommandLine(args);
 
-// Also disable file watching in the host builder
 builder.Host.UseContentRoot(Directory.GetCurrentDirectory());
 
-// Get the port setting from an environment variable (default is 3849)
 var port = Environment.GetEnvironmentVariable("PORT") ?? "3849";
 
-// Set the URL explicitly (to avoid warnings, UseKestrel is not used)
 builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
 
-// Add services to the container
-// The version filter lets every read controller marked [VersionAware] serve an older build when the
-// request names one; without a version parameter nothing about those endpoints changes.
-builder.Services.AddControllers(options => options.Filters.Add<FortnitePorting.Services.VersionParameterFilter>());
-builder.Services.AddScoped<FortnitePorting.Services.RequestBuildProvider>();
-builder.Services.AddMemoryCache();
-// Gate that blocks requests while the provider is rebuilt for a new Fortnite build.
-builder.Services.AddSingleton(ProviderReloadGate.Instance);
+builder.Services.AddApiEndpoints();
 builder.Services.AddHostedService<AesKeyMonitorService>();
-// Fallback self-sufficient main-key source: extracts the MainAES key from the UEFN Common DLL with the
-// external AesFinder tool and submits it when the external AES API hasn't supplied it (e.g. a fresh build).
 builder.Services.AddHostedService<AesFinderKeyService>();
-
-// Swagger / OpenAPI (exposes all endpoints)
-builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen(options =>
-{
-    // Japanese document (default). Operation summaries are localized by JapaneseOperationFilter.
-    options.SwaggerDoc("ja", new Microsoft.OpenApi.OpenApiInfo
-    {
-        Title = "Fortnite アセットエクスポート API",
-        Version = "v1",
-        Description = "ローカルで実行するCUE4ParseベースのFortniteアセット解析APIです。アセットのJSON・画像・音声取得、コスメ検索、ファイル検索、PAK/INI確認、依存関係解析、ローカライズを提供します。VPSなどへのホスティングを前提としません。"
-    });
-
-    // English document.
-    options.SwaggerDoc("en", new Microsoft.OpenApi.OpenApiInfo
-    {
-        Title = "Fortnite Asset Analysis API",
-        Version = "v1",
-        Description = "A local CUE4Parse-powered Fortnite asset analysis API. Provides JSON/image/audio export, cosmetic search, path/content search, PAK and INI inspection, dependency analysis, and localization. It is designed to run locally rather than as a VPS-hosted service."
-    });
-
-    // Include XML comments if they exist (these supply the English text used by the "en" document).
-    var xmlFile = $"{System.Reflection.Assembly.GetExecutingAssembly().GetName().Name}.xml";
-    var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
-    if (File.Exists(xmlPath))
-    {
-        options.IncludeXmlComments(xmlPath, includeControllerXmlComments: true);
-    }
-
-    // Localize operation summaries AND descriptions per document ("ja" / "en").
-    // Registered AFTER IncludeXmlComments so it overrides the XML text for both documents.
-    options.OperationFilter<FortnitePorting.Swagger.LocalizedOperationFilter>();
-
-    // Document the version/loadVersion query parameters, which are handled by an action filter and
-    // therefore do not appear in the action signatures.
-    options.OperationFilter<FortnitePorting.Swagger.VersionParameterOperationFilter>();
-
-    // Localize the controller (tag) descriptions per document.
-    options.DocumentFilter<FortnitePorting.Swagger.LocalizedDocumentFilter>();
-});
-
-// CORS: allow the API to be called from any origin (browser apps, tools, etc.).
-// Custom audio diagnostic headers are exposed so browser clients can read them.
-builder.Services.AddCors(options =>
-{
-    options.AddDefaultPolicy(policy =>
-        policy.AllowAnyOrigin()
-              .AllowAnyHeader()
-              .AllowAnyMethod()
-              .WithExposedHeaders("X-Audio-Format", "X-Audio-Decoded", "X-Rada-Native-Decoder", "Content-Disposition",
-                  "X-Usmap-Bytes", "X-Usmap-Enums", "X-Usmap-Structs", "X-Usmap-Output", "X-Usmap-Loaded",
-                  "X-Usmap-Source", "X-Usmap-Build",
-                  "X-Backup-Entries", "X-Backup-Version",
-                  "X-Hotfix-Status", "X-Hotfix-Applied",
-                  "X-Build-Version", "X-Build-Is-Live",
-                  "X-Changes-Mode", "X-Changes-Modified", "X-Changes-Unverified", "X-Changes-Computed",
-                  "X-Changes-Forced", "X-Changes-Excluded-Archives",
-                  "X-Icon-Source", "X-Icon-Name"));
-});
 
 Console.WriteLine("=================================");
 Console.WriteLine("Fortnite Asset Export API");
 Console.WriteLine($"Version {SelfUpdateService.CurrentVersionDisplay}");
 Console.WriteLine("=================================\n");
 
-// Check GitHub for a newer release before anything expensive happens. When one is installed the
-// swap is performed by a helper script that waits for this process to exit, so we stop right here
-// rather than mounting a whole build we are about to throw away.
 if (SelfUpdateService.RunStartupUpdate())
 {
     return;
 }
 
-// Initialize the FileProvider at startup and register it as a singleton
 Console.WriteLine("Initializing FileProvider...\n");
 
-FortnitePorting.Services.FileProviderFactory.InitializationResult initializationResult;
+FileProviderFactory.InitializationResult initializationResult;
 try
 {
     initializationResult = FileProviderFactory.CreateFileProvider();
 }
 catch (Exception ex)
 {
-    // There is nothing to serve without a build, so the process does stop here — but it says why in
-    // one line instead of printing a stack trace from whichever download happened to fail.
     Console.WriteLine($"\n✗ Startup failed: {ex.Message}");
     if (ex.InnerException != null)
     {
@@ -135,139 +56,25 @@ Console.WriteLine("\n✓ FileProvider initialization complete\n");
 builder.Services.AddSingleton<IFileProvider>(initializationResult.FileProvider);
 builder.Services.AddSingleton(initializationResult.ManifestService);
 
-// Build history: the archive of previously served builds, the on-demand mounting of those builds, and
-// the changelists recorded between them (see /api/v1/versions and /api/v1/changes).
 builder.Services.AddSingleton(initializationResult.BuildHistory);
 builder.Services.AddSingleton(initializationResult.HistoricalBuilds);
 builder.Services.AddSingleton(initializationResult.BuildDiffs);
 builder.Services.AddSingleton(initializationResult.DiffJobs);
 
-// Fortnite installations that are already on this machine: mounted on request (see /api/v1/local),
-// and the source of the AES keys for a named local build.
 builder.Services.AddSingleton(sp => new FortnitePorting.Services.Local.LocalBuildService(
     sp.GetRequiredService<IFileProvider>()));
 
 var app = builder.Build();
 
-// Register the caches that hold data derived from the mounted build. They are all cleared whenever the
-// provider is rebuilt for a new build, so a cache hit can never keep serving pre-update content.
 CacheRegistry.Register("response cache", () => (app.Services.GetRequiredService<IMemoryCache>() as MemoryCache)?.Clear());
 CacheRegistry.Register("path index", FileIndex.ClearAll);
+CacheRegistry.Register("archive file index", ArchiveFileIndex.Clear);
 CacheRegistry.Register("search bytes/exports", SearchController.ClearCaches);
 CacheRegistry.Register("export localization", ExportController.ClearCaches);
 CacheRegistry.Register("localization tables", LocalizationService.ClearCache);
 
-// Configure the HTTP request pipeline
-if (app.Environment.IsDevelopment())
-{
-    // Development environment configuration (no file watching)
-}
+app.UseApiEndpoints();
 
-// Enable Swagger in all environments. Two documents are exposed and selectable from the
-// UI dropdown: 日本語 (default) and English.
-app.UseSwagger();
-app.UseSwaggerUI(options =>
-{
-    // The first endpoint is the default shown in the UI.
-    options.SwaggerEndpoint("/swagger/ja/swagger.json", "日本語 (Japanese)");
-    options.SwaggerEndpoint("/swagger/en/swagger.json", "English");
-    options.RoutePrefix = "swagger";
-    options.DocumentTitle = "Fortnite Asset Analysis API";
-    options.DocExpansion(Swashbuckle.AspNetCore.SwaggerUI.DocExpansion.None);
-    options.DefaultModelsExpandDepth(1);
-    options.DisplayRequestDuration();
-    options.EnableFilter();
-});
-
-// While the provider is being rebuilt for a new build its archives are torn down and re-registered, so
-// requests must not read from it: they are answered with 503 instead of stale or half-loaded content.
-// The build/status endpoints stay reachable so clients can see why (and poll for completion).
-app.Use(async (context, next) =>
-{
-    var path = context.Request.Path.Value ?? string.Empty;
-    var exempt = path.Equals("/", StringComparison.Ordinal)
-                 || path.StartsWith("/swagger", StringComparison.OrdinalIgnoreCase)
-                 || path.StartsWith("/api/v1/build", StringComparison.OrdinalIgnoreCase)
-                 // Recorded changelists are files on disk and archived builds have their own
-                 // providers, so neither is affected by the live provider being torn down.
-                 || path.StartsWith("/api/v1/changes", StringComparison.OrdinalIgnoreCase)
-                 || path.StartsWith("/api/v1/versions", StringComparison.OrdinalIgnoreCase)
-                 // A request that names an archived build reads that build's own provider, so it does
-                 // not have to wait out the live rebuild - which is exactly when an older build is
-                 // most likely to be wanted.
-                 || ReadsAnArchivedBuild(context);
-
-    if (exempt)
-    {
-        await next();
-        return;
-    }
-
-    if (!ProviderReloadGate.Instance.TryEnter())
-    {
-        context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-        context.Response.Headers.RetryAfter = "30";
-        await context.Response.WriteAsJsonAsync(new
-        {
-            status = ProviderReloadGate.Instance.State,
-            message = "The API is reloading the latest Fortnite build. Retry shortly.",
-            statusEndpoint = "/api/v1/build"
-        });
-        return;
-    }
-
-    try
-    {
-        await next();
-    }
-    finally
-    {
-        ProviderReloadGate.Instance.Exit();
-    }
-});
-
-// Configuration for the Docker container
-app.UseRouting();
-app.UseCors();
-app.MapControllers();
-
-// Redirect to the Swagger UI when the root is accessed
-app.MapGet("/", () => Results.Redirect("/swagger")).ExcludeFromDescription();
-
-/// <summary>
-/// True when the request names a build other than the live one that is currently mounted. Resolution
-/// failures answer false so the request still goes through the gate and is handled by the normal
-/// pipeline, which reports the actual problem.
-/// </summary>
-static bool ReadsAnArchivedBuild(HttpContext context)
-{
-    var requested = context.Request.Query[FortnitePorting.Services.VersionParameterFilter.VersionParameter].ToString();
-    if (string.IsNullOrWhiteSpace(requested))
-    {
-        return false;
-    }
-
-    try
-    {
-        var diffs = context.RequestServices.GetService<FortnitePorting.Services.BuildDiffService>();
-        var resolved = diffs?.ResolveBuildVersion(requested);
-        return resolved != null && !diffs!.IsLive(resolved) && diffs.TryLease(resolved, out var lease) && Release(lease);
-    }
-    catch
-    {
-        return false;
-    }
-
-    // The lease is only taken to prove the build is mounted; the action filter takes its own.
-    static bool Release(FortnitePorting.Services.BuildLease lease)
-    {
-        lease.Dispose();
-        return true;
-    }
-}
-
-var listeningPort = Environment.GetEnvironmentVariable("PORT") ?? "3849";
 Console.WriteLine($"\n✓ Server ready to start");
-Console.WriteLine($"Listening on http://0.0.0.0:{listeningPort}\n");
-
+Console.WriteLine($"Listening on http://0.0.0.0:{port}\n");
 app.Run();

@@ -63,13 +63,11 @@ namespace FortnitePorting.Controllers
             var excludePrefixList = ParseList(excludePrefixes);
             var excludePathList = ParseList(excludePaths);
 
-            var matched = EnumerateMatchingFiles(prefixList, ext, excludePrefixList, excludePathList)
-                .OrderBy(k => k, StringComparer.OrdinalIgnoreCase)
-                .ToList();
+            var matched = EnumerateMatchingFiles(prefixList, ext, excludePrefixList, excludePathList);
 
             var total = matched.Count;
             var totalPages = (int)Math.Ceiling(total / (double)pageSize);
-            var paged = matched.Skip((page - 1) * pageSize).Take(pageSize).ToList();
+            var paged = PageSlice.From(matched, page, pageSize);
 
             return Ok(new
             {
@@ -110,13 +108,11 @@ namespace FortnitePorting.Controllers
             var excludePrefixList = ParseList(excludePrefixes);
             var excludePathList = ParseList(excludePaths);
 
-            var matched = EnumerateMatchingFiles(prefixList, ".uasset", excludePrefixList, excludePathList)
-                .OrderBy(k => k, StringComparer.OrdinalIgnoreCase)
-                .ToList();
+            var matched = EnumerateMatchingFiles(prefixList, ".uasset", excludePrefixList, excludePathList);
 
             var total = matched.Count;
             var totalPages = (int)Math.Ceiling(total / (double)pageSize);
-            var pagedPaths = matched.Skip((page - 1) * pageSize).Take(pageSize).ToList();
+            var pagedPaths = PageSlice.From(matched, page, pageSize);
 
             var results = new List<object>(pagedPaths.Count);
             foreach (var path in pagedPaths)
@@ -136,8 +132,7 @@ namespace FortnitePorting.Controllers
                 results
             };
 
-            var json = JsonConvert.SerializeObject(payload, Formatting.Indented);
-            return Content(json, "application/json; charset=utf-8");
+            return JsonResponse.Result(payload);
         }
 
         /// <summary>
@@ -174,11 +169,9 @@ namespace FortnitePorting.Controllers
             }
 
             var result = ExtractFromFile(normalized);
-            var json = JsonConvert.SerializeObject(result, Formatting.Indented);
-            return Content(json, "application/json; charset=utf-8");
+            return JsonResponse.Result(result);
         }
 
-        // --- Internal helpers ---
 
         private static string[] ParsePrefixes(string? prefixes)
         {
@@ -215,63 +208,8 @@ namespace FortnitePorting.Controllers
         /// Filters file keys by prefix (the start of the file name) and by extension,
         /// then drops the ones excluded by file-name prefix or by a substring of the full path.
         /// </summary>
-        private List<string> EnumerateMatchingFiles(string[] prefixes, string ext, string[] excludePrefixes, string[] excludePaths)
-        {
-            // An extension narrows the walk to that extension's bucket in the index (.uasset by default,
-            // so the Athena/WID scan never touches the .uexp/.ubulk half of the build), and the file name
-            // is compared as a span over the path instead of being cut out of it for every file.
-            var index = FileIndex.For(_provider);
-            var extensions = string.IsNullOrEmpty(ext)
-                ? null
-                : new[] { ext.StartsWith('.') ? ext : "." + ext };
-
-            var matched = new List<string>();
-            foreach (var i in index.Enumerate(null, extensions))
-            {
-                var key = index.PathAt(i);
-                if (ContainsAny(key, excludePaths))
-                {
-                    continue;
-                }
-
-                var fileName = index.NameAt(i);
-                if (StartsWithAny(fileName, excludePrefixes))
-                {
-                    continue;
-                }
-
-                if (StartsWithAny(fileName, prefixes))
-                {
-                    matched.Add(key);
-                }
-            }
-
-            return matched;
-        }
-
-        private static bool StartsWithAny(ReadOnlySpan<char> fileName, string[] prefixes)
-        {
-            foreach (var prefix in prefixes)
-            {
-                if (fileName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                {
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        private static bool ContainsAny(string path, string[] fragments)
-        {
-            foreach (var fragment in fragments)
-            {
-                if (path.Contains(fragment, StringComparison.OrdinalIgnoreCase))
-                {
-                    return true;
-                }
-            }
-            return false;
-        }
+        private IReadOnlyList<string> EnumerateMatchingFiles(string[] prefixes, string ext, string[] excludePrefixes, string[] excludePaths)
+            => FileIndex.For(_provider).MatchingNames(prefixes, ext, excludePrefixes, excludePaths);
 
         /// <summary>
         /// Loads a single file and extracts the target properties. On failure, returns a result that includes an error.

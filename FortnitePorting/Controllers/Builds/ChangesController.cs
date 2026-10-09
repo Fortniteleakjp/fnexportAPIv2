@@ -111,7 +111,7 @@ public sealed class ChangesController : ControllerBase
             totalPages = (int)Math.Ceiling(filtered.Count / (double)pageSize),
             currentPage = page,
             pageSize,
-            changes = filtered.Skip((page - 1) * pageSize).Take(pageSize).Select(e => new
+            changes = PageSlice.From(filtered, page, pageSize).Select(e => new
             {
                 path = e.Path,
                 kind = e.Kind.ToString().ToLowerInvariant(),
@@ -479,7 +479,6 @@ public sealed class ChangesController : ControllerBase
         return Ok(new { from = fromBuild, to = toBuild, deleted = _store.DeleteDiff(fromBuild!, toBuild!) });
     }
 
-    // ------------------------------------------------------------ helpers
 
     /// <summary>
     /// Returns the changelist between two builds, computing it on the spot when it was never recorded

@@ -103,8 +103,7 @@ namespace FortnitePorting.Controllers
                 var totalFiles = allFiles.Count;
                 var totalPages = (int)Math.Ceiling(totalFiles / (double)pageSize);
 
-                var skip = (page - 1) * pageSize;
-                var pagedFiles = allFiles.Skip(skip).Take(pageSize).ToList();
+                var pagedFiles = PageSlice.From(allFiles, page, pageSize);
 
                 return Ok(new
                 {

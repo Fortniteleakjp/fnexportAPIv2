@@ -16,12 +16,7 @@ namespace FortnitePorting.Controllers;
 public sealed class ConfigController : ControllerBase
 {
     private readonly RequestBuildProvider _build;
-
-    /// <summary>
-    /// The build this request reads from: the live one, or the build named by <c>version</c>.
-    /// Read lazily on purpose — MVC creates the controller before the filter that resolves the
-    /// parameter runs, so a provider captured in the constructor would always be the live one.
-    /// </summary>
+        // Read lazily: the version filter binds the provider after controller construction.
     private IFileProvider _provider => _build.Provider;
 
     /// <summary>Cache-key prefix that keeps an older build's content out of the live cache.</summary>

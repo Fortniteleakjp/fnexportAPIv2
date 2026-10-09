@@ -25,6 +25,7 @@ public sealed class RequestBuildProvider
     private readonly IFileProvider _liveProvider;
     private readonly ManifestService _manifestService;
     private BuildLease? _lease;
+    private readonly int _cacheGeneration = CacheRegistry.Generation;
 
     public RequestBuildProvider(IFileProvider liveProvider, ManifestService manifestService)
     {
@@ -42,11 +43,10 @@ public sealed class RequestBuildProvider
     public bool IsLive => _lease is null or { IsLive: true };
 
     /// <summary>
-    /// Prefix for any cache key that holds content read through <see cref="Provider"/>. Empty for the
-    /// live build, so live requests keep the cache entries they always had; a per-build prefix
-    /// otherwise, so an older build's content can never be served from — or poison — the live cache.
+    /// Cache keys include the selected build and the generation captured when the request began.
+    /// A mapping update cannot make an in-flight response populate the next generation.
     /// </summary>
-    public string CacheScope => IsLive ? string.Empty : $"@{BuildVersion}::";
+    public string CacheScope => $"{(IsLive ? string.Empty : $"@{BuildVersion}::")}cache:{_cacheGeneration}::";
 
     /// <summary>Called by <see cref="VersionParameterFilter"/> once it has resolved the parameter.</summary>
     internal void Bind(BuildLease lease) => _lease = lease;

@@ -123,9 +123,9 @@ public static class VersionedAssetReader
             }
         }
 
-        var side = BuildDiffService.ReadSide(provider, resolved);
-        return side.Text != null
-            ? new ReadResult(true, resolved, "text", null, side.Text, null, bytes.LongLength, archive, null)
+        var text = BuildDiffService.DecodeText(resolved, bytes);
+        return text != null
+            ? new ReadResult(true, resolved, "text", null, text, null, bytes.LongLength, archive, null)
             : new ReadResult(true, resolved, "binary", bytes, null, null, bytes.LongLength, archive, null);
     }
 

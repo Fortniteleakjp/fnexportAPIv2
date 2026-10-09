@@ -60,6 +60,10 @@ jobs:
         shell: cmd
         run: call MappingsGenerator\build.bat "%CD%\libs"
 
+      - name: Verify API response contracts
+        shell: cmd
+        run: dotnet run --project tests\ApiResponses.Tests -c Release
+
       - name: Publish FortnitePorting (win-x64, single file)
         shell: cmd
         run: dotnet publish FortnitePorting\FortnitePorting.csproj -c Release -r win-x64 -o publish-win -p:Version=${{ needs.version.outputs.version }}

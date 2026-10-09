@@ -50,6 +50,8 @@ public sealed class FileIndex
     /// <summary>Built on first use by <see cref="TryResolvePluginAsset"/>; most requests never need it.</summary>
     private Dictionary<string, string>? _pluginSuffixes;
     private readonly object _pluginSuffixLock = new();
+    private readonly Dictionary<string, string[]> _nameQueries = new(StringComparer.Ordinal);
+    private int _cachedQueryPaths;
 
     /// <summary>The mounted file count this snapshot was built from; a change means it is stale.</summary>
     public int MountedFileCount { get; }
@@ -203,11 +205,54 @@ public sealed class FileIndex
         // presents paths to a user sorts the matches it kept, which is a far smaller set.
         foreach (var extension in extensions)
         {
-            foreach (var i in Bucket(extension))
+            var bucket = Bucket(extension);
+            var position = Array.BinarySearch(bucket, start);
+            if (position < 0) position = ~position;
+            for (; position < bucket.Length && bucket[position] < end; position++)
             {
-                if (i >= start && i < end) yield return i;
+                yield return bucket[position];
             }
         }
+    }
+
+    public IReadOnlyList<string> MatchingNames(string[] prefixes, string extension, string[] excludedPrefixes, string[] excludedPaths)
+    {
+        var key = System.Text.Json.JsonSerializer.Serialize(new { prefixes, extension, excludedPrefixes, excludedPaths });
+        lock (_nameQueries)
+        {
+            if (_nameQueries.TryGetValue(key, out var cached)) return cached;
+        }
+
+        var matches = new List<string>();
+        IReadOnlyList<string>? extensions = string.IsNullOrEmpty(extension) ? null
+            : new[] { extension.StartsWith('.') ? extension : "." + extension };
+        foreach (var i in Enumerate(null, extensions))
+        {
+            var path = PathAt(i);
+            if (excludedPaths.Any(fragment => path.Contains(fragment, StringComparison.OrdinalIgnoreCase))) continue;
+            var name = NameAt(i);
+            if (StartsWithAny(name, excludedPrefixes) || !StartsWithAny(name, prefixes)) continue;
+            matches.Add(path);
+        }
+        // One extension bucket, and the unfiltered index, already use the display order.
+        var result = matches.ToArray();
+        lock (_nameQueries)
+        {
+            if (_nameQueries.TryGetValue(key, out var cached)) return cached;
+            if (_nameQueries.Count < 16 && _cachedQueryPaths + result.Length <= 250000)
+            {
+                _nameQueries.Add(key, result);
+                _cachedQueryPaths += result.Length;
+            }
+        }
+        return result;
+    }
+
+    private static bool StartsWithAny(ReadOnlySpan<char> name, string[] prefixes)
+    {
+        foreach (var prefix in prefixes)
+            if (name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
     }
 
     /// <summary>
