@@ -626,9 +626,9 @@ Generation accepts `dir`, `compression` (`zstd` by default; also `brotli`, `oodl
 `fileName`, `timeoutSeconds` (default 120, range 1–3600), `load` (default false) and `download` (default true).
 `dir` accepts the installation root or `Binaries/Win64`. It defaults to `UEFN_BINARIES_DIR`, then the standard installation.
 The output name uses BranchName and Changelist from the installed `.version` file, with `_zs`, `_br` or `_oo` for compression.
-`load=true` requires the UEFN build and changelist to match the mounted build.
+`load=true` applies the generated and verified mapping to the current provider and clears derived caches, including when UEFN and the mounted game have different build numbers or changelists. Downloads report `X-Usmap-Loaded: true`; `download=false` reports `loaded: true` in JSON.
 
-`POST /dump`, `POST /dump/uefn` and `POST /dump/local` remain aliases of this generator.
+`POST /dump`, `POST /dump/uefn` and `POST /dump/local` have been removed. Use `POST /api/v1/mappings/generate` to generate mappings.
 The old JSON, pak scan, merge, process ID and offset parameters have been removed.
 
 ```bash

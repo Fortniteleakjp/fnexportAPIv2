@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using FortnitePorting.Services;
 using FortnitePorting.Services.Mappings;
 using Microsoft.AspNetCore.Mvc;
@@ -27,23 +26,10 @@ public class MappingsController(ManifestService manifestService, ILogger<Mapping
             return BadRequest(new { message = "The old generation parameters have been removed. Use dir to select installed UEFN DLLs." });
         try
         {
-            if (load && OperatingSystem.IsWindows())
-            {
-                var directory = StaticMappingsGenerator.BinariesDirectory(dir);
-                if (StaticMappingsGenerator.MissingFiles(directory).Length == 0 &&
-                    !MatchesCurrentBuild(StaticMappingsGenerator.ReadBuild(directory)))
-                    return Conflict(new { message = "The UEFN installation does not match the mounted build. Generate with load=false." });
-            }
-
             var result = await new StaticMappingsGenerator().GenerateAsync(
                 new(dir, compression.Trim().ToLowerInvariant(), level, oodle, fileName, timeoutSeconds), cancellationToken);
 
-            if (load)
-            {
-                if (!MatchesCurrentBuild(result.Build))
-                    return Conflict(new { message = "The mounted build changed during generation. The mapping was saved but not loaded.", output = result.FilePath });
-                manifestService.ApplyMapping(result.FilePath);
-            }
+            if (load) manifestService.ApplyMapping(result.FilePath);
 
             logger.LogInformation("Generated {File}: {Structs} structs, {Enums} enums in {Seconds:F1}s",
                 result.FileName, result.Structs, result.Enums, result.ElapsedSeconds);
@@ -170,14 +156,6 @@ public class MappingsController(ManifestService manifestService, ILogger<Mapping
         var file = MappingStore.Find(fileName);
         return file == null ? NotFound(new { message = $"No stored mapping named '{fileName}'." })
             : PhysicalFile(file.FullName, "application/octet-stream", file.Name);
-    }
-
-    private bool MatchesCurrentBuild(string build)
-    {
-        var current = string.IsNullOrWhiteSpace(manifestService.AppliedBuildVersion)
-            ? manifestService.GameBuild : manifestService.AppliedBuildVersion;
-        var match = Regex.Match(current ?? "", @"^(.+-CL-\d+)(?:-|$)");
-        return match.Success && string.Equals(build, match.Groups[1].Value, StringComparison.OrdinalIgnoreCase);
     }
 
     private string? DownloadUrl(string name)

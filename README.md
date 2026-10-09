@@ -653,9 +653,9 @@ Windows x64とUEFNのDLL一式が必要です。UHTのレイアウトはUE 6.0�
 `fileName`、`timeoutSeconds`（既定120、1–3600秒）、`load`（既定false）、`download`（既定true）です。
 `dir` はインストール先または `Binaries/Win64` を受け付けます。省略時は `UEFN_BINARIES_DIR`、未設定なら標準のインストール先を使います。
 出力名は `.version` のBranchNameとChangelistから決まり、圧縮方式に応じて `_zs` / `_br` / `_oo` が付きます。
-`load=true` は、マウント中のビルドとUEFNのビルド・CLが一致する場合に使用できます。
+`load=true` は、生成・検証後のマッピングを現在のプロバイダーに適用し、キャッシュを更新します。UEFNとマウント中のゲームのビルド番号やCLが異なる場合も適用します。ダウンロード時は `X-Usmap-Loaded: true`、`download=false` 時はJSONの `loaded: true` で適用結果を確認できます。
 
-`POST /dump`、`POST /dump/uefn`、`POST /dump/local` は、同じ生成処理への別名として残しています。
+`POST /dump`、`POST /dump/uefn`、`POST /dump/local` は削除しました。生成には `POST /api/v1/mappings/generate` を使用してください。
 従来のJSON入力、pak走査、マージ、プロセスID、オフセットのパラメーターは廃止しました。
 
 ```bash

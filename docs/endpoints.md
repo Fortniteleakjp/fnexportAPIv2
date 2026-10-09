@@ -55,7 +55,7 @@ Newtonsoft.Jsonで整形するJSONは `JsonResponse` で直接UTF-8にシリア�
 
 ## マッピング生成
 
-`POST /api/v1/mappings/generate` は `StaticMappingsGenerator` が `UEFNStaticMappingsGenerator.exe` を別プロセスで実行し、インストール済みUEFNのEngine/Common DLLからusmapを生成します。C++ソースは `MappingsGenerator` にあります。`MappingStore` が検証してから保存し、タイムアウトやキャンセル時は生成プロセスを終了します。`load=true` はマウント中のビルドと一致した場合に適用します。既存ファイルの取得は `MappingService`、生成・インポートしたファイルの管理は `MappingStore` が担当します。
+`POST /api/v1/mappings/generate` は `StaticMappingsGenerator` が `UEFNStaticMappingsGenerator.exe` を別プロセスで実行し、インストール済みUEFNのEngine/Common DLLからusmapを生成します。C++ソースは `MappingsGenerator` にあります。`MappingStore` が検証してから保存し、タイムアウトやキャンセル時は生成プロセスを終了します。`load=true` は生成・検証後のマッピングを現在のプロバイダーに適用し、キャッシュを更新します。ビルド番号やCLが異なる場合も適用します。既存ファイルの取得は `MappingService`、生成・インポートしたファイルの管理は `MappingStore` が担当します。
 
 ## ルート一覧
 

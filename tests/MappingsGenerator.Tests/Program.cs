@@ -56,7 +56,6 @@ using (await Post("generate?compression=zstd&level=0", HttpStatusCode.BadRequest
 using (await Post("generate?timeoutSeconds=0", HttpStatusCode.BadRequest)) { checks++; }
 using (await Post("generate?fileName=../outside.usmap", HttpStatusCode.BadRequest)) { checks++; }
 using (await Post("generate?url=https://example.invalid/mapping.json", HttpStatusCode.BadRequest)) { checks++; }
-using (await Post("generate?load=true", HttpStatusCode.Conflict)) { checks++; }
 using (await Post("generate?dir=" + Uri.EscapeDataString(root), HttpStatusCode.FailedDependency)) { checks++; }
 Check(!Directory.Exists(MappingStore.DirectoryPath), "invalid requests do not store mappings");
 
@@ -84,6 +83,8 @@ foreach (var (compression, id) in new[] { ("none", 0), ("zstd", 3), ("brotli", 2
     var stored = await File.ReadAllBytesAsync(Path.Combine(MappingStore.DirectoryPath, compression + ".usmap"));
     Check(data.SequenceEqual(stored),
         compression + ": response matches the stored file");
+    Check(provider.MappingsContainer == null && response.Headers.GetValues("X-Usmap-Loaded").Single() == "false",
+        compression + ": load=false leaves the provider unchanged");
     if (compression == "none") original = data;
 }
 
@@ -111,10 +112,46 @@ foreach (var alias in new[] { "dump", "dump/uefn", "dump/local" })
     Check(response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed, alias + ": duplicate route removed");
 }
 
-typeof(ManifestService).GetField("_appliedBuildVersion", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(manifest, build + "-Windows");
-typeof(ManifestService).GetField("_currentBuildVersion", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(manifest, build + "-Windows");
-using (var response = await Post("generate?compression=none&load=true", HttpStatusCode.OK))
-    Check(provider.MappingsContainer != null && response.Headers.GetValues("X-Usmap-Loaded").Single() == "true", "matching build is loaded into the provider");
+var cacheClears = 0;
+CacheRegistry.Register("mapping test", () => cacheClears++);
+var cacheGeneration = CacheRegistry.Generation;
+using (var response = await Post("generate?compression=none&load=true&fileName=loaded.usmap", HttpStatusCode.OK))
+{
+    var data = await response.Content.ReadAsByteArrayAsync();
+    Check(response.Headers.GetValues("X-Usmap-Loaded").Single() == "true" && original!.SequenceEqual(data),
+        "load=true returns the generated binary without a known mounted build");
+    Check(provider.MappingsContainer is FileUsmapTypeMappingsProvider { FileName: "loaded.usmap" } &&
+          provider.MappingsForGame?.Types.Count == expectedStructs && provider.MappingsForGame?.Enums.Count == expectedEnums,
+        "load=true loads all generated types and enums into the provider");
+    Check(cacheClears == 1 && CacheRegistry.Generation == cacheGeneration + 1,
+        "loading clears derived caches");
+}
+
+var mountedBuild = "++Fortnite+Release-Test-CL-1-Windows";
+typeof(ManifestService).GetField("_appliedBuildVersion", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(manifest, mountedBuild);
+typeof(ManifestService).GetField("_currentBuildVersion", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(manifest, mountedBuild);
+using (var response = await Post("generate?compression=zstd&load=true&download=false&fileName=loaded-json.usmap", HttpStatusCode.OK))
+{
+    using var result = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+    Check(result.RootElement.GetProperty("loaded").GetBoolean() && result.RootElement.GetProperty("build").GetString() == build,
+        "different mounted changelist accepts load=true and returns loaded=true in JSON");
+    Check(provider.MappingsContainer is FileUsmapTypeMappingsProvider { FileName: "loaded-json.usmap" } &&
+          provider.MappingsForGame?.Types.Count == expectedStructs && provider.MappingsForGame?.Enums.Count == expectedEnums,
+        "compressed result replaces the active mapping");
+    Check(cacheClears == 2 && CacheRegistry.Generation == cacheGeneration + 2,
+        "replacing a mapping clears derived caches again");
+}
+
+var activeMapping = provider.MappingsContainer;
+typeof(ManifestService).GetMethod("RefreshMappingsIfNeeded", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(manifest, null);
+Check(ReferenceEquals(activeMapping, provider.MappingsContainer) && cacheClears == 2,
+    "the next mapping refresh preserves the explicitly loaded mapping");
+using (var response = await Post("generate?compression=none&download=false&fileName=saved-only.usmap", HttpStatusCode.OK))
+{
+    using var result = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+    Check(!result.RootElement.GetProperty("loaded").GetBoolean() && ReferenceEquals(activeMapping, provider.MappingsContainer) && cacheClears == 2,
+        "load=false preserves the active mapping and reports loaded=false in JSON");
+}
 
 using (var response = await client.GetAsync("/api/v1/mappings/none.usmap"))
 {
