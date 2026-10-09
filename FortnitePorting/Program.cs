@@ -84,11 +84,8 @@ builder.Services.AddCors(options =>
               .AllowAnyHeader()
               .AllowAnyMethod()
               .WithExposedHeaders("X-Audio-Format", "X-Audio-Decoded", "X-Rada-Native-Decoder", "Content-Disposition",
-                  "X-Usmap-Bytes", "X-Usmap-Names", "X-Usmap-Enums", "X-Usmap-Structs",
-                  "X-Usmap-UnknownProps", "X-Usmap-OptionalProps", "X-Usmap-Output", "X-Usmap-Loaded",
-                  "X-Usmap-ParsedEnums", "X-Usmap-ParsedStructs",
-                  "X-Usmap-Dumped-Packages", "X-Usmap-Dumped-Structs", "X-Usmap-Dumped-Enums",
-                  "X-Usmap-Merged-Structs", "X-Usmap-Merged-Enums",
+                  "X-Usmap-Bytes", "X-Usmap-Enums", "X-Usmap-Structs", "X-Usmap-Output", "X-Usmap-Loaded",
+                  "X-Usmap-Source", "X-Usmap-Build",
                   "X-Backup-Entries", "X-Backup-Version",
                   "X-Hotfix-Status", "X-Hotfix-Applied",
                   "X-Build-Version", "X-Build-Is-Live",
@@ -112,7 +109,27 @@ if (SelfUpdateService.RunStartupUpdate())
 
 // Initialize the FileProvider at startup and register it as a singleton
 Console.WriteLine("Initializing FileProvider...\n");
-var initializationResult = FileProviderFactory.CreateFileProvider();
+
+FortnitePorting.Services.FileProviderFactory.InitializationResult initializationResult;
+try
+{
+    initializationResult = FileProviderFactory.CreateFileProvider();
+}
+catch (Exception ex)
+{
+    // There is nothing to serve without a build, so the process does stop here — but it says why in
+    // one line instead of printing a stack trace from whichever download happened to fail.
+    Console.WriteLine($"\n✗ Startup failed: {ex.Message}");
+    if (ex.InnerException != null)
+    {
+        Console.WriteLine($"  Cause: {ex.InnerException.Message}");
+    }
+    Console.WriteLine("\nThe API needs one Fortnite build to serve. If the build API is temporarily");
+    Console.WriteLine("unavailable, retry in a few minutes — a build this instance has served before is");
+    Console.WriteLine("mounted from build_history/ automatically when it is.");
+    return;
+}
+
 Console.WriteLine("\n✓ FileProvider initialization complete\n");
 
 builder.Services.AddSingleton<IFileProvider>(initializationResult.FileProvider);
@@ -124,6 +141,11 @@ builder.Services.AddSingleton(initializationResult.BuildHistory);
 builder.Services.AddSingleton(initializationResult.HistoricalBuilds);
 builder.Services.AddSingleton(initializationResult.BuildDiffs);
 builder.Services.AddSingleton(initializationResult.DiffJobs);
+
+// Fortnite installations that are already on this machine: mounted on request (see /api/v1/local),
+// and the source of the AES keys for a named local build.
+builder.Services.AddSingleton(sp => new FortnitePorting.Services.Local.LocalBuildService(
+    sp.GetRequiredService<IFileProvider>()));
 
 var app = builder.Build();
 

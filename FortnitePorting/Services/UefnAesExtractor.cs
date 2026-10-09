@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 using EpicManifestParser;
@@ -24,7 +25,10 @@ namespace FortnitePorting.Services;
 /// </summary>
 public static class UefnAesExtractor
 {
-    private const string ManifestsApi = "https://export-service-new.dillyapis.com/v1/manifests";
+    private const string ManifestsApi = "https://api.fortniteapi.com/v1/manifests";
+    // The list only carries the manifest id; the Epic CDN wants a per-path signed token, so the manifest
+    // itself is fetched from this mirror instead.
+    private const string ManifestUrlFormat = "https://fortnite-direct.dillycdn.com/manifests/{0}.manifest";
     private const string AppName = "Fortnite_Studio";
     private const string ExeName = "UnrealEditorFortnite-Win64-Shipping.exe";
 
@@ -68,22 +72,25 @@ public static class UefnAesExtractor
     private static async Task<(Result Result, FBuildPatchAppManifest Manifest, string CacheDir)> LoadManifestAsync(
         string rootDir, HttpClient http, Action<string> log, CancellationToken ct)
     {
-        // dillyapis manifest list -> the Fortnite_Studio (UEFN) build, preferring the Live-Windows label.
+        // Manifest list -> the newest Fortnite_Studio (UEFN) build, preferring the Live-Windows label. The
+        // list keeps older builds of the same label too, so the discovery time decides between them.
         var listJson = await http.GetStringAsync(ManifestsApi, ct);
         var arr = JArray.Parse(listJson);
         var entry = arr.OfType<JObject>()
             .Where(e => string.Equals((string?)e["appName"], AppName, StringComparison.OrdinalIgnoreCase))
             .OrderByDescending(e => string.Equals((string?)e["labelName"], "Live-Windows", StringComparison.OrdinalIgnoreCase))
+            .ThenByDescending(e => (DateTime?)e["discoveredAt"] ?? DateTime.MinValue)
             .FirstOrDefault()
             ?? throw new InvalidOperationException($"appName '{AppName}' not found in {ManifestsApi}");
 
-        var downloadUrl = (string?)entry["downloadUrl"]
-            ?? throw new InvalidOperationException("downloadUrl missing for Fortnite_Studio entry");
+        var manifestId = (string?)entry["manifestId"]
+            ?? throw new InvalidOperationException("manifestId missing for Fortnite_Studio entry");
+        var downloadUrl = string.Format(ManifestUrlFormat, Uri.EscapeDataString(manifestId));
 
         var result = new Result
         {
             LabelName = (string?)entry["labelName"],
-            Build = (string?)entry["fullBuild"],
+            Build = (string?)entry["buildVersion"],
             VersionName = (string?)entry["versionName"],
             DownloadUrl = downloadUrl
         };
@@ -91,6 +98,16 @@ public static class UefnAesExtractor
 
         var manifestBytes = await http.GetByteArrayAsync(downloadUrl, ct);
         log($"Manifest downloaded: {manifestBytes.Length:N0} bytes; parsing...");
+
+        // The list's hash is the manifest file's SHA-1; a mismatch means the mirror served something else.
+        var expectedHash = (string?)entry["hash"];
+        if (!string.IsNullOrEmpty(expectedHash))
+        {
+            var actualHash = Convert.ToHexString(SHA1.HashData(manifestBytes));
+            if (!string.Equals(actualHash, expectedHash, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException(
+                    $"Manifest {manifestId} hash mismatch: expected {expectedHash}, got {actualHash}.");
+        }
 
         var cacheDir = Path.Combine(rootDir, "uefn_cache");
         var chunkCacheDir = Path.Combine(cacheDir, "chunks");

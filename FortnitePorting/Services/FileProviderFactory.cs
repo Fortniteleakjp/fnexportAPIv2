@@ -95,7 +95,7 @@ public static class FileProviderFactory
         var skipMapping = Environment.GetEnvironmentVariable("SKIP_MAPPING")?.ToLower() == "true";
         if (!skipMapping)
         {
-            LoadMappingFile(provider, rootDir);
+            LoadMappingFile(provider, rootDir, manifestService.GameBuild);
         }
         else
         {
@@ -210,9 +210,10 @@ public static class FileProviderFactory
     /// can be resolved (e.g. USMAP_PATH points at a missing file, or no download/local file
     /// is available) the step is skipped gracefully rather than failing startup.
     /// </summary>
-    private static string? LoadMappingFile(IFileProvider provider, string rootDir, bool forceDownload = true)
+    private static string? LoadMappingFile(IFileProvider provider, string rootDir, string? gameBuild,
+        bool forceDownload = true)
     {
-        var usmapPath = ResolveUsmapPath(rootDir, forceDownload);
+        var usmapPath = ResolveUsmapPath(rootDir, gameBuild, forceDownload);
         if (usmapPath == null)
         {
             Console.WriteLine("No .usmap mapping available — skipping (some assets may not deserialize).\n");
@@ -258,7 +259,7 @@ public static class FileProviderFactory
     /// Returns the loaded .usmap path (or <see cref="MappingSkipSentinel"/> when skipped, or null when
     /// nothing could be loaded).
     /// </summary>
-    public static string? ReloadMappings(IFileProvider provider, string rootDir)
+    public static string? ReloadMappings(IFileProvider provider, string rootDir, string? gameBuild)
     {
         var skip = Environment.GetEnvironmentVariable("SKIP_MAPPING")?.ToLower() == "true";
         if (skip)
@@ -268,17 +269,18 @@ public static class FileProviderFactory
         }
 
         Console.WriteLine("Refreshing .usmap mapping for the current build...");
-        return LoadMappingFile(provider, rootDir, forceDownload: false);
+        return LoadMappingFile(provider, rootDir, gameBuild, forceDownload: false);
     }
 
     /// <summary>
     /// Resolves which .usmap file to load, or null only when nothing can be obtained:
     ///   1. USMAP_PATH env var — used directly when the file exists.
     ///   2. Otherwise (USMAP_PATH unset or its file missing) the latest mapping is downloaded
-    ///      automatically (falling back to an existing local file). Only if no mapping can be
-    ///      downloaded or found locally is null returned so loading is skipped.
+    ///      automatically. While the API still serves an older build's mapping, one already stored for
+    ///      <paramref name="gameBuild"/> is used instead (falling back to an existing local file). Only
+    ///      if no mapping can be downloaded or found locally is null returned so loading is skipped.
     /// </summary>
-    private static string? ResolveUsmapPath(string rootDir, bool forceDownload = true)
+    private static string? ResolveUsmapPath(string rootDir, string? gameBuild, bool forceDownload = true)
     {
         var envPath = Environment.GetEnvironmentVariable("USMAP_PATH");
         if (!string.IsNullOrWhiteSpace(envPath) && File.Exists(envPath))
@@ -295,7 +297,7 @@ public static class FileProviderFactory
         // No usable mapping yet -> auto-download the latest (with an existing-local-file fallback).
         try
         {
-            return MappingService.EnsureMappingFile(rootDir, forceDownload);
+            return MappingService.EnsureMappingFile(rootDir, forceDownload, gameBuild);
         }
         catch (Exception ex)
         {

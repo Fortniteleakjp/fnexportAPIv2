@@ -137,15 +137,27 @@ docker run -p 3849:3849 \
 | `BUILD_HISTORY_KEEP` | `2` | How many builds keep their manifest archived. The default `2` is "the current build plus the previous one"; anything older has its data deleted automatically on the next update (recorded changelists are kept). |
 | `HISTORICAL_BUILDS_MAX` | `1` | How many archived builds may be mounted at once. A mounted build costs a few GB, so the least recently used one is dropped when this is exceeded. |
 | `HISTORICAL_BUILD_IDLE_MINUTES` | `30` | How long a mounted archived build may sit unused before it is dropped. `0` disables the idle sweep. |
+| `LOCAL_GAME_DIR` | – | A Fortnite/UEFN installation already on this machine, used when a request omits `dir` (even unset, installations are detected from the Epic Games Launcher's records and the default install locations). |
+| `LOCAL_BUILDS_MAX` | `1` | How many local installations may be mounted at once. A mounted build costs a few GB, so the least recently used one is dropped beyond this. |
+| `LOCAL_BUILD_IDLE_MINUTES` | `30` | How long a mounted local build may sit unused before it is dropped. `0` disables the idle sweep. |
 | `AUTO_UPDATE` | (unset) | `true` = always update without asking, `false` = never contact GitHub, **unset = ask (y/n) at startup, but only when an update exists**. |
 | `UPDATE_CHECK_ONLY` | `false` | Report a newer release but never install it. |
 | `UPDATE_RESTART` | `true` | Relaunch after the swap. `false` swaps the files and leaves starting it to you. |
 | `UPDATE_REPO` | `Fortniteleakjp/fnexportAPIv2` | The `owner/name` releases are read from (for forks). |
+| `BUILD_API_URL` | `https://fljpapi.jp/api/v2/build/Windows` | Where "which build is live?" is asked; point it at a mirror when the default source is down. |
 | `GITHUB_TOKEN` | – | Optional; lifts the anonymous GitHub API rate limit (60 requests/hour). |
 
 > **Mapping (.usmap) behavior**: by default the `.usmap` mapping is loaded. If `USMAP_PATH` is set and the file exists it is used; **otherwise (unset, or the file is missing) the latest mapping is auto-downloaded** (falling back to an existing local file). Only if none can be obtained is it skipped instead of failing startup (some assets cannot deserialize without mappings). Set `SKIP_MAPPING=true` to disable it explicitly.
 
 > **Auto-update (no restart)**:<br>・**New decryption keys**: every ~30s the monitor reads the local `/api/v1/archives/keys` endpoint and submits any still-required keys **by GUID**, auto-mounting the matching paks (no dependency on pak names). That endpoint aggregates the current archives and external keychain data.<br>・**New builds**: build info is polled every ~30s; when the build or the manifest id changes the manifest is re-fetched and **every VFS archive of the previous build is dropped and re-registered/mounted from the new manifest** (exactly what a restart used to do). An update rewrites the existing `pakchunk*.utoc/.ucas` under the same names, so mounting only the archives that are *new* would keep serving the previous build's content. The other endpoints answer `503` (`Retry-After: 30`) while the rebuild runs, and every cache derived from the old build (responses, search, localization) is cleared afterwards. Newly-encrypted paks mount once their key arrives (via the AES monitor above).<br>・**Mappings (.usmap)**: when a new build is detected the **latest .usmap for that build is re-downloaded and hot-swapped** (a pinned `USMAP_PATH` file is kept as-is).<br>All of this happens without restarting the process (until the external APIs publish the new build's keys/mapping, only that build's new content is unavailable — it appears automatically once they do).
+
+> **When the build info cannot be fetched at startup**: a transient failure (a `503`, a connection
+> error) is retried up to five times a few seconds apart. If it still cannot be read, startup does not
+> fail — **the newest build still archived under `build_history/` is mounted instead**, which is a
+> complete build rather than a degraded one, because the manifest streams its paks from the Epic CDN
+> exactly as the live one does. The poll then **switches to the live build without a restart** as soon
+> as the API answers. Only when there is no archived build at all does the process stop, with a
+> one-line explanation instead of a stack trace.
 
 ## API endpoints
 
@@ -399,6 +411,7 @@ Example response (`/api/v1/search`):
 | `GET /aes?submit=false` | Return the key only; do not submit/mount (default is `submit=true`). |
 | `GET /aes?noApi=true` | Don't consult fortnite-api; take the **highest-entropy candidate** straight from the binary. |
 | `GET /aes?force=true` | Ignore the cache and re-download the Common DLL. |
+| `GET /api/v1/aes/local?dir={path}` | **Produce the keys of an installation already on this machine**, one per encryption GUID, with no download and no dependency on the live build. See [Local installations](#local-installations--apiv1local). |
 
 > The MainAES key lives in the Common DLL in plaintext as `mov [rbp+d], imm32` instruction immediates (the AESDumpster pattern) — it is neither a contiguous 32-byte blob nor a key schedule, so a naive byte search or schedule scan won't find it. This endpoint extracts it with the external AesFinder tool (set via `AESFINDER_PATH`). The Common DLL is downloaded once and cached, and **a new build is fetched automatically when detected**.
 >
@@ -591,90 +604,101 @@ curl -OJ http://localhost:3849/api/v1/backup/fbkp
 
 ### Mappings — `/api/v1/mappings`
 
-Produces and serves `.usmap` files with [`UnrealMappingsDumper`](https://github.com/TheNaeem/UnrealMappingsDumper).
-There are two dump routes:
+The C++ tool in `MappingsGenerator/` generates `.usmap` files from installed UEFN Engine and Common DLLs in a separate process.
+It requires Windows x64 and the UEFN DLLs. UEFN does not need to be running. The UHT layouts support UE 6.0.
+The previous JSON converter, pak collector, mapping merge and DLL injection have been removed.
 
-| Route | Endpoint | Needs the game running | Coverage |
-|---|---|---|---|
-| **Pak dump** | `POST /api/v1/mappings/dump` | no | Blueprint-side types in the paks; native `/Script` types merged in from an existing `.usmap` |
-| **UEFN dump** | `POST /api/v1/mappings/dump/uefn` | yes (Windows only) | the engine's own reflection data, native types included |
+Run the integration tests with installed UEFN DLLs using `dotnet run --project tests/MappingsGenerator.Tests -c Release`.
+`build.bat` also builds the generator. To build it separately, run `MappingsGenerator\build.bat libs`.
+The API searches next to its executable, in `libs/`, then in `MappingsGenerator/build/`.
+Set `USMAP_GENERATOR_PATH` to use an explicit executable.
 
-The original dumper injects a DLL into the game, walks `GObjects`, and writes every `UClass`,
-`UScriptStruct`, and `UEnum` it finds into a `.usmap`. There is no game process behind the pak dump, so
-**the same type information is read out of the mounted paks through CUE4Parse** and written with the
-dumper's own serialization (name table → enums → structs, recursive property type records, `0x30C4` header).
+| Method & path | Description |
+| --- | --- |
+| `POST /api/v1/mappings/generate` | Generate from DLLs, verify with CUE4Parse, save in `mappings/` and return the binary. |
+| `GET /api/v1/mappings/uefn?dir={path}` | Check the executable, DLLs, UEFN build and readiness. |
+| `GET /api/v1/mappings` | List stored files, newest first. |
+| `GET /api/v1/mappings/{fileName}` | Download a stored file. |
+| `POST /api/v1/mappings/import?path={path}&fileName={name}&load={bool}&download={bool}` | Verify and import an existing `.usmap`. |
 
-The UEFN dump uses the original DLL itself. Building the vendored
-[`UnrealMappingsDumper/`](UnrealMappingsDumper/VENDORED.md) with `UnrealMappingsDumperuild.bat` (also
-called from `build.bat`) produces `libs/UnrealMappingsDumper.dll`, which the API injects into a running
-UEFN. A `.cfg` next to the DLL tells it where to write, and the DLL reports back through a terminal
-`HOST_RESULT` line in its log.
+Generation accepts `dir`, `compression` (`zstd` by default; also `brotli`, `oodle`, `none`), `level`, `oodle` (DLL path),
+`fileName`, `timeoutSeconds` (default 120, range 1–3600), `load` (default false) and `download` (default true).
+`dir` accepts the installation root or `Binaries/Win64`. It defaults to `UEFN_BINARIES_DIR`, then the standard installation.
+The output name uses BranchName and Changelist from the installed `.version` file, with `_zs`, `_br` or `_oo` for compression.
+`load=true` requires the UEFN build and changelist to match the mounted build.
+
+`POST /dump`, `POST /dump/uefn` and `POST /dump/local` remain aliases of this generator.
+The old JSON, pak scan, merge, process ID and offset parameters have been removed.
+
+```bash
+curl "http://localhost:3849/api/v1/mappings/uefn"
+curl -OJ -X POST "http://localhost:3849/api/v1/mappings/generate"
+curl -X POST "http://localhost:3849/api/v1/mappings/generate?compression=brotli&download=false"
+```
+
+Concurrent generation returns `409`; missing tools or DLLs return `424`; unsupported platforms return `501`;
+timeouts return `504`; generation or verification failures return `502`. Cancellation and timeouts stop the generator.
+Files are verified before storage and replaced atomically, so a failed generation leaves existing mappings intact.
+
+### Local installations — `/api/v1/local`
+
+Finds a local Fortnite/UEFN installation, resolves its AES keys and mounts its assets. Unlike the normal path, which reads the build Epic's manifests are serving, the
+build here **does not have to be the live one**.
+
+The installation answers the key question itself: its binaries carry the key as compiled-in immediates, and
+its own containers decide whether a candidate is right (`TestAesKey` decrypts the container's own
+mount-point check bytes, which only the real key does). So **a build the live AES APIs have not published
+yet, and an installation they no longer publish at all, both still yield their keys**. With `api=false`
+nothing leaves the machine.
 
 | Method & path | Description |
 |---|---|
-| `POST /api/v1/mappings/dump?path={frag}&maxPackages={n}&timeoutSeconds={n}&merge={bool}&baseMapping={file}&version={0..4}&compression={none/zstd}&fileName={name}&load={bool}&download={bool}` | Dump a `.usmap` from the mounted build. The binary is returned by default and stored as `mappings/{build}_dumped.usmap`. `load=true` hot-loads it into the provider; `download=false` returns JSON statistics instead. |
-| `GET /api/v1/mappings` | List the stored `.usmap` files (dumped, generated, or downloaded), newest first. |
-| `GET /api/v1/mappings/{fileName}` | Serve one stored `.usmap`. |
-| `GET /api/v1/mappings/uefn` | Report whether a UEFN dump can run right now: whether the DLL is built and where, which UEFN processes can be injected into, `ready`, and what to do next. |
-| `POST /api/v1/mappings/dump/uefn?pid={n}&compression={none/oodle}&fileName={name}&console={bool}&timeoutSeconds={n}&load={bool}&download={bool}` | Dump a `.usmap` out of a running UEFN by injecting the DLL. The binary is returned by default and stored as `mappings/{build}_uefn.usmap`. The target process is detected automatically, so `pid` is rarely needed. |
-| `POST /api/v1/mappings/generate?url={url}&path={path}&fileName={name}&load={bool}&verify={bool}&download={bool}` | Convert a StormForge-style mappings JSON into a `.usmap` (the pre-existing endpoint). |
+| `GET /api/v1/local` | List the installations this machine appears to have (`LOCAL_GAME_DIR`, the Epic Games Launcher's records, the default install locations) and which are mounted. Nothing is opened and no key is read. |
+| `GET /api/v1/aes/local?dir={path}&key={hex}&scan={bool}&deep={bool}&binary={name}&binaries={n}&api={bool}&mount={bool}&submit={bool}&save={bool}` | Produce that installation's AES keys, one per GUID its containers ask for. `save=true` writes `aes.local.json`, `submit=true` also submits them to this API's own provider, `mount=true` leaves the build mounted. |
+| `POST /api/v1/local/mount?dir={path}&key={hex}&scan={bool}&deep={bool}&api={bool}` | Mount the installation and keep it loaded, ready to dump from. The keys are worked out exactly as above. |
+| `DELETE /api/v1/local/mount?dir={path}` | Free a mount; every one of them when `dir` is omitted. A build still being read is dropped once that read finishes. |
+| `POST /api/v1/mappings/dump/local?dir={path}&...` | Generate from the specified UEFN DLLs; accepts the same parameters as `/api/v1/mappings/generate` and does not mount paks. |
 
-```
-curl -OJ -X POST "http://localhost:3849/api/v1/mappings/dump?path=FortniteGame/Content/Athena&maxPackages=2000"
-curl "http://localhost:3849/api/v1/mappings/uefn"
-curl -OJ -X POST "http://localhost:3849/api/v1/mappings/dump/uefn"
-curl "http://localhost:3849/api/v1/mappings"
-curl -OJ "http://localhost:3849/api/v1/mappings/FortniteGame_42_00_dumped.usmap"
+```bash
+# what is on this machine
+curl "http://localhost:3849/api/v1/local"
+
+# produce the keys of a named installation and save them, entirely offline
+curl "http://localhost:3849/api/v1/aes/local?dir=C:/Program Files/Epic Games/Fortnite&api=false&save=true"
+
+# check a key you already have against that build
+curl "http://localhost:3849/api/v1/aes/local?key=0x1234...&scan=false&api=false"
+
+# dump a .usmap from it
+curl -OJ -X POST "http://localhost:3849/api/v1/mappings/dump/local?compression=zstd"
+
+# free the mount when you are done (a few GB)
+curl -X DELETE "http://localhost:3849/api/v1/local/mount"
 ```
 
-> **Coverage**: cooked paks only carry Blueprint-side types (`BlueprintGeneratedClass`,
-> `UserDefinedStruct`, `UserDefinedEnum`, …). Native `/Script/...` types live in the executable, not in
-> the paks. So by default (`merge=true`) an existing mapping (`USMAP_PATH`, otherwise the newest file in
-> `mappings/`) is **merged underneath**, with the dumped types winning. `merge=false` writes only what
-> the paks yielded.
+> **What to pass as `dir`**: either the installation root (e.g. `C:\Program Files\Epic Games\Fortnite`) or the
+> folder holding the `.pak`/`.utoc` files. Given a root, the directories that actually hold containers are found
+> below it, plugin Paks folders included. Omitted, it falls back to `LOCAL_GAME_DIR`, then the Epic Games
+> Launcher's records, then the default install locations. The walk skips directories it may not read, so a
+> single inaccessible folder cannot fail the whole lookup.
+
+> **How a key is chosen**: candidates are tried in order — `key` (as `hex` or `guid:hex`), then the
+> installation's own binaries, then the live AES APIs — and only one that **actually decrypts a container of
+> that build** is reported. A GUID nothing opened is returned as `unresolved` rather than guessed (a dynamic
+> key is not compiled into the build, so it stays unresolved when the APIs have not published it either —
+> that is the expected outcome). Scanning stops as soon as a binary has produced the main key.
 >
-> **Something to merge is required**: with no base mapping to be found the request fails with `400`,
-> because a pak-only mapping has no native types and reads almost nothing. Dump one from UEFN first
-> (`POST /api/v1/mappings/dump/uefn`), point `USMAP_PATH` or `baseMapping` at an existing mapping, or
-> pass `merge=false` to accept a Blueprint-only mapping deliberately.
+> **Scan cost**: binaries are scanned UEFN Common DLL first, then the other shipping modules, up to
+> `binaries` (default 8). For reference, on this repository's development machine the Common DLL (379 MB)
+> alone settled the main key and the whole resolution took about 12 seconds. Narrow it with `binary=Common`,
+> or pass `deep=true` for the slower key-schedule scan when a build stores the key expanded (rarely needed).
 >
-> **Editor-only properties** are left out: cooked packages do not carry them, and counting one shifts
-> every property index in the struct and in everything derived from it. The UEFN dump and the
-> JSON generator apply the same rule.
+> **Mount cost**: reading assets needs the build mounted, which costs a few GB (for reference: 116 containers and
+> ~2.14M files came to ~1.2 GB in 24 seconds). `LOCAL_BUILDS_MAX` (default 1) caps how many stay mounted and
+> `LOCAL_BUILD_IDLE_MINUTES` (default 30) drops an idle one. Reading keys with `GET /api/v1/aes/local`
+> (`mount=false`, the default) never mounts anything and does not pay this.
 >
-> **Scan size**: bounded by `maxPackages` (default 5000) and `timeoutSeconds` (default 120). When either
-> is hit the dump still serializes what it collected and reports `limitReached` / `timedOut`. Narrow the
-> scan with `path` (e.g. `FortniteGame/Content/Athena`); `maxPackages=0` opens the whole build (~1.65M
-> files) and is very slow.
->
-> **Format**: `version=0` writes the exact version-0 layout UnrealMappingsDumper produces; the default
-> `version=4` (latest) adds 16-bit name lengths, enums with more than 255 members, and explicit enum
-> values. `compression` accepts `none` (default) and `zstd` — Oodle and Brotli compressors are not
-> available in this process. Every dump is parsed back before it is served, and the counts come back in
-> the `X-Usmap-*` headers (or the JSON body with `download=false`).
->
-> **UEFN dump requirements**: Windows only, with UEFN (`UnrealEditorFortnite-Win64-*.exe`) running and
-> fully loaded. Run the API as the same Windows user as UEFN (elevated if that is not enough). The DLL is
-> looked up through `USMAP_DUMPER_DLL`, then next to the executable, then `libs/` — the same order the
-> Oodle and RAD Audio libraries use. `compression=oodle` works here because the encoder lives inside the
-> game. Addresses: GObjects is found by walking memory for the object array, but `FNameToString` is a
-> function and only a signature scan can find it — which UE6 defeats. A candidate is accepted only if it
-> actually resolves object names, and candidates are taken from, in order: the `fnameToString` query, the
-> address recorded for this build in `mappings/dumper/offsets.json`, and `OFFSET_TOSTRING` from a Dumper-7
-> run under `DUMPER7_DIR` (default `C:\Dumper-7`). A working address is recorded, so it is found once.
->
-> The target process is picked automatically: `UnrealEditorFortnite-Win64-Shipping` is preferred, and when
-> several processes share that name the one with the largest working set wins — that is the loaded editor rather
-> than a helper. A candidate under 512MB is refused with `409` instead of dumping an incomplete mapping. Pass `pid`
-> only to override that. `GET /api/v1/mappings/uefn` reports the choice up front as `target`.
->
-> **How failures surface**: `424` when the DLL has not been built, `409` when no UEFN (or more than one)
-> is running, `501` off Windows, `504` on timeout, and `502` with the tail of the log when the DLL itself
-> failed. The DLL's log is kept next to the mapping as `{fileName}.usmap.log`.
->
-> **Path constraint**: the DLL opens files through the ANSI C runtime, so its working directory has to be
-> representable in ASCII. `mappings/dumper` is used when its path is ASCII, otherwise its 8.3 form,
-> otherwise the temp directory.
+> Mapping generation requires UEFN DLLs; a Fortnite game-only installation is insufficient.
 
 ### Auto-update — `/api/v1/update`
 

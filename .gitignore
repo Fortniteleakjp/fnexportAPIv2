@@ -48,3 +48,7 @@ RADADecoder/shim/*.exp
 build_history/
 
 .vscode
+/MappingsGenerator/build/
+
+!FortnitePorting/Services/Mappings/
+!FortnitePorting/Services/Mappings/**

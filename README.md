@@ -173,15 +173,25 @@ docker run -p 3849:3849 \
 | `BUILD_HISTORY_KEEP` | `2` | マニフェストを保管しておくビルド数。既定の `2` は「現在のビルド + 1つ前」で、これを超えた古いビルドのデータはアップデート時に自動削除されます（記録済みの変更リストは残ります）。 |
 | `HISTORICAL_BUILDS_MAX` | `1` | 旧ビルドを同時にマウントできる数。1ビルド分のマウントは数GBのメモリを使うため、超過分は最終利用が古いものから解放されます。 |
 | `HISTORICAL_BUILD_IDLE_MINUTES` | `30` | マウントした旧ビルドを未使用のまま保持する分数。経過後は自動で解放されます。`0` で自動解放を無効化。 |
+| `LOCAL_GAME_DIR` | – | このPCにインストール済みの Fortnite／UEFN のディレクトリ。`dir` を省略したときの既定になります（未指定でも Epic Games Launcher の記録と既定のインストール先から自動検出します）。 |
+| `LOCAL_BUILDS_MAX` | `1` | ローカルのビルドを同時にマウントできる数。1ビルド分で数GBのメモリを使うため、超過分は最終利用が古いものから解放されます。 |
+| `LOCAL_BUILD_IDLE_MINUTES` | `30` | マウントしたローカルビルドを未使用のまま保持する分数。経過後は自動で解放されます。`0` で自動解放を無効化。 |
 | `AUTO_UPDATE` | (未設定) | `true` = 確認せず常に更新／`false` = GitHub へ一切アクセスしない／**未設定 = 更新がある時だけ起動時に y/n を尋ねる**。 |
 | `UPDATE_CHECK_ONLY` | `false` | 新しいリリースを通知するだけで、適用しません。 |
 | `UPDATE_RESTART` | `true` | 差し替え後に自動で再起動。`false` の場合は差し替えのみで、起動は手動になります。 |
 | `UPDATE_REPO` | `Fortniteleakjp/fnexportAPIv2` | リリースを取得する `owner/name`（フォーク運用向け）。 |
+| `BUILD_API_URL` | `https://fljpapi.jp/api/v2/build/Windows` | 「今どのビルドが配信中か」を問い合わせる先。ミラーへ向けたいときに指定します。 |
 | `GITHUB_TOKEN` | – | 任意。GitHub API の匿名レート制限（60回/時）を緩和します。 |
 
 > **マッピング（.usmap）の挙動**: 既定では `.usmap` マッピングを読み込みます。`USMAP_PATH` 指定時かつファイルが存在すればそれを使用し、**それ以外（未指定／指定ファイルが無い）の場合は最新版を自動ダウンロード**します（取得失敗時は既存のローカルファイルにフォールバック）。どうしても入手できない場合のみ、起動を失敗させずにスキップします（マッピング無しでは一部アセットがデシリアライズできません）。`SKIP_MAPPING=true` で明示的に無効化できます。
 
 > **自動更新（再起動不要）**:<br>・**新しい復号鍵**: 約30秒ごとにローカルの `/api/v1/archives/keys` を取得し、**GUID 一致**で必要な鍵を投入 → 対応する pak を自動マウントします（pak名に依存しません）。このエンドポイントが現在のアーカイブと外部キー情報を集約します。<br>・**新しいビルド**: 約30秒ごとにビルド情報をポーリングし、ビルド／マニフェストの変化を検出するとマニフェストを再取得したうえで、**旧ビルドの VFS をすべて破棄し、新マニフェストから全 VFS（utoc/pak）を登録・マウントし直します**（再起動と同じ処理）。アップデートでは既存の `pakchunk*.utoc/.ucas` が同名のまま中身ごと差し替わるため、追加分だけをマウントすると旧ビルドの内容を配信し続けてしまいます。再構築中は他のエンドポイントが `503`（`Retry-After: 30`）を返し、完了後は旧ビルド由来のキャッシュ（レスポンス／検索／ローカライズ）も全消去されます。新規の暗号化 pak は鍵が届いた時点で上記のAES監視によりマウントされます。<br>・**マッピング(.usmap)**: 新ビルド検出時に**新ビルド用の最新 .usmap を自動再取得し、ホットスワップ**します（`USMAP_PATH` でファイルを固定している場合はそれを維持）。<br>これらはすべてプロセスの自動再起動なしで行われます（外部APIが新ビルドの鍵・マッピングを配信するまでの間は、その新規コンテンツのみ未対応となり、配信され次第自動で反映されます）。
+
+> **起動時にビルド情報が取れないとき**: ビルド API が一時的に落ちている（`503` など）場合は数秒おきに5回まで再試行します。
+> それでも取れない場合は**起動を諦めず、`build_history/` に残っている最新のビルドをマウントして起動します**
+> （マニフェストさえあれば pak は Epic の CDN から読めるため、内容の欠けた状態にはなりません）。
+> 以降のポーリングでビルド API が復旧しだい、**再起動なしでライブビルドへ切り替わります**。
+> アーカイブが1つも無い場合だけは起動できないため、その旨を1行で表示して終了します。
 
 ## API エンドポイント
 
@@ -205,6 +215,7 @@ docker run -p 3849:3849 \
 | 更新状況の確認・最新リリースへの更新 | [`/api/v1/update`](#自動アップデート--apiv1update) |
 | 旧ビルドの一覧・取り込み・読み込み・削除 | [`/api/v1/versions`](#ビルドアーカイブ--apiv1versions) |
 | ビルド間の正確な変更リスト（ファイルパスと変わった行） | [`/api/v1/changes`](#変更リスト--apiv1changes) |
+| ローカルのインストールを指定した AES 鍵・マッピングの生成 | [`/api/v1/local`](#ローカルのインストール--apiv1local) |
 
 > **CORS**: すべてのオリジンからの呼び出しを許可しています（任意のオリジン／メソッド／ヘッダ）。
 > 音声診断ヘッダ（`X-Audio-Format` / `X-Audio-Decoded` / `X-Rada-Native-Decoder`）と
@@ -451,6 +462,7 @@ http://localhost:3849/api/v1/search?q={CID,EID}_*&mode=glob&field=stem
 | `GET /aes?submit=false` | 鍵を返すだけで provider への投入・マウントは行いません（既定は `submit=true`）。 |
 | `GET /aes?noApi=true` | fortnite-api を参照せず、バイナリ内の**最高エントロピー候補**を採用（純粋にバイナリから抽出）。 |
 | `GET /aes?force=true` | キャッシュを無視して Common DLL を再ダウンロード。 |
+| `GET /api/v1/aes/local?dir={path}` | **このPCにインストール済みのビルドから鍵を作ります。** ダウンロードもライブビルドも不要で、GUID ごとに1本ずつ返します。詳細は[ローカルのインストール](#ローカルのインストール--apiv1local)。 |
 
 > MainAES 鍵は Common DLL 内に `mov [rbp+d], imm32` 命令の即値（AESDumpster パターン）として**平文**で格納されています（連続した32バイトでもスケジュールでもないため、単純なバイト検索やスケジュール走査では見つかりません）。本エンドポイントは外部 AesFinder ツール（`AESFINDER_PATH` で指定）でこれを抽出します。Common DLL は初回のみダウンロードし、以降はキャッシュを再利用、**新ビルド検出時は自動で新しい DLL を取得**します。
 >
@@ -619,88 +631,97 @@ curl -OJ http://localhost:3849/api/v1/backup/fbkp
 
 ### マッピング — `/api/v1/mappings`
 
-[`UnrealMappingsDumper`](https://github.com/TheNaeem/UnrealMappingsDumper) を使って `.usmap` を作成し、配信します。
-ダンプ経路は 2 つあり、目的に応じて使い分けます。
+`MappingsGenerator/` のC++ツールを別プロセスで実行し、インストール済みUEFNのEngine・Common DLLから `.usmap` を生成します。
+UEFNを起動する必要はありません。既存マッピングのマージやJSON変換、プロセスへのDLL注入は行いません。
+Windows x64とUEFNのDLL一式が必要です。UHTのレイアウトはUE 6.0に対応しています。
 
-| 経路 | エンドポイント | ゲーム起動 | 収録範囲 |
-|---|---|---|---|
-| **pak ダンプ** | `POST /api/v1/mappings/dump` | 不要 | pak 内の Blueprint 由来の型。ネイティブ `/Script` 型は既存 `.usmap` からマージ |
-| **UEFN ダンプ** | `POST /api/v1/mappings/dump/uefn` | 必要（Windows のみ） | エンジンのリフレクション情報そのもの。ネイティブ型込みで完結 |
+実DLLを使う統合テストは `dotnet run --project tests/MappingsGenerator.Tests -c Release` で実行できます。
+`build.bat` は生成ツールもビルドします。単独でビルドする場合は `MappingsGenerator\build.bat libs` を実行してください。
+生成ツールはAPIの実行ファイルの隣、`libs/`、`MappingsGenerator/build/` の順に探索します。
+`USMAP_GENERATOR_PATH` を指定すると、その実行ファイルを使用します。
 
-pak ダンプは、本家がゲームに DLL を注入して `GObjects` を走査するのに対し、この API にゲームプロセスが無いため、
-**同じ型情報を CUE4Parse 経由でマウント中の pak から読み取り**、本家と同じシリアライズ
-（名前テーブル → enum → struct、プロパティ型の再帰記述、`0x30C4` ヘッダ）で書き出します。
+| メソッド・パス | 説明 |
+| --- | --- |
+| `POST /api/v1/mappings/generate` | DLLから生成し、CUE4Parseで検証後に `mappings/` へ保存。既定では `.usmap` を返します。 |
+| `GET /api/v1/mappings/uefn?dir={path}` | 生成ツール、必要なDLL、UEFNのビルド情報、実行可否を確認。 |
+| `GET /api/v1/mappings` | 保存済みファイルを新しい順に一覧。 |
+| `GET /api/v1/mappings/{fileName}` | 保存済みファイルを取得。 |
+| `POST /api/v1/mappings/import?path={path}&fileName={name}&load={bool}&download={bool}` | 既存 `.usmap` を検証して取り込み。 |
 
-UEFN ダンプは本家の DLL そのものを使います。ベンダリングされた [`UnrealMappingsDumper/`](UnrealMappingsDumper/VENDORED.md) を
-`UnrealMappingsDumperuild.bat`（`build.bat` からも自動で呼ばれます）でビルドすると `libs/UnrealMappingsDumper.dll` ができ、
-API がそれを起動中の UEFN へ注入します。DLL の隣に置いた `.cfg` で出力先・圧縮・コンソールを指示し、
-DLL 側はログ末尾の `HOST_RESULT` 行で結果を返します。
+生成時のクエリは `dir`、`compression`（既定 `zstd`、`brotli` / `oodle` / `none`）、`level`、`oodle`（DLLのパス）、
+`fileName`、`timeoutSeconds`（既定120、1–3600秒）、`load`（既定false）、`download`（既定true）です。
+`dir` はインストール先または `Binaries/Win64` を受け付けます。省略時は `UEFN_BINARIES_DIR`、未設定なら標準のインストール先を使います。
+出力名は `.version` のBranchNameとChangelistから決まり、圧縮方式に応じて `_zs` / `_br` / `_oo` が付きます。
+`load=true` は、マウント中のビルドとUEFNのビルド・CLが一致する場合に使用できます。
+
+`POST /dump`、`POST /dump/uefn`、`POST /dump/local` は、同じ生成処理への別名として残しています。
+従来のJSON入力、pak走査、マージ、プロセスID、オフセットのパラメーターは廃止しました。
+
+```bash
+curl "http://localhost:3849/api/v1/mappings/uefn"
+curl -OJ -X POST "http://localhost:3849/api/v1/mappings/generate"
+curl -X POST "http://localhost:3849/api/v1/mappings/generate?compression=brotli&download=false"
+```
+
+生成中の重複リクエストは `409`、ツールやDLLの不足は `424`、Windows x64以外は `501`、
+タイムアウトは `504`、生成・検証失敗は `502` を返します。タイムアウトやキャンセル時は生成プロセスを停止します。
+保存前に検証し、一時ファイルから置き換えるため、生成失敗で既存ファイルを上書きしません。
+
+### ローカルのインストール — `/api/v1/local`
+
+このPCにインストール済みのFortnite／UEFNからAES鍵を取得し、アセットを読むためにマウントします。
+Epic のマニフェストから配信中のビルドを読む通常の経路と違い、対象が**ライブビルドである必要がありません**。
+
+鍵はそのインストール自身が答えます。インストール先のバイナリには鍵が即値として埋め込まれており、
+正否はそのビルドの PAK/UTOC が判定できる（`TestAesKey` はコンテナ自身のマウントポイント検証バイトを復号するため、
+正しい鍵でしか成功しません）ため、**外部の AES キー API がまだ配信していない新しいビルドでも、
+もう配信されていない古いインストールでも鍵が取れます**。`api=false` を付ければ通信は一切発生しません。
 
 | メソッド & パス | 説明 |
 |---|---|
-| `POST /api/v1/mappings/dump?path={frag}&maxPackages={n}&timeoutSeconds={n}&merge={bool}&baseMapping={file}&version={0..4}&compression={none/zstd}&fileName={name}&load={bool}&download={bool}` | マウント中のビルドから `.usmap` をダンプして返します。既定はバイナリ返却で、同時に `mappings/{build}_dumped.usmap` へ保存します。`load=true` でそのままプロバイダーへホットロード、`download=false` で統計 JSON を返します。 |
-| `GET /api/v1/mappings` | 保存済みの `.usmap`（ダンプ／生成／ダウンロード）を新しい順に一覧します。 |
-| `GET /api/v1/mappings/{fileName}` | 保存済みの `.usmap` を配信します。 |
-| `GET /api/v1/mappings/uefn` | UEFN ダンプが今すぐ実行できるかを返します（DLL の有無・パス、注入可能な UEFN プロセス一覧、`ready`、次にやるべきこと）。 |
-| `POST /api/v1/mappings/dump/uefn?pid={n}&compression={none/oodle}&fileName={name}&console={bool}&timeoutSeconds={n}&load={bool}&download={bool}` | 起動中の UEFN に DLL を注入して `.usmap` をダンプして返します。既定はバイナリ返却で、同時に `mappings/{build}_uefn.usmap` へ保存します。対象プロセスは自動で特定されるため `pid` は通常不要です。 |
-| `POST /api/v1/mappings/generate?url={url}&path={path}&fileName={name}&load={bool}&verify={bool}&download={bool}` | StormForge 形式のマッピング JSON を `.usmap` に変換します（従来からのエンドポイント）。 |
+| `GET /api/v1/local` | このPCにあるインストール先（`LOCAL_GAME_DIR`／Epic Games Launcher の記録／既定のインストール場所）と、現在マウント中のものを一覧します。何も開かず鍵も読みません。 |
+| `GET /api/v1/aes/local?dir={path}&key={hex}&scan={bool}&deep={bool}&binary={name}&binaries={n}&api={bool}&mount={bool}&submit={bool}&save={bool}` | 指定したインストールの AES 鍵を、コンテナが要求する GUID ごとに1本ずつ返します。`save=true` で `aes.local.json` に書き出し、`submit=true` でこの API 自身の provider にも投入、`mount=true` でそのままマウントしたまま残します。 |
+| `POST /api/v1/local/mount?dir={path}&key={hex}&scan={bool}&deep={bool}&api={bool}` | アセットを読み取れる状態までマウントし、保持します。鍵の決め方は `GET /api/v1/aes/local` と同じです。 |
+| `DELETE /api/v1/local/mount?dir={path}` | マウントを解放します。`dir` 省略で全解放。読み取り中のものは、その読み取りが終わってから解放されます。 |
+| `POST /api/v1/mappings/dump/local?dir={path}&...` | 指定したUEFNのDLLから生成します。生成パラメーターは `/api/v1/mappings/generate` と共通で、pakのマウントは不要です。 |
 
+```bash
+# 何が見つかるか
+curl "http://localhost:3849/api/v1/local"
+
+# インストール先を指定して鍵を作り、aes.local.json に保存（完全にオフライン）
+curl "http://localhost:3849/api/v1/aes/local?dir=C:/Program Files/Epic Games/Fortnite&api=false&save=true"
+
+# 手持ちの鍵が正しいかをそのビルドで検証する
+curl "http://localhost:3849/api/v1/aes/local?key=0x1234...&scan=false&api=false"
+
+# そのインストールから .usmap をダンプ
+curl -OJ -X POST "http://localhost:3849/api/v1/mappings/dump/local?compression=zstd"
+
+# 使い終わったら解放（数GB戻ります）
+curl -X DELETE "http://localhost:3849/api/v1/local/mount"
 ```
-curl -OJ -X POST "http://localhost:3849/api/v1/mappings/dump?path=FortniteGame/Content/Athena&maxPackages=2000"
-curl "http://localhost:3849/api/v1/mappings/uefn"
-curl -OJ -X POST "http://localhost:3849/api/v1/mappings/dump/uefn"
-curl "http://localhost:3849/api/v1/mappings"
-curl -OJ "http://localhost:3849/api/v1/mappings/FortniteGame_42_00_dumped.usmap"
-```
 
-> **収録範囲**: cooked pak に入っているのは Blueprint 由来の型（`BlueprintGeneratedClass`／`UserDefinedStruct`／`UserDefinedEnum` など）だけで、
-> ネイティブの `/Script/...` 型は実行ファイル側にあるため pak には存在しません。
-> そのため既定（`merge=true`）では**既存の `.usmap`（`USMAP_PATH`、無ければ `mappings/` の最新）を土台にマージ**し、
-> pak からダンプした型を優先して上書きします。`merge=false` では pak から採れた型だけの `.usmap` になります。
->
-> **土台が必要です**: マージするものが1つも見つからない場合は `400` で止まります。pak だけで作った
-> マッピングはネイティブ型を持たず、たいていのアセットが読めないためです。先に UEFN からダンプするか
-> （`POST /api/v1/mappings/dump/uefn`）、`USMAP_PATH` か `baseMapping` で既存のものを指定してください。
-> Blueprint 型だけで良い場合は `merge=false` を明示します。
->
-> **エディタ専用プロパティ**: cooked パッケージには含まれないため除外します。数に入れると struct 内と
-> 派生先すべてのプロパティ番号がずれます。UEFN ダンプと JSON からの生成も同じ判定です。
->
-> **走査量**: `maxPackages`（既定 5000）と `timeoutSeconds`（既定 120）で打ち切ります。打ち切った場合もそこまでの収集結果を書き出し、
-> `limitReached`／`timedOut` で通知します。`path` に `FortniteGame/Content/Athena` のようなパス断片を渡すと対象を絞れます。
-> `maxPackages=0` はビルド全体（約165万ファイル）を開くため非常に低速です。
->
-> **フォーマット**: `version=0` は UnrealMappingsDumper と同じバージョン 0 の形式、既定の `version=4`（最新）は
-> 16bit 名前長・255個超の enum・明示的な enum 値に対応した形式です。`compression` は `none`（既定）と `zstd`。
-> Oodle／Brotli の圧縮器はこのプロセスに無いため指定できません。
-> 生成後は必ず読み戻して検証し、件数を `X-Usmap-*` ヘッダ（`download=false` なら JSON）で返します。
+> **`dir` に何を渡すか**: インストールのルート（例 `C:\Program Files\Epic Games\Fortnite`）でも、`.pak`／`.utoc` が直接置かれた
+> フォルダでもかまいません。ルートを渡した場合はその配下からコンテナのあるフォルダを探し、プラグイン側の Paks も一緒に登録します。
+> 省略時は `LOCAL_GAME_DIR` → Epic Games Launcher の記録 → 既定のインストール場所の順に探します。
+> 走査は読めないディレクトリを飛ばして進むため、権限のないフォルダが1つあるだけで失敗することはありません。
 
-> **UEFN ダンプの前提**: Windows 専用で、UEFN（`UnrealEditorFortnite-Win64-*.exe`）が起動しきっている必要があります。
-> API は UEFN と同じ Windows ユーザー（権限が足りなければ管理者）で動かしてください。
-> DLL の探索順は `USMAP_DUMPER_DLL` → 実行ファイルの隣 → `libs/` で、Oodle／RAD Audio と同じです。
-> `compression=oodle` はゲーム内の Oodle エンコーダを使うため、pak ダンプと違い指定できます。
-> 対象プロセスは自動で特定します。`UnrealEditorFortnite-Win64-Shipping` を優先し、同名のプロセスが複数ある場合は
-> 常駐メモリが最大のもの（＝実際に読み込みを終えたエディター本体）を選びます。まだ読み込み途中で 512MB に満たない場合は
-> 不完全なマッピングを吐かないよう `409` で止めます。明示したいときだけ `pid` を渡してください。
-> 実行できるかどうかと自動で選ばれる対象は `GET /api/v1/mappings/uefn` の `target` で事前に確認できます。
+> **鍵の決め方**: `key`（`hex` または `guid:hex`）→ インストール先のバイナリ走査 → 外部 AES API、の順に候補を試し、
+> **そのビルドのコンテナが実際に復号できたものだけ**を採用します。どれも通らなかった GUID は推測で埋めず `unresolved` として返します
+> （ダイナミック鍵は実行ファイルに入っていないため、外部 API も未配信なら解決できません。これは期待どおりの結果です）。
+> メイン鍵が見つかった時点で残りのバイナリ走査は打ち切ります。
 >
-> **アドレスの解決**: `GObjects` は構造探索で自動的に見つかりますが、`FNameToString` は関数なので
-> 署名走査に頼るしかなく、UE6 では当たりません（誤った候補は「名前を解決できるか」で検証して弾きます）。
-> そのため次の順で候補を探します。
+> **走査コスト**: 走査対象は UEFN の Common DLL → その他の Shipping バイナリの順で、`binaries`（既定 8）本まで。
+> 参考値として、このリポジトリの開発機では Common DLL（379MB）1本でメイン鍵が確定し、鍵の決定まで約12秒でした。
+> 対象を絞りたいときは `binary=Common` のようにファイル名で指定できます。鍵が展開済みで埋め込まれたビルド向けに `deep=true`
+> （低速な鍵スケジュール走査）もありますが、通常は不要です。
 >
-> 1. クエリの `fnameToString`
-> 2. `mappings/dumper/offsets.json` に記録された、そのビルドで実際に通ったアドレス
-> 3. Dumper-7 の出力（`DUMPER7_DIR`、既定 `C:\Dumper-7`）の `Dumpspace/OffsetsInfo.json` の `OFFSET_TOSTRING`
+> **マウントのコスト**: アセットを読むためのマウントは、これは数GBのメモリを使います（参考値: 116 コンテナ・約214万ファイルで約1.2GB、24秒）。
+> 同時にマウントできる数は `LOCAL_BUILDS_MAX`（既定 1）で、`LOCAL_BUILD_IDLE_MINUTES`（既定 30分）放置されたものは自動で解放されます。
+> 鍵を見るだけの `GET /api/v1/aes/local`（`mount=false`、既定）はマウントしないため、この費用はかかりません。
 >
-> どれもダンパー側で検証されるため、古い値や誤った値が使われることはありません。一度成功すると
-> そのアドレスが記録され、同じビルドでは以降指定不要になります。
->
-> **失敗の見え方**: DLL 未ビルドは `424`、UEFN 未起動や複数起動は `409`、Windows 以外は `501`、
-> 時間切れは `504`、DLL 側が失敗した場合は `502` とログ末尾を返します。
-> DLL のログは `.usmap` の隣に `{fileName}.usmap.log` として残ります。
->
-> **パスの制約**: DLL は ANSI の C ランタイム経由でファイルを開くため、作業ディレクトリは ASCII で表せる必要があります。
-> `mappings/dumper` が非 ASCII の場合は 8.3 形式、それも無理なら一時ディレクトリへフォールバックします。
+> マッピング生成はUEFNのDLLを使用します。Fortnite本体だけのインストールからは生成できません。
 
 ### 自動アップデート — `/api/v1/update`
 

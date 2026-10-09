@@ -11,12 +11,7 @@
     <Version Condition="'$(Version)' == ''">0.0.0-dev</Version>
   </PropertyGroup>
 
-  <!--
-    Single-file, self-contained .exe publish.
-    Bundles the runtime, every managed dependency, and native libraries into ONE executable.
-    Applies only when publishing for win-x64, so `dotnet run` and the Docker (linux-x64) build are unaffected.
-    Build it with:  dotnet publish -c Release -r win-x64
-  -->
+  <!-- Windows publishes bundle the API; the mapping generator is a separate executable. -->
   <PropertyGroup Condition="'$(RuntimeIdentifier)' == 'win-x64'">
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
@@ -51,5 +46,10 @@
     </ItemGroup>
     <Copy SourceFiles="@(OodleFile)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
   </Target>
+
+  <ItemGroup Condition="Exists('..\libs\UEFNStaticMappingsGenerator.exe') and ('$(RuntimeIdentifier)' == '' or '$(RuntimeIdentifier)' == 'win-x64')">
+    <Content Include="..\libs\UEFNStaticMappingsGenerator.exe" Link="UEFNStaticMappingsGenerator.exe"
+             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+  </ItemGroup>
 
 </Project>

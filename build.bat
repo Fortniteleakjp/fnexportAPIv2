@@ -1,7 +1,6 @@
 @echo off
 setlocal EnableExtensions
 
-rem ============================================================================
 rem FortnitePorting normal Windows build script
 rem
 rem Usage:
@@ -11,12 +10,11 @@ rem   build.bat Release
 rem
 rem Output:
 rem   FortnitePorting\bin\<Configuration>\net10.0\
-rem ============================================================================
 
 set "ROOT=%~dp0"
 set "PROJECT=%ROOT%FortnitePorting\FortnitePorting.csproj"
 set "NATIVE_BUILD=%ROOT%RADADecoder\shim\build.bat"
-set "DUMPER_BUILD=%ROOT%UnrealMappingsDumper\build.bat"
+set "DUMPER_BUILD=%ROOT%MappingsGenerator\build.bat"
 set "LIBS=%ROOT%libs"
 set "CONFIG=%~1"
 set "FRAMEWORK=net10.0"
@@ -84,17 +82,9 @@ if not exist "%LIBS%\rada_decode.dll" (
 )
 
 echo.
-echo [2/5] Building UnrealMappingsDumper.dll...
-rem Only the UEFN mapping dump needs this DLL, and it needs MSBuild with the C++ workload, so a
-rem failure here is reported and the build continues instead of stopping.
-if exist "%DUMPER_BUILD%" (
-    call "%DUMPER_BUILD%" "%LIBS%" "%CONFIG%"
-    if errorlevel 1 (
-        echo WARNING: UnrealMappingsDumper.dll was not built. POST /api/v1/mappings/dump/uefn stays unavailable.
-    )
-) else (
-    echo   skipped ^(UnrealMappingsDumper\build.bat not found^)
-)
+echo [2/5] Building UEFNStaticMappingsGenerator.exe...
+call "%DUMPER_BUILD%" "%LIBS%"
+if errorlevel 1 exit /b 1
 
 echo.
 echo [3/5] Building FortnitePorting...
@@ -142,15 +132,15 @@ if exist "%LIBS%\zlib-ng2.dll" (
     echo   skipped zlib-ng2.dll
 )
 
-if exist "%LIBS%\UnrealMappingsDumper.dll" (
-    copy /y "%LIBS%\UnrealMappingsDumper.dll" "%OUTDIR%\" >nul
+if exist "%LIBS%\UEFNStaticMappingsGenerator.exe" (
+    copy /y "%LIBS%\UEFNStaticMappingsGenerator.exe" "%OUTDIR%\" >nul
     if errorlevel 1 (
-        echo ERROR: Failed to copy UnrealMappingsDumper.dll.
+        echo ERROR: Failed to copy UEFNStaticMappingsGenerator.exe.
         exit /b 1
     )
-    echo   copied UnrealMappingsDumper.dll
+    echo   copied UEFNStaticMappingsGenerator.exe
 ) else (
-    echo   skipped UnrealMappingsDumper.dll
+    echo   skipped UEFNStaticMappingsGenerator.exe
 )
 
 echo.

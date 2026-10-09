@@ -9,6 +9,7 @@ using CUE4Parse.UE4.Readers;
 using CUE4Parse.Compression;
 using CUE4Parse.FileProvider;
 using CUE4Parse.FileProvider.Vfs;
+using CUE4Parse.MappingsProvider.Usmap;
 using ZlibngDotNet;
 using FortnitePorting.Models;
 using FortnitePorting.Services;
@@ -17,7 +18,16 @@ namespace FortnitePorting
 {
     public partial class ManifestService
     {
-        private const string BuildApiUrl = "https://fljpapi.jp/api/v2/build/Windows";
+        private const string DefaultBuildApiUrl = "https://fljpapi.jp/api/v2/build/Windows";
+
+        /// <summary>
+        /// Where "which build is live?" is asked. Overridable with <c>BUILD_API_URL</c> so an instance
+        /// can be pointed at a mirror while the default source is down, rather than having to wait it out.
+        /// </summary>
+        private static readonly string BuildApiUrl =
+            Environment.GetEnvironmentVariable("BUILD_API_URL") is { Length: > 0 } configured
+                ? configured
+                : DefaultBuildApiUrl;
 
         /// <summary>Epic CDN root the manifests address their chunks against.</summary>
         public const string ChunkBaseUrl = "http://download.epicgames.com/Builds/Fortnite/CloudDir/";
@@ -71,9 +81,86 @@ namespace FortnitePorting
         public async Task InitializeAsync()
         {
             Console.WriteLine("Initializing ManifestService...");
-            await DownloadAndLoadManifestAsync();
+
+            try
+            {
+                await DownloadAndLoadManifestAsync();
+            }
+            catch (Exception ex)
+            {
+                // The build API being down must not stop this one from starting. Every build this
+                // instance has served is archived as a manifest, and a manifest is all it takes to mount
+                // that build again - so the previous build is served until a poll finds the live one.
+                Console.WriteLine($"✗ Could not load the live build: {ex.Message}");
+
+                if (!TryLoadArchivedManifest())
+                {
+                    throw new Exception(
+                        "Could not load a build: the build API is unavailable and this instance has no " +
+                        "archived manifest to fall back on. Retry once it answers again, or put a manifest " +
+                        "file in build_history/manifests/ (POST /api/v1/versions/import writes one).", ex);
+                }
+            }
+
             // Polling is started later via StartPolling() once the provider is fully initialized
             // (see FileProviderFactory) so a poll can't race the remaining startup steps.
+        }
+
+        /// <summary>
+        /// Mounts the newest build whose manifest is still archived, for the case where the build API
+        /// cannot be reached at startup. A build served this way is a real, complete build - the
+        /// manifest addresses the same chunks on the Epic CDN - it is just not necessarily the newest
+        /// one. The next successful poll switches to the live build without a restart.
+        /// </summary>
+        private bool TryLoadArchivedManifest()
+        {
+            // The newest build, not the most recently archived one: importing an old build's manifest
+            // puts it at the top of the index by archive time, and falling back to it would quietly
+            // serve outdated content. The changelist is what actually orders Fortnite builds.
+            var archived = _history.GetBuilds()
+                .Where(b => b.HasManifest)
+                .OrderByDescending(b => long.TryParse(b.Changelist, out var cl) ? cl : 0L)
+                .ThenByDescending(b => b.ArchivedUtc)
+                .FirstOrDefault();
+
+            var manifestPath = archived == null ? null : _history.GetManifestPath(archived.BuildVersion);
+
+            if (archived == null || manifestPath == null)
+            {
+                Console.WriteLine("  No archived build is available to fall back on.");
+                return false;
+            }
+
+            try
+            {
+                Console.WriteLine($"  Falling back to the archived build {archived.BuildVersion}...");
+
+                ManifestBytes = File.ReadAllBytes(manifestPath);
+                Manifest = DeserializeManifest(ManifestBytes);
+
+                GameBuild = Manifest.Meta.BuildVersion;
+                var parts = GameBuild.Split('-');
+                if (parts.Length > 2)
+                {
+                    GameVersion = parts[1];
+                }
+
+                // The manifest id comes from the build info, which is exactly what is unavailable here,
+                // so the one recorded when this build was archived stands in. It is the same value, and
+                // it keeps the first successful poll from treating the live build as a change when it
+                // is the build already mounted.
+                ManifestId = archived.ManifestId ?? string.Empty;
+                _currentBuildVersion = GameBuild;
+
+                IsReady = true;
+                Console.WriteLine($"✓ Serving the archived build {GameBuild} until the build API answers again.");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"  The archived manifest could not be loaded either: {ex.Message}");
+                return false;
+            }
         }
 
         /// <summary>
@@ -269,7 +356,7 @@ namespace FortnitePorting
             _mappingAttempts++;
             try
             {
-                var usmapPath = FileProviderFactory.ReloadMappings(_cue4ParseProvider, _rootDir);
+                var usmapPath = FileProviderFactory.ReloadMappings(_cue4ParseProvider, _rootDir, GameBuild);
                 if (usmapPath == null)
                 {
                     Console.WriteLine($"No .usmap available yet for {GameBuild}; will retry ({_mappingAttempts}/{MaxMappingAttemptsPerBuild}).");
@@ -279,10 +366,9 @@ namespace FortnitePorting
                 var envUsmap = Environment.GetEnvironmentVariable("USMAP_PATH");
                 var pinned = !string.IsNullOrWhiteSpace(envUsmap) && File.Exists(envUsmap);
                 var skipped = string.Equals(usmapPath, FileProviderFactory.MappingSkipSentinel, StringComparison.Ordinal);
-                // The fortniteapi/uedb mapping file name starts with the build version, so this tells us
-                // whether the file we loaded actually belongs to the current build.
-                var matchesBuild = !string.IsNullOrEmpty(GameBuild)
-                                   && Path.GetFileName(usmapPath).StartsWith(GameBuild, StringComparison.OrdinalIgnoreCase);
+                // Both the API's file names and this API's own dumps are named after the build, so this
+                // tells us whether the file we loaded actually belongs to the current build.
+                var matchesBuild = MappingService.BelongsToBuild(Path.GetFileName(usmapPath), GameBuild);
 
                 if (skipped || pinned || matchesBuild)
                 {
@@ -300,26 +386,87 @@ namespace FortnitePorting
             }
         }
 
+        /// <summary>
+        /// Loads a mapping that was asked for explicitly (dumped, generated or imported with load=true)
+        /// and counts it as the current build's, so the retry loop in <see cref="RefreshMappingsIfNeeded"/>
+        /// does not swap the API's older mapping back in on the next poll. A new build resets this.
+        /// </summary>
+        public void ApplyMapping(string usmapPath)
+        {
+            _cue4ParseProvider.MappingsContainer = new FileUsmapTypeMappingsProvider(usmapPath);
+            _mappedBuildVersion = _currentBuildVersion;
+            _mappingAttempts = 0;
+            Console.WriteLine($"✓ Applied the mapping {Path.GetFileName(usmapPath)} for {GameBuild}");
+        }
+
+        /// <summary>
+        /// Reads which build is live. Transient failures are retried: the build API answering 503 for a
+        /// few seconds is ordinary, and without a retry it used to take the whole startup down with it.
+        /// A failure that will not fix itself (a 404, an unparseable body) is reported immediately.
+        /// </summary>
         private async Task<BuildInfo?> FetchBuildInfoAsync()
         {
-            try
+            Exception? lastException = null;
+
+            for (var attempt = 1; attempt <= MaxRetryAttempts; attempt++)
             {
-                var response = await _httpClient.GetStringAsync(BuildApiUrl);
-                var apiResponse = JsonConvert.DeserializeObject<BuildApiResponse>(response);
-                
-                if (apiResponse?.Elements != null && apiResponse.Elements.Count > 0)
+                try
                 {
-                    return apiResponse.Elements[0];
+                    if (attempt > 1)
+                    {
+                        Console.WriteLine($"Retrying the build information... (attempt: {attempt}/{MaxRetryAttempts})");
+                    }
+
+                    var response = await _httpClient.GetStringAsync(BuildApiUrl);
+                    var apiResponse = JsonConvert.DeserializeObject<BuildApiResponse>(response);
+
+                    if (apiResponse?.Elements != null && apiResponse.Elements.Count > 0)
+                    {
+                        return apiResponse.Elements[0];
+                    }
+
+                    Console.WriteLine("The API response does not contain any build information");
+                    return null;
                 }
-                
-                Console.WriteLine("The API response does not contain any build information");
-                return null;
+                catch (Exception ex) when (IsTransient(ex) && attempt < MaxRetryAttempts)
+                {
+                    lastException = ex;
+                    Console.WriteLine($"✗ Build information unavailable (attempt {attempt}/{MaxRetryAttempts}): {ex.Message}");
+                    await Task.Delay(TimeSpan.FromSeconds(RetryDelaySeconds));
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Failed to retrieve build information: {ex.Message}");
+                    throw;
+                }
             }
-            catch (Exception ex)
+
+            throw new Exception($"Could not retrieve build information after {MaxRetryAttempts} attempts", lastException);
+        }
+
+        /// <summary>
+        /// True for a failure that is worth trying again: the server is overloaded or restarting (5xx),
+        /// it is rate-limiting us, or the request never got an answer at all.
+        /// </summary>
+        private static bool IsTransient(Exception exception)
+        {
+            if (exception is OperationCanceledException)
             {
-                Console.WriteLine($"Failed to retrieve build information: {ex.Message}");
-                throw;
+                return true; // the HttpClient timeout surfaces as TaskCanceledException
             }
+
+            if (exception is not HttpRequestException request)
+            {
+                return false;
+            }
+
+            if (request.StatusCode is not { } status)
+            {
+                return true; // DNS/connection level: no response was received
+            }
+
+            return status is HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests
+                   || (int) status >= 500;
         }
 
         private async Task DownloadAndLoadManifestAsync()
@@ -357,14 +504,7 @@ namespace FortnitePorting
             GC.WaitForPendingFinalizers();
 
             // Parse the manifest
-            Manifest = FBuildPatchAppManifest.Deserialize(ManifestBytes, options =>
-            {
-                options.ChunkBaseUrl = ChunkBaseUrl;
-                options.Decompressor = ManifestZlibngDotNetDecompressor.Decompress;
-                options.DecompressorState = _zlibng;
-                options.ChunkCacheDirectory = _cacheDirectory;
-                options.CacheChunksAsIs = false;
-            });
+            Manifest = DeserializeManifest(ManifestBytes);
 
             // Initialize the information. The build served before this manifest replaced it is
             // remembered so the update flow can diff the two and then drop the older one.
@@ -470,6 +610,17 @@ namespace FortnitePorting
 
             throw new Exception($"Manifest download failed {MaxRetryAttempts} times", lastException);
         }
+
+        /// <summary>Parses manifest bytes against this instance's chunk cache and decompressor.</summary>
+        private FBuildPatchAppManifest DeserializeManifest(byte[] manifestBytes)
+            => FBuildPatchAppManifest.Deserialize(manifestBytes, options =>
+            {
+                options.ChunkBaseUrl = ChunkBaseUrl;
+                options.Decompressor = ManifestZlibngDotNetDecompressor.Decompress;
+                options.DecompressorState = _zlibng;
+                options.ChunkCacheDirectory = _cacheDirectory;
+                options.CacheChunksAsIs = false;
+            });
 
         private void InitInformations(BuildInfo buildInfo)
         {
