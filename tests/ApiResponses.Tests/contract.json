@@ -1,0 +1,436 @@
+{
+  "endpoints": [
+    {
+      "route": "api/v1/aes",
+      "controller": "Aes",
+      "action": "Aes",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "route": "api/v1/aes/binaries",
+      "controller": "Aes",
+      "action": "Binaries",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "route": "api/v1/aes/extract",
+      "controller": "Aes",
+      "action": "Extract",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "route": "api/v1/aes/finder/selftest",
+      "controller": "Aes",
+      "action": "SelfTest",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "route": "api/v1/aes/keys",
+      "controller": "Aes",
+      "action": "GetPakKeys",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "route": "api/v1/aes/local",
+      "controller": "Aes",
+      "action": "Local",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "route": "api/v1/aes/scan/local",
+      "controller": "Aes",
+      "action": "ScanLocal",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "route": "api/v1/assets/dependencies",
+      "controller": "Assets",
+      "action": "GetDependencies",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "route": "api/v1/backup",
+      "controller": "Backup",
+      "action": "Get",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "route": "api/v1/build",
+      "controller": "Build",
+      "action": "GetBuild",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "route": "api/v1/build/reload",
+      "controller": "Build",
+      "action": "Reload",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "route": "api/v1/changes",
+      "controller": "Changes",
+      "action": "GetRecorded",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "route": "api/v1/changes",
+      "controller": "Changes",
+      "action": "DeleteChangelist",
+      "methods": [
+        "DELETE"
+      ]
+    },
+    {
+      "route": "api/v1/changes/compute",
+      "controller": "Changes",
+      "action": "Compute",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "route": "api/v1/changes/file",
+      "controller": "Changes",
+      "action": "GetFileChanges",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "route": "api/v1/changes/jobs",
+      "controller": "Changes",
+      "action": "GetJobs",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "route": "api/v1/changes/jobs/{id}",
+      "controller": "Changes",
+      "action": "GetJob",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "route": "api/v1/changes/jobs/{id}",
+      "controller": "Changes",
+      "action": "CancelJob",
+      "methods": [
+        "DELETE"
+      ]
+    },
+    {
+      "route": "api/v1/changes/list",
+      "controller": "Changes",
+      "action": "GetChangelist",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "route": "api/v1/changes/modified",
+      "controller": "Changes",
+      "action": "GetModifiedPaths",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "route": "api/v1/config/files",
+      "controller": "Config",
+      "action": "GetFiles",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "route": "api/v1/config/query",
+      "controller": "Config",
+      "action": "Query",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "route": "api/v1/cosmetics",
+      "controller": "Cosmetics",
+      "action": "SearchCosmetics",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "route": "api/v1/cosmetics/{id}",
+      "controller": "Cosmetics",
+      "action": "GetCosmeticById",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "route": "api/v1/cosmetics/{id}/icon",
+      "controller": "Cosmetics",
+      "action": "GetCosmeticIcon",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "route": "api/v1/export",
+      "controller": "Export",
+      "action": "Get",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "route": "api/v1/export/audioinfo",
+      "controller": "Export",
+      "action": "GetAudioInfo",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "route": "api/v1/export/batch",
+      "controller": "Export",
+      "action": "Batch",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "route": "api/v1/export/datatable",
+      "controller": "Export",
+      "action": "GetDataTable",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "route": "api/v1/files",
+      "controller": "Files",
+      "action": "GetFiles",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "route": "api/v1/items/properties",
+      "controller": "Items",
+      "action": "GetProperties",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "route": "api/v1/local",
+      "controller": "Local",
+      "action": "Status",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "route": "api/v1/local/mount",
+      "controller": "Local",
+      "action": "Mount",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "route": "api/v1/local/mount",
+      "controller": "Local",
+      "action": "Unmount",
+      "methods": [
+        "DELETE"
+      ]
+    },
+    {
+      "route": "api/v1/localization",
+      "controller": "Localization",
+      "action": "Lookup",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "route": "api/v1/localization/languages",
+      "controller": "Localization",
+      "action": "GetLanguages",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "route": "api/v1/mappings",
+      "controller": "Mappings",
+      "action": "ListMappings",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "route": "api/v1/mappings/generate",
+      "controller": "Mappings",
+      "action": "Generate",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "route": "api/v1/mappings/import",
+      "controller": "Mappings",
+      "action": "Import",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "route": "api/v1/mappings/uefn",
+      "controller": "Mappings",
+      "action": "GetUefnStatus",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "route": "api/v1/mappings/{fileName}",
+      "controller": "Mappings",
+      "action": "DownloadMapping",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "route": "api/v1/paks",
+      "controller": "Pak",
+      "action": "GetPaks",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "route": "api/v1/paks/{pakName}/files",
+      "controller": "Pak",
+      "action": "GetFilesInPak",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "route": "api/v1/search",
+      "controller": "Search",
+      "action": "Search",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "route": "api/v1/update",
+      "controller": "Update",
+      "action": "GetStatus",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "route": "api/v1/update",
+      "controller": "Update",
+      "action": "Apply",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "route": "api/v1/versions",
+      "controller": "Versions",
+      "action": "GetVersions",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "route": "api/v1/versions/data",
+      "controller": "Versions",
+      "action": "DeleteData",
+      "methods": [
+        "DELETE"
+      ]
+    },
+    {
+      "route": "api/v1/versions/import",
+      "controller": "Versions",
+      "action": "Import",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "route": "api/v1/versions/keys",
+      "controller": "Versions",
+      "action": "GetKeys",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "route": "api/v1/versions/keys",
+      "controller": "Versions",
+      "action": "SetKeys",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "route": "api/v1/versions/load",
+      "controller": "Versions",
+      "action": "Load",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "route": "api/v1/versions/unload",
+      "controller": "Versions",
+      "action": "Unload",
+      "methods": [
+        "DELETE"
+      ]
+    }
+  ],
+  "responses": {
+    "/api/v1/files?prefixes=WID_&ext=.uasset&page=2&pageSize=100": "8C25B5C6F17B1FFB902EF8BFEA12D892E196303347FB85482241F5F0F0C90BAF",
+    "/api/v1/files?prefixes=WID_,AGID_,Athena_,Figment_Athena_&ext=.uasset&excludePrefixes=WID_&pageSize=20": "AE0DAF9797802127AE113656EBB0A120754E7B75ADAE24B9F96DB82C3423F6B5",
+    "/api/v1/files?prefixes=WID_,AGID_,Athena_,Figment_Athena_&ext=.uasset&excludePaths=Group000&pageSize=20": "26DE1A94895F512738DD47FA23FCA34AD968C3E38BC9DF3EC88D8F524CBB77E0",
+    "/api/v1/search?q=Item&field=name&ext=uasset&pageSize=5000": "F1BD0D6671A88E8119A83A8662E562D58FFF43FD6B115B578ADC55FEC13A1372",
+    "/api/v1/search?q=FortniteGame/Content/Group050/&mode=prefix&field=path&ext=uasset": "2DB24F55BE925A50735D4DD4AD6DB696BDAE513D420564DB83B3C410501AA783",
+    "/api/v1/config/query?file=Game.ini&section=Section&key=Value": "F7D03358278DAE40DFE9478195FCFB176B0A94C09741A6016A833AE1C7747738"
+  }
+}

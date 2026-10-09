@@ -9,19 +9,20 @@ public sealed class LocalizedDocumentFilter : IDocumentFilter
 {
     private static readonly Dictionary<string, (string Ja, string En)> Tags = new()
     {
-        ["Export"] = ("アセットのJSON・画像・音声エクスポート、ローカライズ、PAK内ファイル一覧。", "Asset JSON/image/audio export, localization, and PAK file listing."),
+        ["Files"] = ("仮想ファイルの一覧と絞り込み。", "Virtual file listing and filters."),
+        ["Export"] = ("アセットのJSON・画像・音声エクスポートと表形式の出力。", "Asset JSON/image/audio export and table output."),
         ["Items"] = ("アイテム接頭辞によるアセット一覧とプロパティ抽出。", "Item asset listing and property extraction by name prefix."),
-        ["Debug"] = ("ローカルVFSの診断用ファイル・PAK確認。", "Diagnostics for the local virtual file system and mounted archives."),
         ["Cosmetics"] = ("PAK単位および全マウントPAK横断のコスメ抽出。", "Cosmetic extraction scoped to one PAK or across all mounted PAKs."),
         ["Search"] = ("ファイルパスとアセット・設定内容の検索。", "Search across file paths and asset/config contents."),
-        ["Mappings"] = ("マウント中のビルド、または起動中のUEFNから.usmapをダンプ・生成し、保存済みマッピングを配信。", "Dump or generate .usmap mappings from the mounted build or a running UEFN, and serve the stored files."),
+        ["Mappings"] = ("UEFNのDLLから.usmapを生成し、保存済みマッピングを配信。", "Generate .usmap mappings from installed UEFN DLLs and serve stored mappings."),
         ["Aes"] = ("ローカル実行環境でのAESキー抽出・適用。", "AES key extraction and application in the local process."),
-        ["Pak"] = ("現在マウントされているPAK/UTOCの一覧と内容。", "Mounted PAK/UTOC inventory and contents."),
+        ["Local"] = ("このPCにインストール済みのFortniteの検出・マウント・解放。", "Detecting, mounting and freeing Fortnite installations already on this machine."),
+        ["Pak"] = ("登録済みPAK/UTOCのメタデータと、マウント済みアーカイブの内容。", "Registered PAK/UTOC metadata and mounted archive contents."),
         ["Config"] = ("読み込み済みINIファイルの一覧と設定値検索。", "Loaded INI file listing and configuration lookup."),
         ["Build"] = ("配信中のFortniteビルドの確認と最新ビルドへの再読み込み。", "Current Fortnite build status and reload onto the newest build."),
         ["Assets"] = ("アセット間のハード参照・ソフト参照の解析。", "Hard and soft reference inspection between assets."),
         ["Backup"] = ("現在のビルドのファイル一覧をFModelの.fbkp形式で配信。", "Serves the mounted build's file list as an FModel .fbkp backup."),
-        ["Localization"] = ("locresのKey解決と表示文字列からの逆引き。", "Key resolution and reverse lookup over the .locres tables."),
+        ["Localization"] = ("locresの統合テーブル、Key解決、表示文字列からの逆引き。", "Merged .locres tables, key resolution and reverse lookup."),
         ["Update"] = ("GitHubリリースとの比較と、最新版への自動更新。", "Comparison against GitHub releases and self-update to the newest one."),
         ["Versions"] = ("過去のビルドのアーカイブと、ビルドを指定したファイル読み取り。", "The archive of previously served builds, and reading files from a build you name."),
         ["Changes"] = ("ビルド間の正確な変更リスト（ファイルパスと変わった行）。", "The exact changelist between two builds: file paths and changed lines.")
