@@ -1,9 +1,12 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Numerics;
 using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
 namespace AesFinder
@@ -22,52 +25,102 @@ namespace AesFinder
             new[]{ 3, 10, 21, 28, 35, 42, 49, 56 },
             new[]{ 51, 45, 38, 31, 24, 17, 10, 3 }};
 
-        static void Main(string[] args)
+        static int Main(string[] args)
         {
-            string Path = "";
-#if DEBUG
-            Path = "C:\\Cpp\\AesFinder\\UnrealEditorFortnite-Win64-Shipping.exe";
-#endif
-
-            if (args.Length != 0)
+            bool json = args.Any(a => a.Equals("--json", StringComparison.OrdinalIgnoreCase));
+            string? path = null;
+            foreach (var arg in args)
             {
-                Path = args[0];
+                if (arg.Equals("--json", StringComparison.OrdinalIgnoreCase)
+                    || arg.Equals("--file", StringComparison.OrdinalIgnoreCase)
+                    || arg.Equals("--no-api", StringComparison.OrdinalIgnoreCase)) continue;
+                if (arg.StartsWith("--") || path != null)
+                    return Fail(json, path, $"Unexpected argument: {arg}");
+                path = arg;
             }
 
-            if(Path == "")
+            if (string.IsNullOrWhiteSpace(path))
+                return Fail(json, path, "No file has been provided.");
+            if (!File.Exists(path))
+                return Fail(json, path, "File does not exist.");
+
+            try
             {
-                Console.WriteLine("Error: No File Has Been Provided!");
-                return;
-            }
+                byte[] buffer = File.ReadAllBytes(path);
+                string[] keys = FindMainAESKey(ref buffer);
+                if (keys.Length == 0)
+                    return Fail(json, path, "No AES key candidates found in the file.", 2);
 
-            if (!File.Exists(Path))
+                if (json) WriteJson(path, keys.Distinct().ToArray());
+                else foreach (var key in keys) Console.WriteLine(key);
+                return 0;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                Console.WriteLine("Error: File Doesn't Exists!");
-                return;
+                return Fail(json, path, ex.Message);
             }
+        }
 
-            FileStream file = File.Open(Path, FileMode.Open);
+        static int Fail(bool json, string? path, string error, int exitCode = 1)
+        {
+            if (json) WriteJson(path, Array.Empty<string>(), error);
+            else Console.Error.WriteLine($"Error: {error}");
+            return exitCode;
+        }
 
-            //getting the file size
-            file.Seek(0, SeekOrigin.End);
-            int fileSize = (int)file.Position;
-            file.Seek(0, SeekOrigin.Begin);
-
-            byte[] buffer = new byte[fileSize];
-            file.Read(buffer, 0, fileSize);
-            file.Close();
-
-            string[] Keys = FindMainAESKey(ref buffer);
-
-            for(int i=0;i< Keys.Length; i++)
+        // The first key is an entropy-ranked candidate. The API must verify it against an archive.
+        // Utf8JsonWriter avoids reflection-based serialization so the published NativeAOT tool works too.
+        static void WriteJson(string? path, string[] keys, string? error = null)
+        {
+            string fullVersion = ReadVersion(path);
+            var match = Regex.Match(fullVersion, @"Release-([0-9.]+)-CL-([0-9]+)");
+            using var output = new MemoryStream();
+            using (var writer = new Utf8JsonWriter(output, new JsonWriterOptions { Indented = true }))
             {
-                Console.WriteLine(Keys[i]);
+                writer.WriteStartObject();
+                writer.WriteString("version", match.Success ? match.Groups[1].Value : "");
+                writer.WriteString("build", match.Success ? match.Groups[2].Value : "");
+                writer.WriteString("fullVersion", fullVersion);
+                writer.WriteString("mainKey", keys.FirstOrDefault());
+                writer.WriteStartArray("candidates");
+                foreach (var key in keys) writer.WriteStringValue(key);
+                writer.WriteEndArray();
+                if (error != null) writer.WriteString("error", error);
+                writer.WriteEndObject();
             }
+            Console.WriteLine(Encoding.UTF8.GetString(output.ToArray()));
+        }
 
-            if(Keys.Length == 0)
+        static string ReadVersion(string? path)
+        {
+            if (path == null || !File.Exists(path)) return "";
+            try
             {
-                Console.WriteLine("No AES Keys Have Been Found!");
+                string full = FileVersionInfo.GetVersionInfo(path).ProductVersion ?? "";
+                if (full != "") return full.Trim();
+
+                // Common DLLs can lack version resources. Use only matching siblings, so cached
+                // binaries belonging to another build never supply the version by accident.
+                string absolute = System.IO.Path.GetFullPath(path);
+                string name = System.IO.Path.GetFileNameWithoutExtension(absolute);
+                if (!name.Contains("-Common-", StringComparison.OrdinalIgnoreCase)) return "";
+                foreach (var sibling in new[]
+                {
+                    name.Replace("-Common-", "-", StringComparison.OrdinalIgnoreCase) + ".exe",
+                    name.Replace("-Common-", "-Engine-", StringComparison.OrdinalIgnoreCase) + ".dll"
+                })
+                {
+                    string candidate = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(absolute)!, sibling);
+                    if (!File.Exists(candidate)) continue;
+                    full = FileVersionInfo.GetVersionInfo(candidate).ProductVersion ?? "";
+                    if (full != "") return full.Trim();
+                }
             }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+            {
+                // Version metadata is optional; the extracted candidates are still usable.
+            }
+            return "";
         }
 
         static string[] FindMainAESKey(ref byte[] buffer)

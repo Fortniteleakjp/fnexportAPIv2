@@ -134,7 +134,7 @@ docker run -p 3849:3849 \
 | `HOTFIX_CACHE_MINUTES` | `10` | Minutes before the hotfix listing is checked again. |
 | `HOTFIX_CACHE_DIR` | `<PROJECT_ROOT>/hotfix_cache` | Where downloaded hotfix config files are stored; reused across restarts. |
 | `HOTFIX_DISK_CACHE` | `true` | Set to `false` to disable the disk cache and download every time. |
-| `AESFINDER_PATH` | `D:\AesFinder-main\...\AesFinder.exe` | Path to the external AesFinder tool used by `/api/v1/aes` (a `.exe`, a `.dll`, or a directory containing it). |
+| `AESFINDER_PATH` | (unset) | Path to the external AesFinder tool used by `/api/v1/aes` (a `.exe`, a `.dll`, or a directory containing it). When unset, `AesFinder.exe` next to the executable (the copy auto-update replaces) is used, falling back to `D:\AesFinder-main\...\AesFinder.exe`. |
 | `AESFINDER_AUTO` | `true` | Background auto-extraction/submission of the MainAES key via AesFinder (**only acts while the main key is missing**; set `false` to disable). |
 | `BUILD_HISTORY_KEEP` | `2` | How many builds keep their manifest archived. The default `2` is "the current build plus the previous one"; anything older has its data deleted automatically on the next update (recorded changelists are kept). |
 | `HISTORICAL_BUILDS_MAX` | `1` | How many archived builds may be mounted at once. A mounted build costs a few GB, so the least recently used one is dropped when this is exceeded. |
@@ -408,9 +408,8 @@ Example response (`/api/v1/search`):
 
 | Method & path | Description |
 |---|---|
-| `GET /api/v1/aes` | Downloads `UnrealEditorFortnite-Common-Win64-Shipping.dll` from the live **Fortnite_Studio (UEFN)** manifest and runs the external **AesFinder** tool on it to **extract the MainAES key** (no game launch, no injection), then **submits the key to the provider and mounts** matching paks. Returns `{ mainKey, version, build, fullVersion, submitted, mountedNewFiles, totalFiles, ... }`. |
+| `GET /api/v1/aes` | Downloads `UnrealEditorFortnite-Common-Win64-Shipping.dll` from the live **Fortnite_Studio (UEFN)** manifest and runs the external **AesFinder** tool and the built-in scanner on it to **extract the MainAES key** (no game launch, no injection; no external AES API is consulted — the candidate that actually decrypts an encrypted archive is chosen), then **submits the key to the provider and mounts** matching paks. Returns `{ mainKey, version, build, fullVersion, submitted, mountedNewFiles, totalFiles, ... }`. |
 | `GET /api/v1/aes?submit=false` | Return the key only; do not submit/mount (default is `submit=true`). |
-| `GET /api/v1/aes?noApi=true` | Don't consult fortnite-api; take the **highest-entropy candidate** straight from the binary. |
 | `GET /api/v1/aes?force=true` | Ignore the cache and re-download the Common DLL. |
 | `GET /api/v1/aes/local?dir={path}` | **Produce the keys of an installation already on this machine**, one per encryption GUID, with no download and no dependency on the live build. See [Local installations](#local-installations--apiv1local). |
 
@@ -735,6 +734,9 @@ curl http://localhost:3849/api/v1/update
 > `.update/staging`, and a script (`apply.cmd` / `apply.sh`) that waits for this process to exit is
 > started before shutdown. The swap **copies** rather than mirrors: the Oodle and zlib-ng natives,
 > `libs/`, `mappings/`, `chunk_cache/`, and local configuration are not in the archive and survive.
+> The release's `AesFinder.exe` (`AesFinder-linux-x64.tar.gz` on Linux) is fetched too, and **the installed AesFinder is
+> deleted and reinstalled** so an old build that does not understand `--json` cannot linger. If that download fails, the
+> installed AesFinder is kept and the update still goes ahead.
 >
 > **When it does not update** (the reason is reported by `GET /api/v1/update`):
 > <br>- **Local builds**: a build the release workflow did not stamp (`0.0.0-dev`) has no version to

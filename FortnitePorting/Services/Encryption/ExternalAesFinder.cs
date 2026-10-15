@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json.Linq;
@@ -19,6 +21,9 @@ public static class ExternalAesFinder
     // Default to the location the user provided; override with AESFINDER_PATH (a file or a directory).
     private const string DefaultToolPath = @"D:\AesFinder-main\AesFinder-main\bin\Release\net8.0\AesFinder.exe";
 
+    // A 256-bit key as the tool prints it in plain-text mode (0x + 64 hex digits).
+    private static readonly Regex KeyPattern = new(@"\b0x[0-9A-Fa-f]{64}\b", RegexOptions.Compiled);
+
     public sealed class Result
     {
         public string? MainKey { get; set; }
@@ -27,15 +32,26 @@ public static class ExternalAesFinder
         public string? FullVersion { get; set; }
         public string? ToolPath { get; set; }
         public string RawOutput { get; set; } = "";
+
+        /// <summary>Every key the tool reported, main key first. Only filled from plain-text output.</summary>
+        public List<string> Candidates { get; set; } = new();
     }
 
     /// <summary>
     /// Resolves the AesFinder executable. Accepts AESFINDER_PATH pointing at the .exe, the .dll, or a
-    /// directory containing the built tool. Returns null if nothing usable is found.
+    /// directory containing the built tool. Without it, the copy next to the application (the one the
+    /// self-updater replaces on every update) wins over the development default. Returns null if
+    /// nothing usable is found.
     /// </summary>
     public static string? ResolveToolPath()
     {
         var configured = Environment.GetEnvironmentVariable("AESFINDER_PATH");
+        if (string.IsNullOrWhiteSpace(configured))
+        {
+            var bundled = Path.Combine(SelfUpdateService.ApplicationDirectory, SelfUpdateService.AesFinderExecutableName());
+            if (File.Exists(bundled)) return bundled;
+        }
+
         var candidate = string.IsNullOrWhiteSpace(configured) ? DefaultToolPath : configured.Trim();
 
         if (Directory.Exists(candidate))
@@ -51,8 +67,12 @@ public static class ExternalAesFinder
         return File.Exists(candidate) ? candidate : null;
     }
 
-    public static async Task<Result> RunAsync(string toolPath, string targetFile, bool noApi = false,
-        CancellationToken ct = default)
+    /// <summary>
+    /// Runs the tool on <paramref name="targetFile"/>. <c>--no-api</c> is always passed: some builds of the
+    /// tool otherwise ask fortnite-api.com which candidate is the main key, and the key must come from the
+    /// binary alone. Picking the right candidate is <see cref="AesKeyPicker"/>'s job.
+    /// </summary>
+    public static async Task<Result> RunAsync(string toolPath, string targetFile, CancellationToken ct = default)
     {
         if (!File.Exists(targetFile))
             throw new FileNotFoundException("Target binary not found.", targetFile);
@@ -70,7 +90,7 @@ public static class ExternalAesFinder
         if (isDll) psi.ArgumentList.Add(toolPath);
         psi.ArgumentList.Add(targetFile);
         psi.ArgumentList.Add("--json");
-        if (noApi) psi.ArgumentList.Add("--no-api");
+        psi.ArgumentList.Add("--no-api");
 
         using var process = new Process { StartInfo = psi };
         if (!process.Start())
@@ -99,18 +119,39 @@ public static class ExternalAesFinder
         }
 
         var braceIndex = stdout.IndexOf('{');
-        if (braceIndex < 0)
-            throw new InvalidOperationException($"AesFinder produced no JSON. Output: {stdout.Trim()} {stderr.Trim()}".Trim());
+        if (braceIndex >= 0)
+        {
+            JObject? obj = null;
+            try { obj = JObject.Parse(stdout[braceIndex..]); }
+            catch (Newtonsoft.Json.JsonException) { /* not JSON after all; try the plain-text form below */ }
 
-        var json = stdout[braceIndex..];
-        var obj = JObject.Parse(json);
+            if (obj != null)
+            {
+                return new Result
+                {
+                    MainKey = (string?)obj["mainKey"],
+                    Version = (string?)obj["version"],
+                    Build = (string?)obj["build"],
+                    FullVersion = (string?)obj["fullVersion"],
+                    ToolPath = toolPath,
+                    RawOutput = stdout.Trim()
+                };
+            }
+        }
+
+        // Older builds of the tool don't know --json and just print the candidate keys one per line
+        // (main key first). Take those as candidates; AesKeyPicker decides which one is real.
+        var keys = KeyPattern.Matches(stdout)
+            .Select(m => m.Value.ToUpperInvariant().Replace("0X", "0x"))
+            .Distinct()
+            .ToList();
+        if (keys.Count == 0)
+            throw new InvalidOperationException($"AesFinder produced no JSON or keys. Output: {stdout.Trim()} {stderr.Trim()}".Trim());
 
         return new Result
         {
-            MainKey = (string?)obj["mainKey"],
-            Version = (string?)obj["version"],
-            Build = (string?)obj["build"],
-            FullVersion = (string?)obj["fullVersion"],
+            MainKey = keys[0],
+            Candidates = keys,
             ToolPath = toolPath,
             RawOutput = stdout.Trim()
         };
