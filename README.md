@@ -170,7 +170,7 @@ docker run -p 3849:3849 \
 | `HOTFIX_CACHE_MINUTES` | `10` | ホットフィックスの一覧を確認し直すまでの分数。 |
 | `HOTFIX_CACHE_DIR` | `<PROJECT_ROOT>/hotfix_cache` | ダウンロードしたホットフィックス設定ファイルの保存先。再起動後も再利用します。 |
 | `HOTFIX_DISK_CACHE` | `true` | `false` でディスクキャッシュを無効化（毎回ダウンロード）。 |
-| `AESFINDER_PATH` | `D:\AesFinder-main\...\AesFinder.exe` | `/api/v1/aes` で使う外部 AesFinder ツールのパス（`.exe`／`.dll`／それを含むディレクトリ可）。 |
+| `AESFINDER_PATH` | (未設定) | `/api/v1/aes` で使う外部 AesFinder ツールのパス（`.exe`／`.dll`／それを含むディレクトリ可）。未設定時は実行ファイルと同じフォルダの `AesFinder.exe`（自動アップデートで差し替えられるもの）、無ければ `D:\AesFinder-main\...\AesFinder.exe` を使います。 |
 | `AESFINDER_AUTO` | `true` | バックグラウンドで AesFinder により MainAES を自動抽出・投入（**main 鍵が未適用の時のみ**動作。`false` で無効）。 |
 | `BUILD_HISTORY_KEEP` | `2` | マニフェストを保管しておくビルド数。既定の `2` は「現在のビルド + 1つ前」で、これを超えた古いビルドのデータはアップデート時に自動削除されます（記録済みの変更リストは残ります）。 |
 | `HISTORICAL_BUILDS_MAX` | `1` | 旧ビルドを同時にマウントできる数。1ビルド分のマウントは数GBのメモリを使うため、超過分は最終利用が古いものから解放されます。 |
@@ -459,9 +459,8 @@ http://localhost:3849/api/v1/search?q={CID,EID}_*&mode=glob&field=stem
 
 | メソッド & パス | 説明 |
 |---|---|
-| `GET /api/v1/aes` | ライブの **Fortnite_Studio（UEFN）** マニフェストから `UnrealEditorFortnite-Common-Win64-Shipping.dll` を**ダウンロード**し、外部 **AesFinder** ツールで **MainAES 鍵を抽出**して返します（**ゲーム起動・注入なし**）。抽出鍵は**そのまま provider に投入してマウント**します。`{ mainKey, version, build, fullVersion, submitted, mountedNewFiles, totalFiles, ... }` を返却。 |
+| `GET /api/v1/aes` | ライブの **Fortnite_Studio（UEFN）** マニフェストから `UnrealEditorFortnite-Common-Win64-Shipping.dll` を**ダウンロード**し、外部 **AesFinder** ツールと内蔵スキャナで **MainAES 鍵を抽出**して返します（**ゲーム起動・注入なし**）。鍵は外部 AES API に問い合わせず、バイナリから得た候補を暗号化アーカイブで実際に復号して決定します。抽出鍵は**そのまま provider に投入してマウント**します。`{ mainKey, version, build, fullVersion, submitted, mountedNewFiles, totalFiles, ... }` を返却。 |
 | `GET /api/v1/aes?submit=false` | 鍵を返すだけで provider への投入・マウントは行いません（既定は `submit=true`）。 |
-| `GET /api/v1/aes?noApi=true` | fortnite-api を参照せず、バイナリ内の**最高エントロピー候補**を採用（純粋にバイナリから抽出）。 |
 | `GET /api/v1/aes?force=true` | キャッシュを無視して Common DLL を再ダウンロード。 |
 | `GET /api/v1/aes/local?dir={path}` | **このPCにインストール済みのビルドから鍵を作ります。** ダウンロードもライブビルドも不要で、GUID ごとに1本ずつ返します。詳細は[ローカルのインストール](#ローカルのインストール--apiv1local)。 |
 
@@ -757,6 +756,8 @@ curl http://localhost:3849/api/v1/update
 > 本プロセスの終了を待って差し替えるスクリプト（`apply.cmd` / `apply.sh`）を起動してから終了します。
 > 差し替えは**コピー**であり、ミラーではありません。アーカイブに含まれない Oodle／zlib-ng などの
 > ネイティブライブラリ、`libs/`、`mappings/`、`chunk_cache/`、ローカル設定はそのまま残ります。
+> 同じリリースの `AesFinder.exe`（Linux は `AesFinder-linux-x64.tar.gz`）も取得し、**既存の AesFinder を削除してから入れ直します**
+> （`--json` 非対応の古い AesFinder が残るのを防ぐため）。AesFinder の取得に失敗した場合は既存のものを残し、更新自体は続行します。
 >
 > **自動更新されない場合**（`GET /api/v1/update` の `reason` に表示されます）:
 > <br>・**ローカルビルド**: リリースワークフローがバージョンを刻んでいないビルド（`0.0.0-dev`）は、

@@ -25,7 +25,8 @@ public sealed record UpdateCheckResult(
     string? Tag,
     UpdateAssetInfo? Asset,
     string? ReleaseUrl,
-    string Reason);
+    string Reason,
+    UpdateAssetInfo? AesFinderAsset = null);
 
 /// <summary>
 /// Checks the GitHub releases API at startup and, when a newer build exists, downloads it, stages it
@@ -37,6 +38,13 @@ public static class SelfUpdateService
     /// <summary>Assets are named after the runtime identifier they were published for.</summary>
     private const string WindowsAsset = "FortnitePorting-win-x64.zip";
     private const string LinuxAsset = "FortnitePorting-linux-x64.tar.gz";
+
+    /// <summary>
+    /// The AesFinder tool ships as its own release assets. It is replaced on every update so an old
+    /// build (one that does not understand <c>--json</c>, say) never outlives the API that drives it.
+    /// </summary>
+    private const string WindowsAesFinderAsset = "AesFinder.exe";
+    private const string LinuxAesFinderAsset = "AesFinder-linux-x64.tar.gz";
 
     /// <summary>Staging lives inside the application directory so the swap is a same-volume move.</summary>
     private const string UpdateDirectoryName = ".update";
@@ -324,7 +332,7 @@ public static class SelfUpdateService
         }
 
         return new UpdateCheckResult(true, currentText, latest.ToString(), tag, asset, release.HtmlUrl,
-            $"v{latest} is available");
+            $"v{latest} is available", SelectAesFinderAsset(release.Assets));
     }
 
     /// <summary>
@@ -359,6 +367,8 @@ public static class SelfUpdateService
             return false;
         }
 
+        await StageAesFinderAsync(check.AesFinderAsset, updateRoot, staging, cancellationToken);
+
         RecordAttempt(check.LatestVersion);
 
         var script = WriteApplyScript(updateRoot, staging, executableName);
@@ -388,6 +398,58 @@ public static class SelfUpdateService
             }
         }
         return null;
+    }
+
+    /// <summary>Picks the AesFinder asset published for the current platform, if the release has one.</summary>
+    private static UpdateAssetInfo? SelectAesFinderAsset(List<GitHubAsset>? assets)
+    {
+        var wanted = OperatingSystem.IsWindows() ? WindowsAesFinderAsset
+            : OperatingSystem.IsLinux() ? LinuxAesFinderAsset
+            : null;
+        if (wanted == null || assets == null) return null;
+
+        var asset = assets.FirstOrDefault(a =>
+            string.Equals(a.Name, wanted, StringComparison.OrdinalIgnoreCase) && a.BrowserDownloadUrl is { Length: > 0 });
+        return asset == null ? null : new UpdateAssetInfo(asset.Name!, asset.BrowserDownloadUrl!, asset.Size);
+    }
+
+    /// <summary>
+    /// Puts the release's AesFinder into the staging directory, where the apply script finds it and
+    /// replaces the installed copy. Not fatal: the API has a built-in scanner that covers the same
+    /// patterns, so a missing or failed AesFinder download must not block the update itself. In that
+    /// case nothing is staged and the installed AesFinder is left alone.
+    /// </summary>
+    private static async Task StageAesFinderAsync(UpdateAssetInfo? asset, string updateRoot, string staging,
+        CancellationToken cancellationToken)
+    {
+        if (asset == null)
+        {
+            Console.WriteLine("Auto-update: this release has no AesFinder asset; keeping the installed one");
+            return;
+        }
+
+        var downloadPath = Path.Combine(updateRoot, asset.Name);
+        try
+        {
+            Console.WriteLine($"Auto-update: downloading {asset.Name} ({asset.Size / 1024 / 1024} MB)");
+            await DownloadAsync(asset.DownloadUrl, downloadPath, cancellationToken);
+
+            if (asset.Name.EndsWith(".tar.gz", StringComparison.OrdinalIgnoreCase))
+            {
+                ExtractArchive(downloadPath, staging);
+                File.Delete(downloadPath);
+            }
+            else
+            {
+                File.Move(downloadPath, Path.Combine(staging, asset.Name), overwrite: true);
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Console.WriteLine($"Auto-update: AesFinder could not be downloaded ({ex.Message}); keeping the installed one");
+            try { File.Delete(downloadPath); } catch { /* ignore */ }
+            try { File.Delete(Path.Combine(staging, AesFinderExecutableName())); } catch { /* ignore */ }
+        }
     }
 
     private static async Task DownloadAsync(string url, string destination, CancellationToken cancellationToken)
@@ -428,6 +490,7 @@ public static class SelfUpdateService
     private static string WriteApplyScript(string updateRoot, string staging, string executableName)
     {
         var appDir = ApplicationDirectory.TrimEnd(Path.DirectorySeparatorChar);
+        var aesFinder = AesFinderExecutableName();
         var arguments = Environment.GetCommandLineArgs().Skip(1).ToArray();
 
         if (OperatingSystem.IsWindows())
@@ -449,6 +512,7 @@ public static class SelfUpdateService
                     goto waitloop
                 )
 
+                if exist "{Path.Combine(staging, aesFinder)}" del /f /q "{Path.Combine(appDir, aesFinder)}" 2>nul
                 robocopy "{staging}" "{appDir}" /E /R:3 /W:2 /NFL /NDL /NJH /NJS /NP >nul
                 rd /s /q "{staging}" 2>nul
                 {relaunch}
@@ -476,8 +540,12 @@ public static class SelfUpdateService
                 sleep 1
             done
 
+            if [ -f "{staging}/{aesFinder}" ]; then
+                rm -f "{appDir}/{aesFinder}"
+            fi
             cp -a "{staging}/." "{appDir}/"
             chmod +x "{target}" 2>/dev/null
+            chmod +x "{appDir}/{aesFinder}" 2>/dev/null
             rm -rf "{staging}"
             {relaunchSh}
             """;
@@ -521,6 +589,9 @@ public static class SelfUpdateService
 
     /// <summary>The file name the published archive uses for the application executable.</summary>
     private static string ExecutableName() => OperatingSystem.IsWindows() ? "FortnitePorting.exe" : "FortnitePorting";
+
+    /// <summary>The file name of the AesFinder executable inside its release asset.</summary>
+    public static string AesFinderExecutableName() => OperatingSystem.IsWindows() ? "AesFinder.exe" : "AesFinder";
 
     private static HttpClient CreateClient(TimeSpan timeout)
     {

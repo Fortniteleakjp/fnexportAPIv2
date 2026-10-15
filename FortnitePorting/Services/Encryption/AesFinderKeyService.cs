@@ -108,7 +108,7 @@ public class AesFinderKeyService : BackgroundService
         }
 
         // The external tool is optional — the built-in scanner covers the same instruction patterns — but when
-        // it is present its answer is worth trying first, because it may have cross-checked the live AES API.
+        // it is present its answer is simply tried first. It never consults an external AES API.
         var toolPath = ExternalAesFinder.ResolveToolPath();
         if (toolPath == null && !_warnedNoTool)
         {
@@ -126,7 +126,7 @@ public class AesFinderKeyService : BackgroundService
         {
             try
             {
-                result = await ExternalAesFinder.RunAsync(toolPath, dl.LocalPath, noApi: false, ct);
+                result = await ExternalAesFinder.RunAsync(toolPath, dl.LocalPath, ct);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -139,6 +139,7 @@ public class AesFinderKeyService : BackgroundService
         // key — so its answer is only the first thing we try, not the answer.
         var candidates = new List<string>();
         if (!string.IsNullOrWhiteSpace(result?.MainKey)) candidates.Add(result!.MainKey!);
+        if (result != null) candidates.AddRange(result.Candidates.Skip(1));
         candidates.AddRange(AesImmediateScanner.FindInFile(dl.LocalPath).Select(c => c.Key));
 
         if (candidates.Count == 0)

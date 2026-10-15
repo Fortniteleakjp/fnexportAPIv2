@@ -57,12 +57,10 @@ namespace FortnitePorting.Controllers
         /// present its answer is simply tried first.
         /// </summary>
         /// <param name="force">Re-download the Common DLL even if a cached copy exists (default false).</param>
-        /// <param name="noApi">Pass --no-api to the external AesFinder tool (skip its fortnite-api lookup).</param>
         /// <param name="submit">Submit the verified key to the provider (zero GUID) and mount matching paks (default true).</param>
         [HttpGet]
         public async Task<IActionResult> Aes(
             [FromQuery] bool force = false,
-            [FromQuery] bool noApi = false,
             [FromQuery] bool submit = true,
             CancellationToken ct = default)
         {
@@ -95,7 +93,7 @@ namespace FortnitePorting.Controllers
             {
                 try
                 {
-                    r = await ExternalAesFinder.RunAsync(toolPath, dl.LocalPath, noApi, ct);
+                    r = await ExternalAesFinder.RunAsync(toolPath, dl.LocalPath, ct);
                 }
                 catch (OperationCanceledException)
                 {
@@ -113,9 +111,9 @@ namespace FortnitePorting.Controllers
                 toolError = "AesFinder tool not found (set AESFINDER_PATH); used the built-in scanner.";
             }
 
-            // Collect every key-shaped block in the DLL, not just the one the tool ranks first. The tool
-            // falls back to the highest-entropy candidate whenever fortnite-api has not published the key
-            // for a brand-new build yet, and that candidate is regularly not the pak key.
+            // Collect every key-shaped block in the DLL, not just the one the tool ranks first. Without an
+            // external API to label it, the tool returns the highest-entropy candidate, and that candidate
+            // is regularly not the pak key.
             List<AesImmediateScanner.Candidate> scanned;
             try
             {
@@ -127,9 +125,10 @@ namespace FortnitePorting.Controllers
                 scanned = new List<AesImmediateScanner.Candidate>();
             }
 
-            // Try the tool's answer first (it may have cross-checked against the live API), then the rest.
+            // Try the tool's answer first, then the rest.
             var candidates = new List<string>();
             if (!string.IsNullOrWhiteSpace(r?.MainKey)) candidates.Add(r!.MainKey!);
+            if (r != null) candidates.AddRange(r.Candidates.Skip(1));
             candidates.AddRange(scanned.Select(c => c.Key));
 
             if (candidates.Count == 0)

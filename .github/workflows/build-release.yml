@@ -72,6 +72,12 @@ jobs:
         shell: cmd
         run: dotnet publish AesFinder\AesFinder.csproj -c Release -r win-x64 -o publish-aesfinder
 
+      # The API runs AesFinder with --json. Releases once shipped a build that predates that flag,
+      # so the exact binary being attached is exercised here and the release stops if it regressed.
+      - name: Verify AesFinder JSON output (win-x64)
+        shell: pwsh
+        run: ./tests/AesFinder.Tests/verify-json.ps1 -ToolPath publish-aesfinder/AesFinder.exe
+
       - name: Bundle native lib
         shell: cmd
         run: copy /y dist\rada_decode.dll publish-win\
@@ -116,6 +122,10 @@ jobs:
 
       - name: Publish AesFinder (linux-x64)
         run: dotnet publish AesFinder/AesFinder.csproj -c Release -r linux-x64 -o publish-aesfinder-linux
+
+      - name: Verify AesFinder JSON output (linux-x64)
+        shell: pwsh
+        run: ./tests/AesFinder.Tests/verify-json.ps1 -ToolPath publish-aesfinder-linux/AesFinder
 
       - name: Bundle native lib
         run: cp dist/librada_decode.so publish-linux/
