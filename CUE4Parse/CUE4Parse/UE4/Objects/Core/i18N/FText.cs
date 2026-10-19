@@ -150,9 +150,10 @@ public class FText : IUStruct
                 ETextHistoryType.Transform => new FTextHistory.Transform(Ar),
                 ETextHistoryType.StringTableEntry => new FTextHistory.StringTableEntry(Ar),
                 ETextHistoryType.TextGenerator => new FTextHistory.TextGenerator(Ar),
-                _ => new FTextHistory.None(Ar)
+                (ETextHistoryType)22 when Ar.Game is GAME_Zeus => new FTextHistory.Base("", Ar.Read<ulong>().ToString(), ""),
+                _ => new FTextHistory.None(Ar, HistoryType)
             };
-            if (Ar.Game == GAME_Splitgate2) Ar.Position += 4;
+            if (Ar.Game is GAME_Splitgate2 or GAME_Empulse) Ar.Position += 4;
         }
     }
 
@@ -184,8 +185,10 @@ public abstract class FTextHistory : IUStruct
         {
 
         }
-        public None(FAssetArchive Ar)
+        public None(FAssetArchive Ar, ETextHistoryType historyType = ETextHistoryType.None)
         {
+            if (historyType != ETextHistoryType.None)
+                Log.Debug("Unknown history type {0}", historyType);
             if (FEditorObjectVersion.Get(Ar) >= FEditorObjectVersion.Type.CultureInvariantTextSerializationKeyStability)
             {
                 var bHasCultureInvariantString = Ar.ReadBoolean();
@@ -203,7 +206,7 @@ public abstract class FTextHistory : IUStruct
         public readonly string Key;
         public readonly string SourceString;
         public readonly string LocalizedString;
-        public override string Text => LocalizedString;
+        public sealed override string Text => LocalizedString;
 
         public Base(FAssetArchive Ar)
         {
@@ -243,21 +246,20 @@ public abstract class FTextHistory : IUStruct
     public class NamedFormat : FTextHistory
     {
         public readonly FText SourceFmt;
-
-        public readonly Dictionary<string, FFormatArgumentValue>
-            Arguments; /* called FFormatNamedArguments in UE4 */
-
-        public override string Text => SourceFmt.Text;
+        public readonly Dictionary<string, FFormatArgumentValue> Arguments; /* called FFormatNamedArguments in UE4 */
+        public sealed override string Text { get; }
 
         public NamedFormat(FAssetArchive Ar)
         {
             SourceFmt = new FText(Ar);
-            int ArgCount = Ar.Read<int>();
-            Arguments = new Dictionary<string, FFormatArgumentValue>(ArgCount);
-            for (int i = 0; i < ArgCount; i++)
+            Arguments = Ar.ReadMap(Ar.ReadFString, () => new FFormatArgumentValue(Ar));
+
+            var text = SourceFmt.Text;
+            foreach (var (key, value) in Arguments)
             {
-                Arguments[Ar.ReadFString()] = new FFormatArgumentValue(Ar);
+                text = text.Replace($"{{{key}}}", value.Value.ToString());
             }
+            Text = text;
         }
     }
 
@@ -265,12 +267,19 @@ public abstract class FTextHistory : IUStruct
     {
         public readonly FText SourceFmt;
         public readonly FFormatArgumentValue[] Arguments; /* called FFormatOrderedArguments in UE4 */
-        public override string Text => SourceFmt.Text;
+        public sealed override string Text { get; }
 
         public OrderedFormat(FAssetArchive Ar)
         {
             SourceFmt = new FText(Ar);
             Arguments = Ar.ReadArray(() => new FFormatArgumentValue(Ar));
+
+            var text = SourceFmt.Text;
+            for (var i = 0; i < Arguments.Length; i++)
+            {
+                text = text.Replace($"{{{i}}}", Arguments[i].Value.ToString());
+            }
+            Text = text;
         }
     }
 
@@ -278,12 +287,19 @@ public abstract class FTextHistory : IUStruct
     {
         public readonly FText SourceFmt;
         public readonly FFormatArgumentData[] Arguments;
-        public override string Text => SourceFmt.Text;
+        public sealed override string Text { get; }
 
         public ArgumentFormat(FAssetArchive Ar)
         {
             SourceFmt = new FText(Ar);
             Arguments = Ar.ReadArray(() => new FFormatArgumentData(Ar));
+
+            var text = SourceFmt.Text;
+            foreach (var argument in Arguments)
+            {
+                text = text.Replace($"{{{argument.ArgumentName}}}", argument.ArgumentValue.Value.ToString());
+            }
+            Text = text;
         }
     }
 
