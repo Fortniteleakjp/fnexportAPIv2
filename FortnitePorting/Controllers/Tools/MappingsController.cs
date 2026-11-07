@@ -1,3 +1,4 @@
+using CUE4Parse.FileProvider;
 using FortnitePorting.Services;
 using FortnitePorting.Services.Mappings;
 using Microsoft.AspNetCore.Mvc;
@@ -6,7 +7,7 @@ namespace FortnitePorting.Controllers;
 
 [ApiController]
 [Route("api/v1/mappings")]
-public class MappingsController(ManifestService manifestService, ILogger<MappingsController> logger) : ControllerBase
+public class MappingsController(ManifestService manifestService, IFileProvider provider, ILogger<MappingsController> logger) : ControllerBase
 {
     [HttpPost("generate")]
     public async Task<IActionResult> Generate(
@@ -18,6 +19,7 @@ public class MappingsController(ManifestService manifestService, ILogger<Mapping
         [FromQuery] int timeoutSeconds = 120,
         [FromQuery] bool load = false,
         [FromQuery] bool download = true,
+        [FromQuery] bool inferRowStructs = true,
         CancellationToken cancellationToken = default)
     {
         string[] retiredParameters = ["url", "path", "maxPackages", "merge", "baseMapping", "version", "pid",
@@ -27,7 +29,8 @@ public class MappingsController(ManifestService manifestService, ILogger<Mapping
         try
         {
             var result = await new StaticMappingsGenerator().GenerateAsync(
-                new(dir, compression.Trim().ToLowerInvariant(), level, oodle, fileName, timeoutSeconds), cancellationToken);
+                new(dir, compression.Trim().ToLowerInvariant(), level, oodle, fileName, timeoutSeconds, provider, inferRowStructs),
+                cancellationToken);
 
             if (load) manifestService.ApplyMapping(result.FilePath);
 
@@ -38,6 +41,13 @@ public class MappingsController(ManifestService manifestService, ILogger<Mapping
                 SetHeaders(result.Usmap, result.FilePath, load, result.Structs, result.Enums);
                 Response.Headers["X-Usmap-Source"] = result.Source;
                 Response.Headers["X-Usmap-Build"] = result.Build;
+                if (result.RowStructsError != null)
+                    Response.Headers["X-Usmap-Inferred-Error"] = Uri.EscapeDataString(result.RowStructsError);
+                if (result.RowStructs is { } rows && result.RowStructsError == null)
+                {
+                    Response.Headers["X-Usmap-Inferred-Structs"] = string.Join(",", rows.Inferred.Select(i => i.Struct));
+                    Response.Headers["X-Usmap-Inferred-Failed"] = rows.Failed.Count.ToString();
+                }
                 return File(result.Usmap, "application/octet-stream", result.FileName);
             }
 
@@ -46,7 +56,8 @@ public class MappingsController(ManifestService manifestService, ILogger<Mapping
                 fileName = result.FileName, output = result.FilePath, source = result.Source,
                 build = result.Build, usmapBytes = result.Usmap.Length, compression,
                 structs = result.Structs, enums = result.Enums, elapsedSeconds = result.ElapsedSeconds,
-                loaded = load, downloadUrl = DownloadUrl(result.FileName)
+                loaded = load, downloadUrl = DownloadUrl(result.FileName),
+                rowStructs = RowStructsReport(result.RowStructs, result.RowStructsError)
             });
         }
         catch (OperationCanceledException) { return StatusCode(499, new { message = "Mapping generation was cancelled." }); }
@@ -157,6 +168,20 @@ public class MappingsController(ManifestService manifestService, ILogger<Mapping
         return file == null ? NotFound(new { message = $"No stored mapping named '{fileName}'." })
             : PhysicalFile(file.FullName, "application/octet-stream", file.Name);
     }
+
+    private object? RowStructsReport(Services.Mappings.RowStructInference.RowStructScanner.Result? result, string? error)
+        => result == null ? null : new
+        {
+            added = error == null, error,
+            gameBuild = manifestService.GameBuild,
+            candidates = result.Candidates, dataTables = result.DataTables, elapsedSeconds = result.ElapsedSeconds,
+            inferred = result.Inferred.Select(i => new
+            {
+                name = i.Struct, table = i.Table, rows = i.Rows, properties = i.Properties,
+                uniquenessUnproven = i.Unproven, layout = i.Layout
+            }),
+            failed = result.Failed.Select(f => new { name = f.Struct, table = f.Table, rows = f.Rows, reason = f.Reason })
+        };
 
     private string? DownloadUrl(string name)
         => Url.Action(nameof(DownloadMapping), "Mappings", new { fileName = name });

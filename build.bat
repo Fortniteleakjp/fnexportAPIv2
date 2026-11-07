@@ -143,6 +143,17 @@ if exist "%LIBS%\UEFNStaticMappingsGenerator.exe" (
     echo   skipped UEFNStaticMappingsGenerator.exe
 )
 
+if exist "%LIBS%\RowStructInferrer.exe" (
+    copy /y "%LIBS%\RowStructInferrer.exe" "%OUTDIR%\" >nul
+    if errorlevel 1 (
+        echo ERROR: Failed to copy RowStructInferrer.exe.
+        exit /b 1
+    )
+    echo   copied RowStructInferrer.exe
+) else (
+    echo   skipped RowStructInferrer.exe
+)
+
 echo.
 echo [5/5] Verifying output...
 if not exist "%EXE%" (

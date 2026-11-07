@@ -649,10 +649,33 @@ Windows x64とUEFNのDLL一式が必要です。UHTのレイアウトはUE 6.0�
 | `POST /api/v1/mappings/import?path={path}&fileName={name}&load={bool}&download={bool}` | 既存 `.usmap` を検証して取り込み。 |
 
 生成時のクエリは `dir`、`compression`（既定 `zstd`、`brotli` / `oodle` / `none`）、`level`、`oodle`（DLLのパス）、
-`fileName`、`timeoutSeconds`（既定120、1–3600秒）、`load`（既定false）、`download`（既定true）です。
+`fileName`、`timeoutSeconds`（既定120、1–3600秒）、`load`（既定false）、`download`（既定true）、`inferRowStructs`（既定true）です。
 `dir` はインストール先または `Binaries/Win64` を受け付けます。省略時は `UEFN_BINARIES_DIR`、未設定なら標準のインストール先を使います。
 出力名は `.version` のBranchNameとChangelistから決まり、圧縮方式に応じて `_zs` / `_br` / `_oo` が付きます。
 `load=true` は、生成・検証後のマッピングを現在のプロバイダーに適用し、キャッシュを更新します。UEFNとマウント中のゲームのビルド番号やCLが異なる場合も適用します。ダウンロード時は `X-Usmap-Loaded: true`、`download=false` 時はJSONの `loaded: true` で適用結果を確認できます。
+
+#### DataTable の行構造体の補完（`inferRowStructs`）
+
+UEFN の DLL には、ゲーム本体だけにコンパイルされている GameFeature プラグインの型が入っていません
+（例: 43.00 の `DelilahTreasureHuntSharedRuntime` の `DelilahTreasurePrizeRow`）。DLL から作ったマッピングにはその行構造体が無く、
+該当する DataTable は `Rows` が空になります。
+
+`inferRowStructs=true`（既定）では、生成後にマウント中のゲームの DataTable（`DT_`／`CDT_` で始まる、名前に `DataTable` を含む、
+または `/DataTables/` 配下のパッケージ。Fortnite で約8千件）を走査し、行構造体がマッピングに無いものについて、
+cook 済みの行データ（unversioned プロパティ）から型を推定します。推定した構造体は生成ツールの `--extra` で
+最終的な `.usmap` に加えます（DLL に同名の型があればそちらを優先）。Fortnite 43.00 では走査と推定で約30秒です。
+
+- **名前は推定**: 型は推定できますが、プロパティ名は cook 済みデータに無いため `Name_0`、`Bool_4` のような仮名になります。
+  テキストのキーが `{行名}_{名前}` の形なら（`PrizeName` など）その名前を使います。
+- **誤った定義は入れません**: 行の区切り方が2通り以上考えられる表、1行しかない表、時間内に解けない表は補完しません。
+  マッピングがある DataTable で推定させて照合する検証では、2行以上の表で推定できたものはすべて正しい型でした。
+- 結果は JSON の `rowStructs`（`inferred` に補完した構造体と元の表・行数・推定した並び、`failed` に見送った理由）、
+  ダウンロード時はヘッダー `X-Usmap-Inferred-Structs`（補完した構造体名）と `X-Usmap-Inferred-Failed`（見送った数）で確認できます。
+- マウント中のゲームが無い、またはファイルが無い場合は何もしません。`inferRowStructs=false` で無効化できます。
+- 生成ツールが `--extra` 未対応の古いものだった場合は補完なしのマッピングを返し、`rowStructs.error`／`X-Usmap-Inferred-Error` に理由を入れます。
+- 生成ツール（`UEFNStaticMappingsGenerator.exe`）を API を通さず単体で実行した場合も、隣の `RowStructInferrer.exe` が
+  インストール済みのゲームから同じ推定を行い、出力に加えます（`--no-infer` で無効化）。
+  `MappingsGeneratoruild.bat libs` で両方が `libs/` に入ります。詳しくは [MappingsGenerator/README.md](MappingsGenerator/README.md) を参照してください。
 
 `POST /dump`、`POST /dump/uefn`、`POST /dump/local` は削除しました。生成には `POST /api/v1/mappings/generate` を使用してください。
 従来のJSON入力、pak走査、マージ、プロセスID、オフセットのパラメーターは廃止しました。

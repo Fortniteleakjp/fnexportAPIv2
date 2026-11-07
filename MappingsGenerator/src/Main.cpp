@@ -1,4 +1,5 @@
 #include "Dumper.h"
+#include "ExtraMappings.h"
 #include "Mappings.h"
 #include "PE.h"
 
@@ -29,6 +30,9 @@ namespace
             "  --oodle <dll>          oo2core_*_win64.dll to use (default: newest one in --dir)\n"
             "  --include-editor-only  Keep CPF_EditorOnly properties (cooked games do NOT have them)\n"
             "  --verbose              Print extra diagnostics\n"
+            "  --extra <file.usmap>   Uncompressed .usmap whose structs are added when missing from the DLLs, repeatable\n"
+            "  --game <dir>           Installed game whose DataTables fill in the row structs the DLLs lack (default: the install --dir is in)\n"
+            "  --no-infer             Do not guess those row structs (RowStructInferrer.exe next to this executable does it)\n"
             "  --no-wait              Do not wait for Enter before exiting\n",
             EngineModuleName, CommonModuleName);
     }
@@ -90,6 +94,117 @@ namespace
             return FullPath;
         return Path;
     }
+
+    std::wstring ExecutableDirectory()
+    {
+        wchar_t Path[MAX_PATH * 4];
+        const DWORD Length = GetModuleFileNameW(nullptr, Path, static_cast<DWORD>(std::size(Path)));
+        std::wstring Result(Path, Length);
+        const size_t Slash = Result.find_last_of(L"\\/");
+        return Slash == std::wstring::npos ? std::wstring() : Result.substr(0, Slash);
+    }
+
+    /* CommandLineToArgvW の規則でクォートする */
+    std::wstring QuoteArgument(const std::wstring& Arg)
+    {
+        if (!Arg.empty() && Arg.find_first_of(L" \t\"") == std::wstring::npos)
+            return Arg;
+
+        std::wstring Result = L"\"";
+        size_t Backslashes = 0;
+        for (const wchar_t C : Arg)
+        {
+            if (C == L'\\') { Backslashes++; continue; }
+            Result.append(C == L'"' ? Backslashes * 2 + 1 : Backslashes, L'\\');
+            Backslashes = 0;
+            Result += C;
+        }
+        Result.append(Backslashes * 2, L'\\');
+        return Result + L"\"";
+    }
+
+    /* 子プロセスの出力はこのコンソールにそのまま流す。戻り値は終了コード (起動できなければ -1) */
+    int RunProcess(const std::wstring& Executable, const std::vector<std::wstring>& Args, DWORD TimeoutMs)
+    {
+        std::wstring CommandLine = QuoteArgument(Executable);
+        for (const std::wstring& Arg : Args)
+            CommandLine += L" " + QuoteArgument(Arg);
+
+        fflush(stdout);
+        STARTUPINFOW Startup{ sizeof(Startup) };
+        PROCESS_INFORMATION Process{};
+        if (!CreateProcessW(Executable.c_str(), CommandLine.data(), nullptr, nullptr, TRUE, 0, nullptr, nullptr, &Startup, &Process))
+            return -1;
+
+        DWORD ExitCode = static_cast<DWORD>(-1);
+        if (WaitForSingleObject(Process.hProcess, TimeoutMs) == WAIT_TIMEOUT)
+        {
+            TerminateProcess(Process.hProcess, 1);
+            WaitForSingleObject(Process.hProcess, INFINITE);
+            printf("[-] RowStructInferrer did not finish in %lu s\n", static_cast<unsigned long>(TimeoutMs / 1000));
+        }
+        else
+        {
+            GetExitCodeProcess(Process.hProcess, &ExitCode);
+        }
+        CloseHandle(Process.hThread);
+        CloseHandle(Process.hProcess);
+        return static_cast<int>(ExitCode);
+    }
+
+    /*
+    * UEFN の DLL には、ゲーム本体だけにコンパイルされている GameFeature プラグインの型が無い
+    * (例: 43.00 の DelilahTreasureHuntSharedRuntime の DelilahTreasurePrizeRow)。
+    * それを行構造体に使う DataTable の行を、インストール済みのゲームから推定して加える。
+    * 推定は CUE4Parse でゲームを読む .NET の RowStructInferrer.exe (この exe の隣) に任せる。
+    * 失敗しても DLL だけのマッピングは書き出す。
+    */
+    void InferRowStructs(const std::wstring& GameDir, const std::wstring& OodleDll)
+    {
+        const std::wstring Helper = JoinPath(ExecutableDirectory(), L"RowStructInferrer.exe");
+        if (GetFileAttributesW(Helper.c_str()) == INVALID_FILE_ATTRIBUTES)
+        {
+            printf("[!] %S not found: DataTable row structs missing from the DLLs are not guessed (build MappingsGenerator\\build.bat)\n", Helper.c_str());
+            return;
+        }
+
+        wchar_t TempDir[MAX_PATH + 1];
+        GetTempPathW(static_cast<DWORD>(std::size(TempDir)), TempDir);
+        const std::wstring Prefix = std::wstring(TempDir) + L"UEFNStaticMappingsGenerator-" + std::to_wstring(GetCurrentProcessId());
+        const std::wstring BasePath = Prefix + L".base.usmap";
+        const std::wstring ExtraPath = Prefix + L".rowstructs.usmap";
+
+        printf("[+] Guessing the DataTable row structs missing from the DLLs from %S\n", GameDir.c_str());
+        CompressionOptions Uncompressed;
+        Uncompressed.Method = EUsmapCompression::None;
+        if (!Mappings(BasePath, Uncompressed).GenerateMappings())
+        {
+            printf("[-] Could not write %S for RowStructInferrer\n", BasePath.c_str());
+            DeleteFileW(BasePath.c_str());
+            return;
+        }
+
+        const int ExitCode = RunProcess(Helper, { L"--game", GameDir, L"--mappings", BasePath, L"--out", ExtraPath, L"--oodle", OodleDll }, 15 * 60 * 1000);
+        DeleteFileW(BasePath.c_str());
+        if (ExitCode != 0)
+        {
+            printf("[!] RowStructInferrer failed (exit code %d): the mapping has no guessed row structs\n", ExitCode);
+            DeleteFileW(ExtraPath.c_str());
+            return;
+        }
+
+        std::vector<Dumper::Struct> Extra;
+        std::string Error;
+        if (!ExtraMappings::Load(ExtraPath, Extra, Error))
+            printf("[!] Could not read the guessed row structs: %s\n", Error.c_str());
+        else
+        {
+            const size_t Read = Extra.size();
+            const size_t Added = Dumper::AddExtraStructs(std::move(Extra));
+            printf("[+] Guessed row structs: %zu structs, %zu added\n", Read, Added);
+        }
+        DeleteFileW(ExtraPath.c_str());
+    }
 }
 
 int wmain(int argc, wchar_t** argv)
@@ -98,6 +213,9 @@ int wmain(int argc, wchar_t** argv)
     std::wstring CoreModuleName = EngineModuleName;
     std::vector<std::wstring> ModuleNames;
     std::wstring OutputPath;
+    std::vector<std::wstring> ExtraPaths;
+    std::wstring GameDir;
+    bool bInfer = true;
     Dumper::Options Opts;
     CompressionOptions CompressionOpts;
     bool bWait = true;
@@ -124,6 +242,9 @@ int wmain(int argc, wchar_t** argv)
         else if (Arg == L"--include-editor-only") Opts.bIncludeEditorOnly = true;
         else if (Arg == L"--verbose") Opts.bVerbose = true;
         else if (Arg == L"--no-wait") bWait = false;
+        else if (Arg == L"--extra") ExtraPaths.push_back(Next());
+        else if (Arg == L"--game") GameDir = Next();
+        else if (Arg == L"--no-infer") bInfer = false;
         else
         {
             PrintUsage();
@@ -140,7 +261,11 @@ int wmain(int argc, wchar_t** argv)
     /* UE の静的初期化子がカレントディレクトリを Binaries\Win64 に変えるので、ロード前に絶対パスにしておく */
     BinariesDir = ToFullPath(BinariesDir);
     OutputPath = ToFullPath(OutputPath);
+    for (std::wstring& ExtraPath : ExtraPaths)
+        ExtraPath = ToFullPath(ExtraPath);
     CompressionOpts.OodleDll = ToFullPath(CompressionOpts.OodleDll);
+    /* Binaries\Win64 の3つ上がインストール先 (FortniteGame\Binaries\Win64) */
+    GameDir = ToFullPath(GameDir.empty() ? JoinPath(BinariesDir, L"..\\..\\..") : GameDir);
     CompressionOpts.SearchDir = BinariesDir;
 
     const auto StartTime = std::chrono::steady_clock::now();
@@ -187,6 +312,24 @@ int wmain(int argc, wchar_t** argv)
     }
 
     Dumper::Resolve(Opts);
+
+    for (const std::wstring& ExtraPath : ExtraPaths)
+    {
+        std::vector<Dumper::Struct> Extra;
+        std::string Error;
+        if (!ExtraMappings::Load(ExtraPath, Extra, Error))
+        {
+            printf("[-] Failed to read extra mappings %S: %s\n", ExtraPath.c_str(), Error.c_str());
+            return -1;
+        }
+        const size_t Read = Extra.size();
+        const size_t Added = Dumper::AddExtraStructs(std::move(Extra));
+        printf("[+] Extra mappings %S: %zu structs, %zu added\n", ExtraPath.c_str(), Read, Added);
+    }
+
+    if (bInfer)
+        InferRowStructs(GameDir, CompressionOpts.OodleDll.empty() ? BinariesDir : CompressionOpts.OodleDll);
+
     Dumper::PrintInfo();
 
     Mappings Mapping(OutputPath, CompressionOpts);

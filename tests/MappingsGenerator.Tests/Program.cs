@@ -7,10 +7,13 @@ using CUE4Parse.MappingsProvider.Usmap;
 using FortnitePorting;
 using FortnitePorting.Controllers;
 using FortnitePorting.Services;
+using CUE4Parse.MappingsProvider;
 using FortnitePorting.Services.Mappings;
+using FortnitePorting.Services.Mappings.RowStructInference;
 
 var directory = StaticMappingsGenerator.BinariesDirectory(Environment.GetEnvironmentVariable("UEFN_BINARIES_DIR"));
 var build = StaticMappingsGenerator.ReadBuild(directory);
+var testStarted = DateTime.Now;
 var tool = StaticMappingsGenerator.FindExecutable() ?? throw new Exception("Build the generator before running these tests.");
 var root = Path.Combine(Path.GetTempPath(), "fnexport-mapping-tests-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(root);
@@ -22,6 +25,7 @@ var builder = WebApplication.CreateBuilder();
 builder.Logging.ClearProviders();
 builder.WebHost.UseUrls("http://127.0.0.1:0");
 builder.Services.AddSingleton(manifest);
+builder.Services.AddSingleton<IFileProvider>(provider);
 builder.Services.AddControllers().AddApplicationPart(typeof(MappingsController).Assembly);
 await using var app = builder.Build();
 app.MapControllers();
@@ -93,6 +97,78 @@ using (var response = await Post("generate?compression=brotli&timeoutSeconds=1&f
     var preserved = await File.ReadAllBytesAsync(Path.Combine(MappingStore.DirectoryPath, "none.usmap"));
     Check(original!.SequenceEqual(preserved),
         "timeout preserves the existing mapping");
+}
+
+// --extra: structs the DLLs don't have (guessed row structs) end up in the output, the DLLs' own ones win
+{
+    var extraPath = Path.Combine(root, "extra.usmap");
+    var extraOutput = Path.Combine(root, "with-extra.usmap");
+    var types = new TypeMappings();
+    Struct Make(string structName, params (int Index, string Name, PropertyType Type)[] properties)
+        => new(types, structName, null, properties.ToDictionary(p => p.Index, p => new CUE4Parse.MappingsProvider.PropertyInfo(0, p.Name, p.Type, 1)),
+            properties.Max(p => p.Index) + 1);
+    await File.WriteAllBytesAsync(extraPath, ExtraUsmapWriter.Write([
+        Make("FnexportTestRow",
+            (0, "Name_0", new PropertyType("NameProperty")),
+            (1, "PrizeName", new PropertyType("TextProperty")),
+            (3, "Tags", new PropertyType("ArrayProperty", innerType: new PropertyType("StructProperty", "GameplayTag")))),
+        Make("GameplayTag", (0, "NotTheRealOne", new PropertyType("IntProperty")))
+    ]));
+    var start = new ProcessStartInfo(tool) { UseShellExecute = false, RedirectStandardOutput = true, WorkingDirectory = directory };
+    foreach (var argument in new[] { "--dir", directory, "--out", extraOutput, "--compression", "none", "--no-wait", "--no-infer", "--extra", extraPath })
+        start.ArgumentList.Add(argument);
+    using var process = Process.Start(start)!;
+    var output = await process.StandardOutput.ReadToEndAsync();
+    await process.WaitForExitAsync();
+    Check(process.ExitCode == 0 && output.Contains("2 structs, 1 added"), "--extra adds only the structs the DLLs don't have");
+    var withExtra = new UsmapParser(await File.ReadAllBytesAsync(extraOutput), "with-extra").Mappings!;
+    var row = withExtra.Types["FnexportTestRow"];
+    Check(withExtra.Types.Count == expectedStructs + 1 && row.PropertyCount == 4 &&
+          row.Properties[1].Name == "PrizeName" && row.Properties[2].Name == "Unknown_2" &&
+          row.Properties[3].MappingType is { Type: "ArrayProperty", InnerType.StructType: "GameplayTag" },
+        "--extra keeps the property layout, filling an index no row mentioned");
+    Check(withExtra.Types["GameplayTag"].Properties[0].Name == "TagName", "--extra doesn't replace a struct from the DLLs");
+}
+
+// run on its own, the generator has RowStructInferrer.exe guess the row structs the DLLs lack from the installed game
+{
+    async Task<(int ExitCode, string Output)> RunTool(string executable, string output)
+    {
+        var start = new ProcessStartInfo(executable) { UseShellExecute = false, RedirectStandardOutput = true, WorkingDirectory = directory };
+        foreach (var argument in new[] { "--dir", directory, "--out", output, "--compression", "none", "--no-wait" })
+            start.ArgumentList.Add(argument);
+        using var process = Process.Start(start)!;
+        var text = await process.StandardOutput.ReadToEndAsync();
+        await process.WaitForExitAsync();
+        return (process.ExitCode, text);
+    }
+
+    // without the helper next to it, the DLLs' mapping is still written
+    var alone = Path.Combine(root, "alone");
+    Directory.CreateDirectory(alone);
+    var aloneTool = Path.Combine(alone, Path.GetFileName(tool));
+    File.Copy(tool, aloneTool, overwrite: true);
+    var aloneOutput = Path.Combine(root, "no-helper.usmap");
+    var (aloneExit, aloneText) = await RunTool(aloneTool, aloneOutput);
+    Check(aloneExit == 0 && aloneText.Contains("RowStructInferrer.exe not found") &&
+          new UsmapParser(await File.ReadAllBytesAsync(aloneOutput), "no-helper").Mappings!.Types.Count == expectedStructs,
+        "without RowStructInferrer.exe the generator writes the DLLs' mapping");
+
+    var helper = Path.Combine(Path.GetDirectoryName(tool)!, "RowStructInferrer.exe");
+    if (File.Exists(helper))
+    {
+        var inferredOutput = Path.Combine(root, "inferred.usmap");
+        var (exitCode, text) = await RunTool(tool, inferredOutput);
+        var inferred = new UsmapParser(await File.ReadAllBytesAsync(inferredOutput), "inferred").Mappings!;
+        Check(exitCode == 0 && text.Contains("Guessed row structs:") && inferred.Types.Count > expectedStructs,
+            $"run on its own, the generator adds the row structs guessed from the game ({inferred.Types.Count - expectedStructs} structs)");
+        Check(!Directory.EnumerateFiles(Path.GetTempPath(), "UEFNStaticMappingsGenerator-*.usmap").Any(),
+            "the generator removes its temporary mappings");
+    }
+    else
+    {
+        Console.WriteLine($"SKIP: {helper} not found, row struct inference not tested");
+    }
 }
 
 var generator = new StaticMappingsGenerator();
@@ -170,6 +246,13 @@ using (var response = await client.GetAsync("/api/v1/mappings"))
     using var list = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
     Check(list.RootElement.GetProperty("count").GetInt32() >= 5, "stored mapping listing");
 }
-Check(Process.GetProcessesByName("UEFNStaticMappingsGenerator").Length == 0, "generator processes exited after completion, timeout and cancellation");
+// only the processes these tests started: a generator someone left open (waiting for Enter) is not ours
+bool StartedByTests(Process process)
+{
+    try { return process.StartTime >= testStarted; }
+    catch (Exception) { return false; } // already exited
+}
+Check(!Process.GetProcessesByName("UEFNStaticMappingsGenerator").Concat(Process.GetProcessesByName("RowStructInferrer")).Any(StartedByTests),
+    "generator processes exited after completion, timeout and cancellation");
 await app.StopAsync();
 Console.WriteLine($"{checks} checks passed. Test outputs: {root}");
