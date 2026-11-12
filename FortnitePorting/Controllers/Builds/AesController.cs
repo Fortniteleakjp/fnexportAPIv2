@@ -125,11 +125,8 @@ namespace FortnitePorting.Controllers
                 scanned = new List<AesImmediateScanner.Candidate>();
             }
 
-            // Try the tool's answer first, then the rest.
-            var candidates = new List<string>();
-            if (!string.IsNullOrWhiteSpace(r?.MainKey)) candidates.Add(r!.MainKey!);
-            if (r != null) candidates.AddRange(r.Candidates.Skip(1));
-            candidates.AddRange(scanned.Select(c => c.Key));
+            // Constant-function hits first (the tool cannot see them), then the tool's answer, then the rest.
+            var candidates = AesImmediateScanner.OrderCandidates(r?.MainKey, r?.Candidates.Skip(1), scanned);
 
             if (candidates.Count == 0)
             {

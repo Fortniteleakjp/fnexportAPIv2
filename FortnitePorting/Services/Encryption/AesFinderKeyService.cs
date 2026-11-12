@@ -137,10 +137,8 @@ public class AesFinderKeyService : BackgroundService
         // Gather every key-shaped block in the DLL. The tool reports a single key picked by entropy whenever
         // the live AES API has no entry for the build yet, and on a fresh build that pick is often not the pak
         // key — so its answer is only the first thing we try, not the answer.
-        var candidates = new List<string>();
-        if (!string.IsNullOrWhiteSpace(result?.MainKey)) candidates.Add(result!.MainKey!);
-        if (result != null) candidates.AddRange(result.Candidates.Skip(1));
-        candidates.AddRange(AesImmediateScanner.FindInFile(dl.LocalPath).Select(c => c.Key));
+        var candidates = AesImmediateScanner.OrderCandidates(
+            result?.MainKey, result?.Candidates.Skip(1), AesImmediateScanner.FindInFile(dl.LocalPath));
 
         if (candidates.Count == 0)
         {
