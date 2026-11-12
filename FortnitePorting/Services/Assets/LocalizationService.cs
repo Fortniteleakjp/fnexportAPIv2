@@ -19,6 +19,14 @@ public static class LocalizationService
         new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
+    /// Bounds the parallel .locres reads. On a CDN-streamed build every read blocks a thread-pool thread
+    /// on a chunk download whose completion itself needs a thread-pool thread; an unbounded loop keeps
+    /// claiming every thread the pool injects, so the downloads never complete and the whole server
+    /// (every endpoint, including /api/v1/aes/keys) stops answering.
+    /// </summary>
+    internal static readonly ParallelOptions CdnReadOptions = new() { MaxDegreeOfParallelism = 6 };
+
+    /// <summary>
     /// Drops the cached localization tables. Called when the provider is rebuilt for a new build, since
     /// the .locres files themselves are replaced by the update.
     /// </summary>
@@ -84,7 +92,7 @@ public static class LocalizationService
             return result;
         }
 
-        Parallel.ForEach(locresFiles, path =>
+        Parallel.ForEach(locresFiles, CdnReadOptions, path =>
         {
             if (provider.TryCreateReader(path, out var reader))
             {

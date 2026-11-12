@@ -130,7 +130,7 @@ namespace FortnitePorting.Controllers
             }
 
             _logger.LogInformation($"Loading localization data for '{lang}' (chunk:{chunkNo}) from {locresFiles.Count} files...");
-            Parallel.ForEach(locresFiles, path =>
+            Parallel.ForEach(locresFiles, LocalizationService.CdnReadOptions, path =>
             {
                 if (_provider.TryCreateReader(path, out var reader))
                 {
