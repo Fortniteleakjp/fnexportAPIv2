@@ -38,6 +38,7 @@ add_executable(UEFNStaticMappingsGenerator
     src/Main.cpp
     src/PE.cpp
     src/Hook.cpp
+    src/ExtraMappings.cpp
     src/Dumper.cpp
     src/Mappings.cpp
     src/Compression.cpp

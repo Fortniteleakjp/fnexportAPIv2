@@ -1007,6 +1007,28 @@ void Dumper::PrintInfo()
     printf("\n");
 }
 
+size_t Dumper::AddExtraStructs(std::vector<Struct>&& Extra)
+{
+    std::unordered_set<std::string> Existing;
+    for (const Struct& S : Structs)
+        Existing.insert(S.Name);
+
+    size_t Added = 0;
+    for (Struct& S : Extra)
+    {
+        if (!Existing.insert(S.Name).second)
+        {
+            printf("[*] Extra struct %s is already in the DLLs, keeping that one\n", S.Name.c_str());
+            continue;
+        }
+        Structs.push_back(std::move(S));
+        Added++;
+    }
+
+    std::sort(Structs.begin(), Structs.end(), [](const Struct& A, const Struct& B) { return A.Name < B.Name; });
+    return Added;
+}
+
 const std::vector<Dumper::Struct>& Dumper::GetStructs()
 {
     return Structs;

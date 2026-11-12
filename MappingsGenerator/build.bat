@@ -12,12 +12,17 @@ call "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat" >nul || exit /b 1
 cd /d "%~dp0"
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release || exit /b 1
 cmake --build build || exit /b 1
+rem Guesses the DataTable row structs the DLLs lack from the installed game; the generator runs it from its own folder
+dotnet publish "%~dp0RowStructInferrer\RowStructInferrer.csproj" -c Release -r win-x64 -o "%~dp0build" -nologo -v q || exit /b 1
 if defined OUTPUT (
     if not exist "%OUTPUT%" mkdir "%OUTPUT%"
     if errorlevel 1 exit /b 1
     copy /y "%~dp0build\UEFNStaticMappingsGenerator.exe" "%OUTPUT%\UEFNStaticMappingsGenerator.exe" >nul
     if errorlevel 1 exit /b 1
+    copy /y "%~dp0build\RowStructInferrer.exe" "%OUTPUT%\RowStructInferrer.exe" >nul
+    if errorlevel 1 exit /b 1
 )
 echo.
 echo Built: %~dp0build\UEFNStaticMappingsGenerator.exe
+echo        %~dp0build\RowStructInferrer.exe
 exit /b 0

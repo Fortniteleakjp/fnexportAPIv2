@@ -622,10 +622,34 @@ Set `USMAP_GENERATOR_PATH` to use an explicit executable.
 | `POST /api/v1/mappings/import?path={path}&fileName={name}&load={bool}&download={bool}` | Verify and import an existing `.usmap`. |
 
 Generation accepts `dir`, `compression` (`zstd` by default; also `brotli`, `oodle`, `none`), `level`, `oodle` (DLL path),
-`fileName`, `timeoutSeconds` (default 120, range 1–3600), `load` (default false) and `download` (default true).
+`fileName`, `timeoutSeconds` (default 120, range 1–3600), `load` (default false), `download` (default true) and `inferRowStructs` (default true).
 `dir` accepts the installation root or `Binaries/Win64`. It defaults to `UEFN_BINARIES_DIR`, then the standard installation.
 The output name uses BranchName and Changelist from the installed `.version` file, with `_zs`, `_br` or `_oo` for compression.
 `load=true` applies the generated and verified mapping to the current provider and clears derived caches, including when UEFN and the mounted game have different build numbers or changelists. Downloads report `X-Usmap-Loaded: true`; `download=false` reports `loaded: true` in JSON.
+
+#### Filling in DataTable row structs (`inferRowStructs`)
+
+UEFN's DLLs don't contain the game feature plugins that are only compiled into the game client
+(e.g. `DelilahTreasurePrizeRow` of `DelilahTreasureHuntSharedRuntime` in 43.00), so a mapping generated from them lacks those
+row structs and the matching DataTables come out with empty `Rows`.
+
+With `inferRowStructs=true` (default), the mounted game's DataTables (packages starting with `DT_`/`CDT_`, containing `DataTable`
+or under `/DataTables/`: about 8k on Fortnite) are scanned after generation, and every row struct missing from the mapping is
+guessed from the cooked, unversioned rows. The guessed structs are added to the final `.usmap` through the generator's `--extra`
+option (a struct the DLLs have wins). Scanning and guessing take about 30 seconds on Fortnite 43.00.
+
+- **Names are made up**: the types can be guessed, but cooked data has no property names, so they become `Name_0`, `Bool_4`...
+  A text property whose key is `{RowName}_{Name}` (e.g. `PrizeName`) gets that name.
+- **No wrong definitions**: tables whose rows can be split into values in more than one way, tables with a single row and tables
+  that can't be solved in time are left out. Checked against DataTables whose row structs are in the mapping, every layout
+  guessed from two rows or more had the right types.
+- The JSON reports `rowStructs` (`inferred`: the structs added with their table, rows and layout; `failed`: why the others were
+  left out); downloads report `X-Usmap-Inferred-Structs` (names added) and `X-Usmap-Inferred-Failed` (count left out).
+- Nothing happens without a mounted game. `inferRowStructs=false` turns it off.
+- With a generator built before `--extra`, the mapping without them is returned and `rowStructs.error`/`X-Usmap-Inferred-Error` says why.
+- Run on its own (without the API), `UEFNStaticMappingsGenerator.exe` has the `RowStructInferrer.exe` next to it guess the same
+  row structs from the installed game and adds them to its output (`--no-infer` turns it off).
+  `MappingsGeneratoruild.bat libs` puts both into `libs/`. See [MappingsGenerator/README.md](MappingsGenerator/README.md).
 
 `POST /dump`, `POST /dump/uefn` and `POST /dump/local` have been removed. Use `POST /api/v1/mappings/generate` to generate mappings.
 The old JSON, pak scan, merge, process ID and offset parameters have been removed.

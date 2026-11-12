@@ -95,6 +95,9 @@ namespace Dumper
 
     void PrintInfo();
 
+    /* Resolve の後で構造体を足す (同名が既にあればそちらを残す)。足した数を返す */
+    size_t AddExtraStructs(std::vector<Struct>&& Extra);
+
     const std::vector<Struct>& GetStructs();
     const std::vector<Enum>& GetEnums();
 }

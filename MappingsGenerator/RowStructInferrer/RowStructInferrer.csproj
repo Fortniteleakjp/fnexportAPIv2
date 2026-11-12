@@ -1,0 +1,48 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Run by UEFNStaticMappingsGenerator.exe after it has read the DLLs: guesses the DataTable row structs the
+       DLLs don't have (game feature plugins only compiled into the game client) from the installed game's
+       cooked rows. The code is shared with the API, linked from FortnitePorting. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>RowStructInferrer</AssemblyName>
+    <RootNamespace>RowStructInferrer</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <NoWarn>$(NoWarn);1591</NoWarn>
+  </PropertyGroup>
+
+  <!-- One .exe placed next to the generator, like the API's own Windows publish -->
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' == 'win-x64'">
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <DebugType>embedded</DebugType>
+    <AllowedReferenceRelatedFileExtensions>none</AllowedReferenceRelatedFileExtensions>
+    <!-- CUE4Parse relies heavily on reflection/serialization; trimming would break it. -->
+    <PublishTrimmed>false</PublishTrimmed>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\FortnitePorting\Services\Mappings\RowStructInference\*.cs" LinkBase="Shared\RowStructInference" />
+    <Compile Include="..\..\FortnitePorting\Services\Local\LocalInstallLocator.cs" LinkBase="Shared\Local" />
+    <Compile Include="..\..\FortnitePorting\Services\Local\LocalKeyResolver.cs" LinkBase="Shared\Local" />
+    <Compile Include="..\..\FortnitePorting\Services\Encryption\AesFinder.cs" LinkBase="Shared\Encryption" />
+    <Compile Include="..\..\FortnitePorting\Services\Encryption\AesImmediateScanner.cs" LinkBase="Shared\Encryption" />
+    <Compile Include="..\..\FortnitePorting\Services\Encryption\AesKeyPicker.cs" LinkBase="Shared\Encryption" />
+    <Compile Include="..\..\FortnitePorting\Services\Encryption\AesKeyService.cs" LinkBase="Shared\Encryption" />
+    <Compile Include="..\..\FortnitePorting\Models\FortniteApiAesResponse.cs" LinkBase="Shared\Models" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\CUE4Parse\CUE4Parse\CUE4Parse.csproj" />
+  </ItemGroup>
+
+</Project>
