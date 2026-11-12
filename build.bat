@@ -100,6 +100,16 @@ if not exist "%EXE%" (
     exit /b 1
 )
 
+rem This build uses the installed .NET runtime. An app-local hostfxr.dll / hostpolicy.dll left in
+rem the output by an older self-contained build makes FortnitePorting.exe look for .NET only in this
+rem folder, so it exits at once with "You must install or update .NET". Remove those leftovers.
+for %%F in (hostfxr.dll hostpolicy.dll) do (
+    if exist "%OUTDIR%\%%F" (
+        del /f /q "%OUTDIR%\%%F" >nul 2>&1
+        echo   removed stale self-contained runtime file %%F
+    )
+)
+
 echo.
 echo [4/5] Copying native runtime libraries...
 copy /y "%LIBS%\rada_decode.dll" "%OUTDIR%\" >nul

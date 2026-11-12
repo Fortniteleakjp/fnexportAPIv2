@@ -42,7 +42,7 @@ public class AesFinderKeyService : BackgroundService
     {
         _serviceProvider = serviceProvider;
         _logger = logger;
-        _rootDir = Environment.GetEnvironmentVariable("PROJECT_ROOT") ?? Directory.GetCurrentDirectory();
+        _rootDir = AppPaths.ProjectRoot;
         _enabled = !string.Equals(Environment.GetEnvironmentVariable("AESFINDER_AUTO"), "false", StringComparison.OrdinalIgnoreCase);
     }
 
