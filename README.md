@@ -37,16 +37,22 @@ HTTP で公開され、全エンドポイントを Swagger UI から確認・実
 
 ## 最短で起動する
 
-1. .NET 10 SDK を用意します。
-2. Oodle と zlib-ng のネイティブライブラリを配置します（詳細は[必要なもの](#必要なもの)を参照）。
-3. 次のコマンドを実行します。
+1. [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) をインストールします。
+2. リポジトリ直下の起動スクリプトを実行します（Windows はダブルクリックでも可）。
 
 ```bash
-cd FortnitePorting
-dotnet run
+run.bat              # Windows
+./run.sh             # Linux / macOS
 ```
 
 起動後、[http://localhost:3849/swagger](http://localhost:3849/swagger) を開いて API を試せます。
+
+- ポートを変える: `run.bat 5000`／`./run.sh 5000`
+- Debug ビルドで起動: `run.bat 5000 Debug`
+- Oodle・zlib-ng のネイティブライブラリ、マニフェスト、`.usmap` は初回起動時に自動で取得されます
+  （手元のファイルを使いたい場合は[必要なもの](#必要なもの)を参照）。
+- `libs/`・`mappings/`・`chunk_cache/`・`build_history/` などのデータは、どこから起動しても
+  **リポジトリ直下**にまとめて保存されます（`PROJECT_ROOT` で変更可能）。
 
 ## 必要なもの
 
@@ -110,8 +116,8 @@ export OODLE_DLL_PATH=/path/to/liboo2corelinux64.so.9
 ### ローカル（開発）
 
 ```bash
-cd FortnitePorting
-dotnet run
+run.bat                                                   # または ./run.sh
+dotnet run --project FortnitePorting                      # スクリプトを使わない場合（どのフォルダからでも可）
 ```
 
 既定で `http://0.0.0.0:3849` を待ち受けます（`PORT` 環境変数で変更可能）。
@@ -155,7 +161,7 @@ docker run -p 3849:3849 \
 | 変数 | 既定値 | 説明 |
 |---|---|---|
 | `PORT` | `3849` | 待ち受けポート。 |
-| `PROJECT_ROOT` | (自動) | `libs/`・`manifest/`・`chunk_cache/`・`mappings/` の解決に使うルート。Docker では `/app`。 |
+| `PROJECT_ROOT` | (自動) | `libs/`・`manifest/`・`chunk_cache/`・`mappings/`・`build_history/` などを置くルート。未指定時は、ソースから起動していればリポジトリ直下、配布版の exe なら exe と同じフォルダ。Docker では `/app`。 |
 | `OODLE_DLL_PATH` | – | Oodle ネイティブライブラリの明示パス。 |
 | `RADA_DLL_PATH` | – | RAD Audio デコードライブラリの明示パス（RADA → WAV を有効化）。 |
 | `USMAP_PATH` | – | 読み込む `.usmap` の明示パス。指定時はそのファイルを使用（**存在しなければ最新版を自動ダウンロード**）。 |

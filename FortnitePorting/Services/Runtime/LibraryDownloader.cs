@@ -15,10 +15,7 @@ public static class LibraryDownloader
 
     static LibraryDownloader()
     {
-        // Get the project root from an environment variable and set up the libs directory
-        var projectRoot = Environment.GetEnvironmentVariable("PROJECT_ROOT")
-            ?? Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
-        LibsDirectory = Path.Combine(projectRoot, "libs");
+        LibsDirectory = Path.Combine(AppPaths.ProjectRoot, "libs");
         Directory.CreateDirectory(LibsDirectory);
     }
 

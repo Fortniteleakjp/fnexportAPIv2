@@ -33,7 +33,7 @@ public sealed class StaticMappingsGenerator
         if (!string.IsNullOrWhiteSpace(configured))
             return File.Exists(configured) ? Path.GetFullPath(configured) : null;
 
-        var root = Environment.GetEnvironmentVariable("PROJECT_ROOT") ?? Directory.GetCurrentDirectory();
+        var root = AppPaths.ProjectRoot;
         string[] candidates =
         [
             Path.Combine(AppContext.BaseDirectory, ExecutableName),

@@ -17,7 +17,7 @@ public static class EncryptionKeyLoader
     {
         if (string.IsNullOrEmpty(rootDir))
         {
-            rootDir = Environment.GetEnvironmentVariable("PROJECT_ROOT") ?? Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+            rootDir = AppPaths.ProjectRoot;
         }
         return Path.Combine(rootDir, "aes.json");
     }
