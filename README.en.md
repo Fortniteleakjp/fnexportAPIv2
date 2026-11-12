@@ -73,10 +73,19 @@ header `X-Audio-Decoded: false` indicates it was not converted. Other formats
 
 ### Local (development)
 
+Install the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0), then run the
+script in the repository root (on Windows you can also double-click it):
+
 ```bash
-cd FortnitePorting
-dotnet run
+run.bat              # Windows
+./run.sh             # Linux / macOS
+run.bat 5000 Debug   # custom port / Debug build
+dotnet run --project FortnitePorting   # without the script, from any folder
 ```
+
+The Oodle / zlib-ng native libraries, the manifest and the `.usmap` are downloaded on first
+start. Runtime data (`libs/`, `mappings/`, `chunk_cache/`, `build_history/` …) is always kept in
+the repository root, wherever the API is started from (override with `PROJECT_ROOT`).
 
 The API listens on `http://0.0.0.0:3849` by default (override with the `PORT`
 environment variable). Open **http://localhost:3849/swagger** to explore and try
@@ -119,7 +128,7 @@ docker run -p 3849:3849 \
 | Variable | Default | Description |
 |---|---|---|
 | `PORT` | `3849` | Listening port. |
-| `PROJECT_ROOT` | (auto) | Root used to resolve `libs/`, `manifest/`, `chunk_cache/`, `mappings/`. Set to `/app` in Docker. |
+| `PROJECT_ROOT` | (auto) | Root for `libs/`, `manifest/`, `chunk_cache/`, `mappings/`, `build_history/` and the like. Defaults to the repository root when run from source, or the executable's folder for a released build. Set to `/app` in Docker. |
 | `OODLE_DLL_PATH` | – | Explicit path to the Oodle native library. |
 | `RADA_DLL_PATH` | – | Explicit path to the RAD Audio decode library (enables RADA → WAV). |
 | `USMAP_PATH` | – | Explicit path to the `.usmap` to load. When set, that file is used (**if it does not exist, the latest mapping is auto-downloaded**). |

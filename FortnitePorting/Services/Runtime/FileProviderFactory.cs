@@ -38,11 +38,7 @@ public static class FileProviderFactory
     /// </summary>
     public static InitializationResult CreateFileProvider()
     {
-        // Get the project root from an environment variable
-        var projectRoot = Environment.GetEnvironmentVariable("PROJECT_ROOT");
-        var rootDir = !string.IsNullOrEmpty(projectRoot)
-            ? projectRoot  // In Docker environments, use the environment variable as-is
-            : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+        var rootDir = AppPaths.ProjectRoot;
 
         Console.WriteLine($"Project root: {rootDir}\n");
 

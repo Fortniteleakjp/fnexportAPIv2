@@ -5,7 +5,7 @@ namespace FortnitePorting.Services.Mappings;
 public static class MappingStore
 {
     public static string DirectoryPath => Path.Combine(
-        Environment.GetEnvironmentVariable("PROJECT_ROOT") ?? Directory.GetCurrentDirectory(), "mappings");
+        AppPaths.ProjectRoot, "mappings");
 
     public static string FileName(string name)
     {

@@ -129,6 +129,26 @@ public static class AesKeyPicker
             }
         }
 
+        // The key the provider already holds for this GUID is the one those mounted archives were opened
+        // with (mounting checks it against the archive), so a candidate equal to it is proven too. Without
+        // this, the normal state after startup — key loaded from aes.json, nothing waiting — fell through to
+        // the highest-ranked candidate, which can be a different key-shaped block in the DLL.
+        if (provider.Keys.TryGetValue(guid, out var applied) && applied != null && !applied.IsDefault && mounted.Count > 0)
+        {
+            var match = ordered.FirstOrDefault(c =>
+                string.Equals(Strip(c), Strip(applied.KeyString), StringComparison.OrdinalIgnoreCase));
+            if (match != null)
+            {
+                return new Result
+                {
+                    Key = match,
+                    Validated = true,
+                    Tested = ordered.Count,
+                    Reason = $"Matches the key the {mounted.Count} mounted encrypted archive(s) were opened with."
+                };
+            }
+        }
+
         return new Result
         {
             Key = ordered[0],
@@ -176,6 +196,8 @@ public static class AesKeyPicker
     /// Unencrypted readers are excluded because TestAesKey trivially accepts any key for them, which would
     /// "validate" a wrong key.
     /// </summary>
+    private static string Strip(string key) => key.Trim().StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? key.Trim()[2..] : key.Trim();
+
     private static List<IAesVfsReader> Encrypted(IEnumerable<IAesVfsReader> readers, FGuid guid)
         => readers.Where(r => r.EncryptionKeyGuid == guid && r.IsEncrypted).ToList();
 }
