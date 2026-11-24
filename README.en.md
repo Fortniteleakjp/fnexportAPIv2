@@ -298,8 +298,8 @@ Sheets instead of having to be reshaped from JSON.
   row's properties in first-seen order. Nested structs are expanded into dotted columns such as
   `Name.SourceString`; pass `flatten=false` to keep each nested value as JSON in a single cell.
   Arrays always stay as compact JSON.
-- **CurveTable**: one line per **curve key** (long form). The columns are `RowName`, `Time`, and
-  `Value`, then the key's own fields (`InterpMode` and so on), then the curve-level properties under
+- **CurveTable**: one line per **curve key** (long form). The columns are `RowName`, `time`, and
+  `value`, then the key's own fields (`InterpMode` and so on), then the curve-level properties under
   a `Curve.` prefix. A row with no keys still produces one line, so its name is not lost.
 
 | Parameter | Default | Description |

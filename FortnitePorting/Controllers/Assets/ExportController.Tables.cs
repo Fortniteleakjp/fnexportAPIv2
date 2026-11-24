@@ -345,9 +345,14 @@ namespace FortnitePorting.Controllers
         private static List<Dictionary<string, string>> BuildCurveTable(
             JObject rowMap, HashSet<string>? rowFilter, List<string> columns)
         {
+            // The key columns are lower-case in the response. The line dictionaries are case-insensitive,
+            // so the key's own serialized Time/Value fields still land in these columns.
+            const string timeColumn = "time";
+            const string valueColumn = "value";
+
             columns.Add("RowName");
-            columns.Add("Time");
-            columns.Add("Value");
+            columns.Add(timeColumn);
+            columns.Add(valueColumn);
             var lines = new List<Dictionary<string, string>>();
 
             foreach (var row in rowMap.Properties())
@@ -372,8 +377,8 @@ namespace FortnitePorting.Controllers
                     var empty = new Dictionary<string, string>(curveLevel, StringComparer.OrdinalIgnoreCase)
                     {
                         ["RowName"] = row.Name,
-                        ["Time"] = string.Empty,
-                        ["Value"] = string.Empty
+                        [timeColumn] = string.Empty,
+                        [valueColumn] = string.Empty
                     };
                     lines.Add(empty);
                     continue;
@@ -391,11 +396,11 @@ namespace FortnitePorting.Controllers
                     }
                     else
                     {
-                        line["Value"] = Stringify(key);
+                        line[valueColumn] = Stringify(key);
                     }
 
-                    line.TryAdd("Time", string.Empty);
-                    line.TryAdd("Value", string.Empty);
+                    line.TryAdd(timeColumn, string.Empty);
+                    line.TryAdd(valueColumn, string.Empty);
                     lines.Add(line);
                 }
             }

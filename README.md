@@ -347,7 +347,7 @@ http://localhost:3849/api/v1/export?path=FortniteGame/Content/.../MySound.uasset
 - **DataTable**: 1 行 = 1 ロウ。先頭列は `RowName`、以降は全ロウのプロパティの和集合（初出順）です。
   ネストした構造体は `Name.SourceString` のようにドット区切りの列へ展開されます（`flatten=false` で
   ネスト値をそのまま JSON 文字列として 1 セルに収めます）。配列は常にコンパクトな JSON のままです。
-- **CurveTable**: 1 行 = **カーブのキー 1 個**（縦持ち）。列は `RowName`／`Time`／`Value` に続いて
+- **CurveTable**: 1 行 = **カーブのキー 1 個**（縦持ち）。列は `RowName`／`time`／`value` に続いて
   キーの各フィールド（`InterpMode` など）、さらにカーブ自体のプロパティが `Curve.` 接頭辞で並びます。
   キーが 0 個のロウも 1 行だけ出力されるため、ロウ名が失われません。
 
