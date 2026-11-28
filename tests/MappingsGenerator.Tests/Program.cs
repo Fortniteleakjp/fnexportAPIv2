@@ -160,8 +160,11 @@ using (var response = await Post("generate?compression=brotli&timeoutSeconds=1&f
         var inferredOutput = Path.Combine(root, "inferred.usmap");
         var (exitCode, text) = await RunTool(tool, inferredOutput);
         var inferred = new UsmapParser(await File.ReadAllBytesAsync(inferredOutput), "inferred").Mappings!;
-        Check(exitCode == 0 && text.Contains("Guessed row structs:") && inferred.Types.Count > expectedStructs,
-            $"run on its own, the generator adds the row structs guessed from the game ({inferred.Types.Count - expectedStructs} structs)");
+        // a new build can move every row struct the game uses into the DLLs (43.12 has DelilahTreasurePrizeRow), leaving none to guess
+        var missing = System.Text.RegularExpressions.Regex.Match(text, @"(\d+) row structs missing from the mapping");
+        Check(exitCode == 0 && text.Contains("Guessed row structs:") && missing.Success &&
+              (int.Parse(missing.Groups[1].Value) == 0 ? inferred.Types.Count == expectedStructs : inferred.Types.Count > expectedStructs),
+            $"run on its own, the generator adds the row structs guessed from the game ({missing.Groups[1].Value} missing, {inferred.Types.Count - expectedStructs} added)");
         Check(!Directory.EnumerateFiles(Path.GetTempPath(), "UEFNStaticMappingsGenerator-*.usmap").Any(),
             "the generator removes its temporary mappings");
     }

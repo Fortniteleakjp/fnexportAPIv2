@@ -658,7 +658,8 @@ option (a struct the DLLs have wins). Scanning and guessing take about 30 second
 - With a generator built before `--extra`, the mapping without them is returned and `rowStructs.error`/`X-Usmap-Inferred-Error` says why.
 - Run on its own (without the API), `UEFNStaticMappingsGenerator.exe` has the `RowStructInferrer.exe` next to it guess the same
   row structs from the installed game and adds them to its output (`--no-infer` turns it off).
-  `MappingsGeneratoruild.bat libs` puts both into `libs/`. See [MappingsGenerator/README.md](MappingsGenerator/README.md).
+  `MappingsGeneratoruild.bat libs` puts both into `libs/`.
+  Run without arguments, it opens a Japanese menu to pick what to do (generate from the installed UEFN, download the latest UEFN and generate, ...) and the compression. See [MappingsGenerator/README.md](MappingsGenerator/README.md).
 
 `POST /dump`, `POST /dump/uefn` and `POST /dump/local` have been removed. Use `POST /api/v1/mappings/generate` to generate mappings.
 The old JSON, pak scan, merge, process ID and offset parameters have been removed.

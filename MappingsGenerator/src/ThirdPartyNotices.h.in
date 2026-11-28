@@ -1,0 +1,6 @@
+#pragma once
+
+inline const char* ThirdPartyNotices()
+{
+    return R"NOTICES(@THIRD_PARTY_NOTICES@)NOTICES";
+}

@@ -1,27 +1,42 @@
+#include "ConsoleMenu.h"
 #include "Dumper.h"
 #include "ExtraMappings.h"
+#include "InstallLocator.h"
 #include "Mappings.h"
 #include "PE.h"
+#include "StudioDownload.h"
+#include "ThirdPartyNotices.h"
 
 #include <chrono>
+#include <clocale>
 #include <cstdio>
 #include <fstream>
 #include <memory>
 #include <sstream>
+#include <stdexcept>
 #include <vector>
 
 namespace
 {
-    constexpr const wchar_t* DefaultBinariesDir = L"C:\\Program Files\\Epic Games\\Fortnite\\FortniteGame\\Binaries\\Win64";
-    constexpr const wchar_t* EngineModuleName = L"UnrealEditorFortnite-Engine-Win64-Shipping.dll";
-    constexpr const wchar_t* CommonModuleName = L"UnrealEditorFortnite-Common-Win64-Shipping.dll";
     constexpr const wchar_t* VersionFileName = L"UnrealEditorFortnite-Win64-Shipping.version";
 
     void PrintUsage()
     {
         printf(
             "Usage: UEFNStaticMappingsGenerator [options]\n"
-            "  --dir <path>           Binaries\\Win64 directory (default: Fortnite install)\n"
+            "  (no options)           Show the interactive Japanese menu when run from a console\n"
+            "  --menu                 Show the interactive menu (other options are ignored)\n"
+            "  --download             Download latest Fortnite_Studio, then generate\n"
+            "  --download-dir <path>   Download/cache directory (default: uefn_cache beside exe)\n"
+            "  --connections <n>       Parallel chunk downloads, 1-64 (default: 32)\n"
+            "  --manifest-id <id>      Download a specific Studio manifest instead of latest\n"
+            "  --download-only        Download and restore all files without generating\n"
+            "  --manifest-info        Show latest manifest sizes without downloading chunks\n"
+            "  --manifests-url <url>   Override manifest list API\n"
+            "  --manifest-base-url <url> Override manifest CDN directory\n"
+            "  --chunk-base-url <url>  Override Epic CloudDir URL\n"
+            "  --licenses             Show embedded third-party license notices\n"
+            "  --dir <path>           Fortnite folder or its Binaries\\Win64 (default: auto-detected install)\n"
             "  --core <dll>           Module containing CoreUObject (default: %S)\n"
             "  --module <dll>         Module to dump, repeatable (default: core + %S)\n"
             "  --out <file.usmap>     Output path (default: <BranchName>-CL-<Changelist>[_zs|_br|_oo].usmap)\n"
@@ -33,7 +48,7 @@ namespace
             "  --extra <file.usmap>   Uncompressed .usmap whose structs are added when missing from the DLLs, repeatable\n"
             "  --game <dir>           Installed game whose DataTables fill in the row structs the DLLs lack (default: the install --dir is in)\n"
             "  --no-infer             Do not guess those row structs (RowStructInferrer.exe next to this executable does it)\n"
-            "  --no-wait              Do not wait for Enter before exiting\n",
+            "  --no-wait             Do not wait for Enter before exiting\n",
             EngineModuleName, CommonModuleName);
     }
 
@@ -207,25 +222,59 @@ namespace
     }
 }
 
-int wmain(int argc, wchar_t** argv)
+int Run(int argc, wchar_t** argv, RunSettings& Settings)
 {
-    std::wstring BinariesDir = DefaultBinariesDir;
-    std::wstring CoreModuleName = EngineModuleName;
-    std::vector<std::wstring> ModuleNames;
-    std::wstring OutputPath;
+    auto& BinariesDir = Settings.BinariesDir;
+    auto& CoreModuleName = Settings.CoreModuleName;
+    auto& ModuleNames = Settings.ModuleNames;
+    auto& OutputPath = Settings.OutputPath;
+    auto& Opts = Settings.Opts;
+    auto& CompressionOpts = Settings.CompressionOpts;
+    auto& Download = Settings.Download;
+    auto& bWait = Settings.bWait;
+    auto& bDownload = Settings.bDownload;
+    auto& bDownloadOnly = Settings.bDownloadOnly;
+    auto& bDirectorySpecified = Settings.bDirectorySpecified;
+    auto& bInteractive = Settings.bInteractive;
+    /* 行構造体の推定と --extra はこのリポジトリだけの機能なので、メニューが触る RunSettings には入れない */
     std::vector<std::wstring> ExtraPaths;
     std::wstring GameDir;
     bool bInfer = true;
-    Dumper::Options Opts;
-    CompressionOptions CompressionOpts;
-    bool bWait = true;
+    bool bMenu = argc == 1 && ConsoleMenu::IsAvailable();
+    wchar_t ExecutablePath[32768];
+    const auto ExecutableLength = GetModuleFileNameW(nullptr, ExecutablePath, static_cast<DWORD>(std::size(ExecutablePath)));
+    if (ExecutableLength == 0 || ExecutableLength == std::size(ExecutablePath))
+        throw std::runtime_error("Could not determine the executable directory.");
+    Download.Directory = std::filesystem::path(ExecutablePath).parent_path() / L"uefn_cache";
 
     for (int i = 1; i < argc; i++)
     {
         const std::wstring Arg = argv[i];
-        auto Next = [&]() -> std::wstring { return i + 1 < argc ? argv[++i] : L""; };
+        auto Next = [&]() -> std::wstring
+        {
+            if (i + 1 >= argc) throw std::runtime_error("Missing value for " + Utils::WideToUtf8(Arg));
+            return argv[++i];
+        };
 
-        if (Arg == L"--dir") BinariesDir = Next();
+        if (Arg == L"--dir") { BinariesDir = Next(); bDirectorySpecified = true; }
+        else if (Arg == L"--download") bDownload = true;
+        else if (Arg == L"--download-dir") { Download.Directory = Next(); bDownload = true; }
+        else if (Arg == L"--manifest-id") { Download.ManifestId = Utils::WideToUtf8(Next()); bDownload = true; }
+        else if (Arg == L"--download-only") { bDownload = true; bDownloadOnly = true; }
+        else if (Arg == L"--manifest-info") { bDownload = true; Download.InformationOnly = true; }
+        else if (Arg == L"--manifests-url") Download.ManifestListUrl = Next();
+        else if (Arg == L"--manifest-base-url") Download.ManifestBaseUrl = Next();
+        else if (Arg == L"--chunk-base-url") Download.ChunkBaseUrl = Next();
+        else if (Arg == L"--connections")
+        {
+            const auto Value = Next();
+            if (Value.empty() || Value.find_first_not_of(L"0123456789") != std::wstring::npos)
+                throw std::runtime_error("--connections must be 1-64.");
+            Download.Connections = static_cast<unsigned int>(std::stoul(Value));
+            if (Download.Connections < 1 || Download.Connections > 64)
+                throw std::runtime_error("--connections must be 1-64.");
+        }
+        else if (Arg == L"--licenses") { printf("%s", ThirdPartyNotices()); return 0; }
         else if (Arg == L"--core") CoreModuleName = Next();
         else if (Arg == L"--module") ModuleNames.push_back(Next());
         else if (Arg == L"--out") OutputPath = Next();
@@ -245,6 +294,7 @@ int wmain(int argc, wchar_t** argv)
         else if (Arg == L"--extra") ExtraPaths.push_back(Next());
         else if (Arg == L"--game") GameDir = Next();
         else if (Arg == L"--no-infer") bInfer = false;
+        else if (Arg == L"--menu") bMenu = true;
         else
         {
             PrintUsage();
@@ -252,11 +302,33 @@ int wmain(int argc, wchar_t** argv)
         }
     }
 
+    /* 既定の C:\Program Files 以外 (D ドライブなど) にインストールされていても見つける */
+    if (bDirectorySpecified)
+        BinariesDir = InstallLocator::Normalize(BinariesDir);
+    else if (const auto Found = InstallLocator::Find(); !Found.empty())
+        BinariesDir = Found;
+
+    if (bMenu)
+    {
+        if (!ConsoleMenu::IsAvailable()) throw std::runtime_error("--menu needs an interactive console.");
+        if (!ConsoleMenu::Configure(Settings)) return 0;
+    }
+
+    const auto StartTime = std::chrono::steady_clock::now();
+    if (bDownload)
+    {
+        if (bDirectorySpecified) throw std::runtime_error("Use --download-dir for downloads; --dir selects an existing installation.");
+        BinariesDir = StudioDownload::Prepare(Download).wstring();
+        if (bDownloadOnly || Download.InformationOnly) return 0;
+    }
+
     if (ModuleNames.empty())
         ModuleNames = { CoreModuleName, CommonModuleName };
 
     if (OutputPath.empty())
         OutputPath = DefaultOutputName(BinariesDir, CompressionOpts.Method);
+    else if (std::error_code Error; std::filesystem::is_directory(OutputPath, Error))
+        OutputPath = JoinPath(OutputPath, DefaultOutputName(BinariesDir, CompressionOpts.Method));
 
     /* UE の静的初期化子がカレントディレクトリを Binaries\Win64 に変えるので、ロード前に絶対パスにしておく */
     BinariesDir = ToFullPath(BinariesDir);
@@ -267,8 +339,6 @@ int wmain(int argc, wchar_t** argv)
     /* Binaries\Win64 の3つ上がインストール先 (FortniteGame\Binaries\Win64) */
     GameDir = ToFullPath(GameDir.empty() ? JoinPath(BinariesDir, L"..\\..\\..") : GameDir);
     CompressionOpts.SearchDir = BinariesDir;
-
-    const auto StartTime = std::chrono::steady_clock::now();
 
     /* CoreUObject を含むモジュールを先にロードし、他モジュールの依存解決にも使わせる */
     PE CoreModule(JoinPath(BinariesDir, CoreModuleName));
@@ -338,7 +408,9 @@ int wmain(int argc, wchar_t** argv)
     const auto Elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - StartTime).count();
     printf("Done in %lld ms\n", static_cast<long long>(Elapsed));
 
-    if (bWait) {
+    if (bInteractive)
+        ConsoleMenu::WaitForEnter();
+    else if (bWait) {
         printf("Press Enter To Close.");
         getchar();
     }
@@ -347,4 +419,27 @@ int wmain(int argc, wchar_t** argv)
     fflush(stdout);
     TerminateProcess(GetCurrentProcess(), bSuccess ? 0 : 1);
     return bSuccess ? 0 : 1;
+}
+
+int wmain(int argc, wchar_t** argv)
+{
+    /* printf の %S が日本語のパスも変換できるように、システムのコードページ (コンソールと同じ) を使う */
+    setlocale(LC_CTYPE, "");
+
+    RunSettings Settings;
+    int Result;
+    try { Result = Run(argc, argv, Settings); }
+    catch (const std::exception& Error)
+    {
+        if (Settings.bInteractive)
+            ConsoleMenu::Print("\nエラーが発生しました: %s\n", Error.what());
+        else
+            fprintf(stderr, "Error: %s\n", Error.what());
+        Result = 1;
+    }
+
+    /* メニューから実行したときは、結果を読めるようにウィンドウが閉じる前に待つ */
+    if (Settings.bInteractive)
+        ConsoleMenu::WaitForEnter();
+    return Result;
 }

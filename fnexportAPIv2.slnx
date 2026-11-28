@@ -1,0 +1,28 @@
+<Solution>
+  <Folder Name="/App/">
+    <Project Path="FortnitePorting/FortnitePorting.csproj" />
+  </Folder>
+  <Folder Name="/Tools/">
+    <Project Path="AesFinder/AesFinder.csproj" />
+    <Project Path="MappingsGenerator/RowStructInferrer/RowStructInferrer.csproj" />
+  </Folder>
+  <Folder Name="/Tests/">
+    <Project Path="tests/ApiResponses.Tests/ApiResponses.Tests.csproj" />
+    <Project Path="tests/MappingsGenerator.Tests/MappingsGenerator.Tests.csproj" />
+  </Folder>
+  <Folder Name="/CUE4Parse/">
+    <Project Path="CUE4Parse/CUE4Parse/CUE4Parse.csproj" />
+    <Project Path="CUE4Parse/CUE4Parse-Conversion/CUE4Parse-Conversion.csproj" />
+    <Project Path="CUE4Parse/CUE4Parse.Example/CUE4Parse.Example.csproj" />
+    <Project Path="CUE4Parse/CUE4Parse.Tests/CUE4Parse.Tests.csproj" />
+  </Folder>
+  <Folder Name="/EpicManifestParser/">
+    <Project Path="EpicManifestParser/src/EpicManifestParser/EpicManifestParser.csproj" />
+    <Project Path="EpicManifestParser/src/EpicManifestParser.ZlibngDotNetDecompressor/EpicManifestParser.ZlibngDotNetDecompressor.csproj" />
+    <Project Path="EpicManifestParser/src/EpicManifestParser.Playground/EpicManifestParser.Playground.csproj" />
+    <Project Path="EpicManifestParser/src/EpicManifestParser.Tests/EpicManifestParser.Tests.csproj" />
+  </Folder>
+  <Folder Name="/RADADecoder/">
+    <Project Path="RADADecoder-cs/RADADecoder/RADADecoder.csproj" />
+  </Folder>
+</Solution>

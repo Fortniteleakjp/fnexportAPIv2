@@ -32,19 +32,42 @@ FetchContent_Declare(brotli
     GIT_TAG v1.1.0
     GIT_SHALLOW TRUE)
 
-FetchContent_MakeAvailable(zstd brotli)
+set(ZLIB_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(zlib
+    GIT_REPOSITORY https://github.com/madler/zlib.git
+    GIT_TAG v1.3.1
+    GIT_SHALLOW TRUE)
+
+set(JSON_BuildTests OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG v3.12.0
+    GIT_SHALLOW TRUE)
+
+FetchContent_MakeAvailable(zstd brotli zlib json)
+
+file(READ "${zstd_SOURCE_DIR}/LICENSE" ZSTD_LICENSE)
+file(READ "${brotli_SOURCE_DIR}/LICENSE" BROTLI_LICENSE)
+file(READ "${zlib_SOURCE_DIR}/LICENSE" ZLIB_LICENSE)
+file(READ "${json_SOURCE_DIR}/LICENSE.MIT" JSON_LICENSE)
+set(THIRD_PARTY_NOTICES "Zstandard\n${ZSTD_LICENSE}\nBrotli\n${BROTLI_LICENSE}\nzlib\n${ZLIB_LICENSE}\nnlohmann/json\n${JSON_LICENSE}")
+configure_file(src/ThirdPartyNotices.h.in "${CMAKE_CURRENT_BINARY_DIR}/generated/ThirdPartyNotices.h" @ONLY)
 
 add_executable(UEFNStaticMappingsGenerator
     src/Main.cpp
+    src/ConsoleMenu.cpp
     src/PE.cpp
     src/Hook.cpp
-    src/ExtraMappings.cpp
     src/Dumper.cpp
     src/Mappings.cpp
     src/Compression.cpp
+    src/ExtraMappings.cpp
+    src/BuildManifest.cpp
+    src/StudioDownload.cpp
+    src/InstallLocator.cpp
 )
 
-target_include_directories(UEFNStaticMappingsGenerator PRIVATE ${zstd_SOURCE_DIR}/lib)
-target_link_libraries(UEFNStaticMappingsGenerator PRIVATE libzstd_static brotlienc brotlidec)
+target_include_directories(UEFNStaticMappingsGenerator PRIVATE ${zstd_SOURCE_DIR}/lib "${CMAKE_CURRENT_BINARY_DIR}/generated")
+target_link_libraries(UEFNStaticMappingsGenerator PRIVATE libzstd_static brotlienc brotlidec zlibstatic nlohmann_json::nlohmann_json winhttp bcrypt)
 target_compile_definitions(UEFNStaticMappingsGenerator PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_compile_options(UEFNStaticMappingsGenerator PRIVATE /W4 /utf-8 /permissive-)

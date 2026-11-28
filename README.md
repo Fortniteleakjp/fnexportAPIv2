@@ -681,7 +681,8 @@ cook 済みの行データ（unversioned プロパティ）から型を推定し
 - 生成ツールが `--extra` 未対応の古いものだった場合は補完なしのマッピングを返し、`rowStructs.error`／`X-Usmap-Inferred-Error` に理由を入れます。
 - 生成ツール（`UEFNStaticMappingsGenerator.exe`）を API を通さず単体で実行した場合も、隣の `RowStructInferrer.exe` が
   インストール済みのゲームから同じ推定を行い、出力に加えます（`--no-infer` で無効化）。
-  `MappingsGeneratoruild.bat libs` で両方が `libs/` に入ります。詳しくは [MappingsGenerator/README.md](MappingsGenerator/README.md) を参照してください。
+  `MappingsGeneratoruild.bat libs` で両方が `libs/` に入ります。
+  引数を付けずに実行すると、日本語のメニューで処理（インストール済み UEFN から生成／最新 UEFN をダウンロードして生成など）と圧縮方式を選べます。詳しくは [MappingsGenerator/README.md](MappingsGenerator/README.md) を参照してください。
 
 `POST /dump`、`POST /dump/uefn`、`POST /dump/local` は削除しました。生成には `POST /api/v1/mappings/generate` を使用してください。
 従来のJSON入力、pak走査、マージ、プロセスID、オフセットのパラメーターは廃止しました。

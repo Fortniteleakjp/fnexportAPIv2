@@ -1,15 +1,43 @@
 # UEFNStaticMappingsGenerator
 
 UEFNのEngine・Common DLLから、ゲームを起動せずに `.usmap` version 4を生成します。
-元のコードは `D:\mappings_dumper` から取り込んでいます。UHTのレイアウトはUE 6.0に対応しています。
+元のコードは `D:\mappings_dumper` から取り込んでいます（2026-10-15 版。メニューとダウンロードを含みます）。
+取り込み直すときは、このリポジトリだけの変更を残してください: `ExtraMappings.*`、`Dumper` の `AddExtraStructs`、
+`Main.cpp` の `--extra`／`--game`／`--no-infer` と行構造体の推定、`CMakeLists.txt` の `ExtraMappings.cpp`、`build.bat` の `RowStructInferrer`。UHTのレイアウトはUE 6.0に対応しています。
 
 Visual StudioのC++ツール、CMake、Ninja、Gitが必要です。
-初回の構成時にzstd v1.5.7とBrotli v1.1.0を取得して静的リンクします。
+初回の構成時にzstd v1.5.7、Brotli v1.1.0、zlib v1.3.1、nlohmann/json v3.12.0を取得して静的リンクします。
+HTTP通信とハッシュ検証にはWindows標準のWinHTTPとBCryptを使います。内蔵ライブラリのライセンスは `--licenses` で確認できます。
 
 ```bat
 MappingsGenerator\build.bat libs
 libs\UEFNStaticMappingsGenerator.exe --dir "C:\Program Files\Epic Games\Fortnite\FortniteGame\Binaries\Win64" --compression zstd --no-wait
 ```
+
+### メニューから使う
+
+EXEをダブルクリックするか、コンソールで引数を付けずに実行すると、日本語のメニューが開きます。
+`--menu` を付けた場合も開きます（ほかの引数は無視されます）。
+引数を1つでも付けた場合や、標準入出力がリダイレクトされている場合はメニューを出さず、コマンドラインの設定で実行します。
+APIは常に引数を付けて呼び出すので、メニューは出ません。
+
+- 処理: インストール済みのUEFNから生成／最新のUEFNをダウンロードして生成／ダウンロードのみ／最新ビルドの情報を確認／ライセンスを表示／終了
+- 圧縮方式（生成するときだけ）: Zstandard／Brotli／Oodle／無圧縮（Enterだけなら無圧縮）
+
+UEFNのフォルダーは自動で探します（`C:\Program Files` 以外も対象。見つからなければ入力を求めます）。
+保存先はカレントディレクトリ、ダウンロード先はEXEと同じフォルダーの `uefn_cache` です。
+メニューから生成したときも、行構造体の補完（下記）は行います。
+
+### 最新UEFNをダウンロードして生成
+
+```bat
+libs\UEFNStaticMappingsGenerator.exe --download --no-wait
+```
+
+最新の `Fortnite_Studio` のマニフェストを取得し、全チャンクをEpicのCloudDirからダウンロード・復元してから、そのDLLで生成します。
+UEFNのインストールは不要です。チャンクと復元ファイルはSHA-1で検証し、`uefn_cache` の検証済みデータは次回再利用します。
+`--download-dir`、`--connections`、`--manifest-id`、`--download-only`、`--manifest-info` も使えます。
+`--dir` を省略すると、インストール済みのUEFNを自動で探します。`--dir` にはFortniteのフォルダーと `Binaries\Win64` のどちらも指定できます。
 
 `--out` で出力先、`--level` で圧縮レベル、`--oodle` でOodle DLLを指定できます。
 `--extra <file.usmap>`（複数可）で、非圧縮の `.usmap` に入っている構造体のうち DLL に無いものを出力に加えます。
